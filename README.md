@@ -233,6 +233,8 @@ databricks apps deploy xterm-terminal --source-code-path /Workspace/Users/<your-
 
 Replace `<your-email>` with your Databricks username (e.g., `user@example.com`).
 
+Once the app is deployed, create a secret with your PAT in your Databricks Workspace. In the [App Resources tab](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/resources), add the secret aliased as DATABRICKS_TOKEN.
+
 ### Automatic Git Configuration
 
 When the app starts, it automatically configures git with your Databricks identity:

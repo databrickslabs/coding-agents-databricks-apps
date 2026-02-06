@@ -47,6 +47,8 @@ The Databricks CLI is pre-configured with your credentials. Test it:
 databricks current-user me
 ```
 
+Databricks can only authenticate with a PAT or CLIENT_ID and CLIENT_SECRET pair. If you have trouble logging in, remove the CLIENT_SECRET and CLIENT_ID from your environment, then try again. We want access to only be based on the app owner's credentials.
+
 Common commands:
 ```bash
 databricks workspace list /Workspace/Users/

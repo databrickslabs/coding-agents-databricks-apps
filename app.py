@@ -295,6 +295,11 @@ def delete_session():
 
 
 if __name__ == "__main__":
+    
+    # Remove OAuth credentials - force PAT auth only
+    os.environ.pop("DATABRICKS_CLIENT_ID", None)
+    os.environ.pop("DATABRICKS_CLIENT_SECRET", None)
+
     # Determine app owner from DATABRICKS_TOKEN
     app_owner = get_token_owner()
     if app_owner:

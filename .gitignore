@@ -7,3 +7,6 @@ venv/
 
 # Workspace-specific config (use app.yaml.template)
 app.yaml
+
+# Git worktrees
+.worktrees/
