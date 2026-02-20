@@ -54,12 +54,33 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ session_id: sessionId })
         });
+        if (!resp.ok) {
+          // Session gone on server side — stop polling
+          cleanupSession();
+          term.write('\r\n\x1b[31mSession ended.\x1b[0m\r\n');
+          return;
+        }
         const data = await resp.json();
         if (data.output) {
           term.write(data.output);
         }
+        if (data.exited) {
+          term.write('\r\n\x1b[33mShell process exited. You can close this tab.\x1b[0m\r\n');
+          cleanupSession();
+        }
       } catch (e) {
         console.error('Poll error:', e);
+      }
+    }
+
+    function cleanupSession() {
+      if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+      }
+      if (sessionId) {
+        navigator.sendBeacon('/api/session/close', JSON.stringify({ session_id: sessionId }));
+        sessionId = null;
       }
     }
 
@@ -113,11 +134,7 @@
         });
 
         // Cleanup on page unload
-        window.addEventListener('beforeunload', () => {
-          if (sessionId) {
-            navigator.sendBeacon('/api/session', JSON.stringify({ session_id: sessionId }));
-          }
-        });
+        window.addEventListener('beforeunload', () => cleanupSession());
 
       } catch (e) {
         status.textContent = 'Error: ' + e.message;

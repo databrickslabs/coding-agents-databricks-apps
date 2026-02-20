@@ -10,4 +10,4 @@ env:
   - name: DATABRICKS_TOKEN
     valueFrom: DATABRICKS_TOKEN
   - name: ANTHROPIC_MODEL
-    value: databricks-claude-sonnet-4-5
+    value: databricks-claude-opus-4-6

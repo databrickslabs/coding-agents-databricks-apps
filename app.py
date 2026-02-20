@@ -77,18 +77,41 @@ def check_authorization():
 
 def read_pty_output(session_id, fd):
     """Background thread to read PTY output into buffer."""
+    with sessions_lock:
+        pid = sessions[session_id]["pid"]
+
     while True:
         with sessions_lock:
             if session_id not in sessions:
                 break
         try:
-            if select.select([fd], [], [], 0.1)[0]:
-                output = os.read(fd, 4096).decode(errors="replace")
+            readable, _, errors = select.select([fd], [], [fd], 0.5)
+            if readable or errors:
+                output = os.read(fd, 4096)
+                if not output:
+                    # EOF — process exited
+                    break
                 with sessions_lock:
                     if session_id in sessions:
-                        sessions[session_id]["output_buffer"].append(output)
+                        sessions[session_id]["output_buffer"].append(output.decode(errors="replace"))
+            else:
+                # select timed out — check if process is still alive
+                try:
+                    pid_result, _ = os.waitpid(pid, os.WNOHANG)
+                    if pid_result != 0:
+                        # Process exited
+                        break
+                except ChildProcessError:
+                    # Process already reaped
+                    break
         except OSError:
             break
+
+    # Process exited or fd closed — mark session as exited for the poll endpoint
+    with sessions_lock:
+        if session_id in sessions:
+            sessions[session_id]["exited"] = True
+            logger.info(f"Session {session_id} process exited")
 
 
 def terminate_session(session_id, pid, master_fd):
@@ -247,12 +270,14 @@ def get_output():
         if session_id not in sessions:
             return jsonify({"error": "Session not found"}), 404
 
-        sessions[session_id]["last_poll_time"] = time.time()
-        buffer = sessions[session_id]["output_buffer"]
+        session = sessions[session_id]
+        session["last_poll_time"] = time.time()
+        buffer = session["output_buffer"]
         output = "".join(buffer)
         buffer.clear()
+        exited = session.get("exited", False)
 
-    return jsonify({"output": output})
+    return jsonify({"output": output, "exited": exited})
 
 
 @app.route("/api/resize", methods=["POST"])
@@ -277,20 +302,24 @@ def resize_terminal():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/api/session", methods=["DELETE"])
-def delete_session():
-    """Close a terminal session."""
+@app.route("/api/session/close", methods=["POST"])
+def close_session():
+    """Gracefully close a terminal session, killing the process."""
     data = request.json
     session_id = data.get("session_id")
 
-    with sessions_lock:
-        if session_id in sessions:
-            try:
-                os.close(sessions[session_id]["master_fd"])
-            except:
-                pass
-            del sessions[session_id]
+    if not session_id:
+        return jsonify({"error": "session_id required"}), 400
 
+    with sessions_lock:
+        session = sessions.get(session_id)
+        if not session:
+            return jsonify({"status": "ok", "detail": "session not found"})
+        pid = session["pid"]
+        master_fd = session["master_fd"]
+
+    terminate_session(session_id, pid, master_fd)
+    logger.info(f"Session {session_id} closed by client")
     return jsonify({"status": "ok"})
 
 

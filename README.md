@@ -21,13 +21,15 @@ Just use it all on Databricks, from the browser. Wired up to model serving endpo
 
 ✅ **Real-time I/O** - Responsive terminal with polling-based communication
 
+✅ **Graceful Session Cleanup** - Shell processes are properly terminated on exit, tab close, or timeout
+
 ✅ **Terminal Resizing** - Dynamic resize support for responsive layouts
 
 ✅ **Databricks Workspace Integration** - Auto-sync projects to Databricks Workspace on git commits
 
 ✅ **Claude Code CLI** - Pre-configured to use Databricks hosted models as the API endpoint
 
-✅ **Configurable Model** - Switch between Claude models via `app.yaml` (default: `databricks-claude-sonnet-4-5`)
+✅ **Configurable Model** - Switch between Claude models via `app.yaml` (default: `databricks-claude-opus-4-6`)
 
 ✅ **Micro Editor** - Ships with [micro](https://micro-editor.github.io/), a modern terminal-based text editor
 
@@ -142,7 +144,7 @@ Open http://localhost:8000 in your browser.
 | `/api/input` | POST | Send input to terminal |
 | `/api/output` | POST | Poll for terminal output |
 | `/api/resize` | POST | Resize terminal dimensions |
-| `/api/session` | DELETE | Close terminal session |
+| `/api/session/close` | POST | Gracefully close terminal session |
 
 ## Project Structure
 
@@ -197,7 +199,7 @@ This project is configured for deployment as a Databricks App.
 |----------|-------------|
 | `DATABRICKS_HOST` | Databricks workspace URL |
 | `DATABRICKS_TOKEN` | Your Personal Access Token (PAT) |
-| `ANTHROPIC_MODEL` | Model name (default: `databricks-claude-sonnet-4-5`) |
+| `ANTHROPIC_MODEL` | Model name (default: `databricks-claude-opus-4-6`) |
 
 ### Security Model
 
