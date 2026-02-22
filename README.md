@@ -115,7 +115,7 @@ Every agent starts **preconfigured to your Databricks AI Gateway endpoint** — 
    ```bash
    databricks apps create <your-app-name>
    ```
-   In the [App Resources tab](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/resources), add your PAT as the `DATABRICKS_TOKEN` secret. If using AI Gateway, also add `DATABRICKS_GATEWAY_TOKEN`.
+   In the [App Resources tab](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/resources), add your PAT as the `DATABRICKS_TOKEN` secret. If using AI Gateway, also add `DATABRICKS_TOKEN`.
 
 4. Sync and deploy:
    ```bash
@@ -188,7 +188,7 @@ Open http://localhost:8000. This starts Flask's dev server — production uses G
 | `ANTHROPIC_MODEL` | No | Claude model name (default: `databricks-claude-opus-4-6`) |
 | `GEMINI_MODEL` | No | Gemini model name (default: `databricks-gemini-3-1-pro`) |
 | `DATABRICKS_GATEWAY_HOST` | No | AI Gateway URL (recommended). Falls back to direct model serving if unset |
-| `DATABRICKS_GATEWAY_TOKEN` | No | AI Gateway token (secret, required if using gateway) |
+| `DATABRICKS_TOKEN` | No | AI Gateway token (secret, required if using gateway) |
 
 ### Security Model
 

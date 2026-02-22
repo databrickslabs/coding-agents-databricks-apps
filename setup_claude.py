@@ -19,9 +19,9 @@ gateway_host = os.environ.get("DATABRICKS_GATEWAY_HOST", "").rstrip("/")
 databricks_host = os.environ.get("DATABRICKS_HOST", "").rstrip("/")
 
 if gateway_host:
-    gateway_token = os.environ.get("DATABRICKS_GATEWAY_TOKEN", "")
+    gateway_token = os.environ.get("DATABRICKS_TOKEN", "")
     if not gateway_token:
-        print("Warning: DATABRICKS_GATEWAY_HOST set but DATABRICKS_GATEWAY_TOKEN missing, falling back to DATABRICKS_HOST")
+        print("Warning: DATABRICKS_GATEWAY_HOST set but DATABRICKS_TOKEN missing, falling back to DATABRICKS_HOST")
         gateway_host = ""
 
 if gateway_host:

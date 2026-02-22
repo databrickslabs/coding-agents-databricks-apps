@@ -35,9 +35,9 @@ host = host.rstrip("/")
 
 # Use DATABRICKS_GATEWAY_HOST if available (new AI Gateway), otherwise fall back to DATABRICKS_HOST
 gateway_host = os.environ.get("DATABRICKS_GATEWAY_HOST", "").rstrip("/")
-gateway_token = os.environ.get("DATABRICKS_GATEWAY_TOKEN", "") if gateway_host else ""
+gateway_token = os.environ.get("DATABRICKS_TOKEN", "") if gateway_host else ""
 if gateway_host and not gateway_token:
-    print("Warning: DATABRICKS_GATEWAY_HOST set but DATABRICKS_GATEWAY_TOKEN missing, falling back to DATABRICKS_HOST")
+    print("Warning: DATABRICKS_GATEWAY_HOST set but DATABRICKS_TOKEN missing, falling back to DATABRICKS_HOST")
     gateway_host = ""
 
 if gateway_host:

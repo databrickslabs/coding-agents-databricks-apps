@@ -13,5 +13,5 @@ env:
   #OPTIONAL: Use the new Databricks AI Gateway if you have access (recommended), otherwise it will default to the older endpoint
   - name: DATABRICKS_GATEWAY_HOST
     value: https://<your-gateway-id>.ai-gateway.<env>.cloud.databricks.com
-  - name: DATABRICKS_GATEWAY_TOKEN
-    valueFrom: DATABRICKS_GATEWAY_TOKEN
+  - name: DATABRICKS_TOKEN
+    valueFrom: DATABRICKS_TOKEN
