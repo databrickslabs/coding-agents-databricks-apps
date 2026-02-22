@@ -22,7 +22,7 @@ Just use it all on Databricks, from the browser. Wired up to model serving endpo
 
 | Agent | Model | Description |
 |-------|-------|-------------|
-| 🟠 **Claude Code** | `databricks-claude-opus-4-6` | Anthropic's coding agent with 39 skills + 2 MCP servers |
+| 🟠 **Claude Code** | `databricks-claude-opus-4-6` | Anthropic's coding agent with 39 skills + 2 MCP servers (Claude Code) |
 | 🔵 **Gemini CLI** | `databricks-gemini-3-1-pro` | Google's coding agent with shared skills |
 | 🟢 **OpenCode** | Configurable | Open-source coding agent with multi-provider support |
 
@@ -47,11 +47,7 @@ Every agent starts **preconfigured to your Databricks AI Gateway endpoint** — 
 
 ---
 
-### 🧠 39 Claude Code Skills
-
-<table>
-<tr>
-<td width="50%">
+### 🧠 39 Skills
 
 **🔶 25 Databricks Skills** — [ai-dev-kit](https://github.com/databricks-solutions/ai-dev-kit)
 
@@ -65,9 +61,6 @@ Every agent starts **preconfigured to your Databricks AI Gateway endpoint** — 
 | 📚 Reference | docs, dbsql, pdf-generation |
 | 🔄 Meta | refresh-databricks-skills |
 
-</td>
-<td width="50%">
-
 **⚡ 14 Superpowers Skills** — [obra/superpowers](https://github.com/obra/superpowers)
 
 | | |
@@ -78,10 +71,6 @@ Every agent starts **preconfigured to your Databricks AI Gateway endpoint** — 
 | 👀 Review | requesting-review, receiving-review |
 | 📦 Ship | finishing-branch, git-worktrees |
 | 🔀 Meta | dispatching-agents, writing-skills, using-superpowers |
-
-</td>
-</tr>
-</table>
 
 ---
 
@@ -215,7 +204,7 @@ Production uses Gunicorn (`gunicorn.conf.py`) with:
 ```
 coding-agents-on-databricks/
 ├── .claude/
-│   └── skills/              # 39 pre-installed Claude Code skills
+│   └── skills/              # 39 pre-installed skills
 ├── app.py                   # Flask backend with PTY management + setup orchestration
 ├── app.yaml                 # Databricks Apps deployment config
 ├── app.yaml.template        # Template for app.yaml
