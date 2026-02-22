@@ -323,8 +323,10 @@ def close_session():
     return jsonify({"status": "ok"})
 
 
-if __name__ == "__main__":
-    
+def initialize_app():
+    """One-time init: detect owner, start cleanup thread."""
+    global app_owner
+
     # Remove OAuth credentials - force PAT auth only
     os.environ.pop("DATABRICKS_CLIENT_ID", None)
     os.environ.pop("DATABRICKS_CLIENT_SECRET", None)
@@ -341,4 +343,9 @@ if __name__ == "__main__":
     cleanup_thread.start()
     logger.info(f"Started session cleanup thread (timeout={SESSION_TIMEOUT_SECONDS}s, interval={CLEANUP_INTERVAL_SECONDS}s)")
 
-    app.run(host="0.0.0.0", port=8000, threaded=True)
+
+if __name__ == "__main__":
+    # Local dev only — production uses gunicorn
+    initialize_app()
+    port = int(os.environ.get("DATABRICKS_APP_PORT", 8000))
+    app.run(host="0.0.0.0", port=port, threaded=True)

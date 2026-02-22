@@ -96,9 +96,19 @@ global_hooks_dir.mkdir(parents=True, exist_ok=True)
 
 post_commit_hook = global_hooks_dir / "post-commit"
 post_commit_hook.write_text('''#!/bin/bash
-# Auto-sync to Databricks Workspace on commit
-source /app/python/source_code/.venv/bin/activate
-python /app/python/source_code/sync_to_workspace.py "$(pwd)" &
+# Auto-sync to Databricks Workspace on commit (works from any CLI: Claude, Gemini, OpenCode, etc.)
+SYNC_LOG="$HOME/.sync.log"
+echo "[post-commit] $(date +%H:%M:%S) hook triggered in $(pwd)" >> "$SYNC_LOG"
+
+# Use venv python directly (avoids fragile 'source activate')
+VENV_PYTHON="/app/python/source_code/.venv/bin/python"
+SYNC_SCRIPT="/app/python/source_code/sync_to_workspace.py"
+
+if [ -x "$VENV_PYTHON" ] && [ -f "$SYNC_SCRIPT" ]; then
+    "$VENV_PYTHON" "$SYNC_SCRIPT" "$(pwd)" >> "$SYNC_LOG" 2>&1 &
+else
+    echo "[post-commit] $(date +%H:%M:%S) SKIP: venv=$VENV_PYTHON script=$SYNC_SCRIPT" >> "$SYNC_LOG"
+fi
 ''')
 post_commit_hook.chmod(0o755)
 
