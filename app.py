@@ -137,7 +137,7 @@ def _setup_git_config():
         f.write('SYNC_SCRIPT="/app/python/source_code/sync_to_workspace.py"\n')
         f.write('\n')
         f.write('if [ -x "$VENV_PYTHON" ] && [ -f "$SYNC_SCRIPT" ]; then\n')
-        f.write('    "$VENV_PYTHON" "$SYNC_SCRIPT" "$(pwd)" >> "$SYNC_LOG" 2>&1 &\n')
+        f.write('    nohup "$VENV_PYTHON" "$SYNC_SCRIPT" "$(pwd)" >> "$SYNC_LOG" 2>&1 & disown\n')
         f.write('else\n')
         f.write('    echo "[post-commit] $(date +%H:%M:%S) SKIP: venv=$VENV_PYTHON script=$SYNC_SCRIPT" >> "$SYNC_LOG"\n')
         f.write('fi\n')
