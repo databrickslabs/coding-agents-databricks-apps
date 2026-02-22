@@ -23,7 +23,7 @@ home = Path(os.environ["HOME"])
 
 host = os.environ.get("DATABRICKS_HOST", "")
 token = os.environ.get("DATABRICKS_TOKEN", "")
-gemini_model = os.environ.get("GEMINI_MODEL", "databricks-gemini-2-5-flash")
+gemini_model = os.environ.get("GEMINI_MODEL", "databricks-gemini-3-1-pro")
 
 if not host or not token:
     print("Warning: DATABRICKS_HOST or DATABRICKS_TOKEN not set, skipping Gemini CLI config")
@@ -88,10 +88,13 @@ env_path.write_text(env_content)
 env_path.chmod(0o600)
 print(f"Gemini CLI env configured: {env_path}")
 
-# 3. Write settings.json with model preferences
+# 3. Write settings.json with model preferences and auth
 settings = {
     "theme": "Default",
-    "selectedAuthType": "gemini-api-key"
+    "selectedAuthType": "gemini-api-key",
+    "model": {
+        "name": gemini_model
+    }
 }
 
 settings_path = gemini_dir / "settings.json"
@@ -100,7 +103,5 @@ print(f"Gemini CLI settings configured: {settings_path}")
 
 print("\nGemini CLI ready! Usage:")
 print("  gemini                                    # Start Gemini CLI")
-print(f"  gemini -m gemini-2.5-flash                # Use Gemini 2.5 Flash")
-print(f"  gemini -m gemini-2.5-pro                  # Use Gemini 2.5 Pro")
 print(f"\nEndpoint: {gemini_base_url}")
 print("Auth: Bearer token (Databricks PAT)")
