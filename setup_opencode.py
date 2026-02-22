@@ -63,8 +63,9 @@ opencode_config_dir.mkdir(parents=True, exist_ok=True)
 
 if gateway_host:
     # Gateway mode: separate providers for different API protocols
-    # - Anthropic/Gemini models use MLflow endpoint: {gateway}/mlflow/v1/chat/completions
-    # - OpenAI/GPT models use OpenAI endpoint: {gateway}/openai/v1/responses
+    # SDK auto-appends /chat/completions and /responses to baseURL
+    # - Anthropic/Gemini models: baseURL={gateway}/mlflow/v1 → /mlflow/v1/chat/completions
+    # - OpenAI/GPT models: baseURL={gateway}/openai/v1 → /openai/v1/responses
     opencode_config = {
         "$schema": "https://opencode.ai/config.json",
         "provider": {
@@ -72,7 +73,7 @@ if gateway_host:
                 "npm": "@ai-sdk/openai-compatible",
                 "name": "Databricks AI Gateway (MLflow)",
                 "options": {
-                    "baseURL": f"{gateway_host}/mlflow/v1/chat/completions",
+                    "baseURL": f"{gateway_host}/mlflow/v1",
                     "apiKey": "{env:DATABRICKS_GATEWAY_TOKEN}"
                 },
                 "models": {
@@ -117,7 +118,7 @@ if gateway_host:
                 "npm": "@ai-sdk/openai-compatible",
                 "name": "Databricks AI Gateway (OpenAI)",
                 "options": {
-                    "baseURL": f"{gateway_host}/openai/v1/responses",
+                    "baseURL": f"{gateway_host}/openai/v1",
                     "apiKey": "{env:DATABRICKS_GATEWAY_TOKEN}"
                 },
                 "models": {
