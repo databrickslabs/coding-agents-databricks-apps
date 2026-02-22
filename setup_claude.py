@@ -14,10 +14,25 @@ claude_dir = home / ".claude"
 claude_dir.mkdir(exist_ok=True)
 
 # 1. Write settings.json for Databricks model serving
+# Use DATABRICKS_GATEWAY_HOST if available (new AI Gateway), otherwise fall back to DATABRICKS_HOST
+gateway_host = os.environ.get("DATABRICKS_GATEWAY_HOST", "").rstrip("/")
+databricks_host = os.environ.get("DATABRICKS_HOST", "").rstrip("/")
+base_host = gateway_host if gateway_host else databricks_host
+
+if gateway_host:
+    print(f"Using Databricks AI Gateway: {gateway_host}")
+else:
+    print(f"Using Databricks Host: {databricks_host}")
+
+if gateway_host:
+    anthropic_base_url = f"{gateway_host}/anthropic"
+else:
+    anthropic_base_url = f"{databricks_host}/serving-endpoints/anthropic"
+
 settings = {
     "env": {
-        "ANTHROPIC_MODEL": os.environ.get("ANTHROPIC_MODEL", "databricks-claude-sonnet-4-5"),
-        "ANTHROPIC_BASE_URL": f"{os.environ['DATABRICKS_HOST']}/serving-endpoints/anthropic",
+        "ANTHROPIC_MODEL": os.environ.get("ANTHROPIC_MODEL", "databricks-claude-sonnet-4-6"),
+        "ANTHROPIC_BASE_URL": anthropic_base_url,
         "ANTHROPIC_AUTH_TOKEN": os.environ["DATABRICKS_TOKEN"],
         "ANTHROPIC_CUSTOM_HEADERS": "x-databricks-use-coding-agent-mode: true"
     }

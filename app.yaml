@@ -1,7 +1,7 @@
 command:
   - bash
   - -c
-  - "mkdir -p ~/.local/bin && bash install_micro.sh && mv micro ~/.local/bin/ 2>/dev/null || true && python setup_claude.py && python setup_databricks.py && python app.py"
+  - "mkdir -p ~/.local/bin && bash install_micro.sh && mv micro ~/.local/bin/ 2>/dev/null || true && python setup_claude.py && python setup_opencode.py && python setup_gemini.py && python setup_databricks.py && python app.py"
 env:
   - name: HOME
     value: /app/python/source_code
@@ -11,3 +11,8 @@ env:
     valueFrom: DATABRICKS_TOKEN
   - name: ANTHROPIC_MODEL
     value: databricks-claude-opus-4-6
+  - name: GEMINI_MODEL
+    value: databricks-gemini-3-1-pro
+  #OPTIONAL: Move to the new Databricks Gateway if you have access (recommended), otherwise it will default to the older endpoint
+  - name: DATABRICKS_GATEWAY_HOST
+    value: https://6051921418418893.ai-gateway.staging.cloud.databricks.com

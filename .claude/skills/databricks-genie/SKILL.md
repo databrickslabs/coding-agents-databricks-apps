@@ -109,8 +109,8 @@ Before creating a Genie Space:
 ### Creating Tables
 
 Use these skills in sequence:
-1. `synthetic-data-generation` - Generate raw parquet files
-2. `spark-declarative-pipelines` - Create bronze/silver/gold tables
+1. `databricks-synthetic-data-generation` - Generate raw parquet files
+2. `databricks-spark-declarative-pipelines` - Create bronze/silver/gold tables
 
 ## Common Issues
 
@@ -119,3 +119,10 @@ Use these skills in sequence:
 | **No warehouse available** | Create a SQL warehouse or provide `warehouse_id` explicitly |
 | **Poor query generation** | Add instructions and sample questions that reference actual column names |
 | **Slow queries** | Ensure warehouse is running; use OPTIMIZE on tables |
+
+## Related Skills
+
+- **[databricks-agent-bricks](../databricks-agent-bricks/SKILL.md)** - Use Genie Spaces as agents inside Supervisor Agents
+- **[databricks-synthetic-data-generation](../databricks-synthetic-data-generation/SKILL.md)** - Generate raw parquet data to populate tables for Genie
+- **[databricks-spark-declarative-pipelines](../databricks-spark-declarative-pipelines/SKILL.md)** - Build bronze/silver/gold tables consumed by Genie Spaces
+- **[databricks-unity-catalog](../databricks-unity-catalog/SKILL.md)** - Manage the catalogs, schemas, and tables Genie queries
