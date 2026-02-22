@@ -86,3 +86,6 @@ Before starting any new project or documentation:
 
 - Databricks skills from [databricks-solutions/ai-dev-kit](https://github.com/databricks-solutions/ai-dev-kit)
 - Development workflow skills from [obra/superpowers](https://github.com/obra/superpowers)
+
+# things to remember
+Remember to never move .git folder to the workspace if you're running workspace import.

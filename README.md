@@ -1,205 +1,194 @@
-# claude-code-cli-bricks
+# Coding Agents on Databricks Apps
+
 ### What is it?
 
-TL;DR: Claude Code on Databricks Apps for All Databricks Users 🚀
+TL;DR: Run Claude Code, Gemini CLI, and OpenCode on Databricks Apps - all from the browser.
 
-A browser-based terminal emulator built with Flask and xterm.js, designed for cloud development environments with Databricks workspace integration and Claude Code CLI support.
+A browser-based terminal emulator that gives every Databricks user access to AI coding agents, wired up to model serving endpoints on their workspace. No IDE setup, no local installs.
 
 ### Why now?
 On Jan 26. 2026, Andrej Karpathy made [this viral tweet](https://x.com/karpathy/status/2015883857489522876?s=46&t=tEsLJXJnGFIkaWs-Bhs1yA). Boris Cherny, the creator of claude code responded and said the following.
 ![alt text](image.png)
 
-This app template opens this up for all Databricks Users! ❤️
+This app template opens this up for all Databricks Users!
 
-No more pesky IDE setups, no bespoke tweaks. 
+No more pesky IDE setups, no bespoke tweaks.
 
 Just use it all on Databricks, from the browser. Wired up to model serving endpoints on your workspace.
 
 ## Features
 
-✅ **Browser-based Terminal** - Full PTY support with xterm.js frontend
+### 🤖 Coding Agents
 
-✅ **Real-time I/O** - Responsive terminal with polling-based communication
+| Agent | Model | Description |
+|-------|-------|-------------|
+| 🟠 **Claude Code** | `databricks-claude-opus-4-6` | Anthropic's coding agent with 30 skills + 2 MCP servers |
+| 🔵 **Gemini CLI** | `databricks-gemini-3-1-pro` | Google's coding agent with shared skills |
+| 🟢 **OpenCode** | Configurable | Open-source coding agent with multi-provider support |
 
-✅ **Graceful Session Cleanup** - Shell processes are properly terminated on exit, tab close, or timeout
+Every agent starts **preconfigured to your Databricks AI Gateway endpoint** — models, auth tokens, and base URLs are all wired up at boot. No API keys to manage, no manual config.
 
-✅ **Terminal Resizing** - Dynamic resize support for responsive layouts
+### ⚡ Platform
 
-✅ **Databricks Workspace Integration** - Auto-sync projects to Databricks Workspace on git commits
+> 🎮 **Zero-config terminal in your browser.** Open the app, play snake while it sets up, start coding.
 
-✅ **Claude Code CLI** - Pre-configured to use Databricks hosted models as the API endpoint
+| | |
+|---|---|
+| 🖥️ **Browser Terminal** | Full PTY with xterm.js — resize, scroll, 256-color, the works |
+| 🐍 **Loading Screen** | Snake game while 6 setup steps run in parallel |
+| 🔄 **Workspace Sync** | Every `git commit` auto-syncs to `/Workspace/Users/{you}/projects/` |
+| 👤 **Auto Git Identity** | `user.name` + `user.email` from your Databricks token |
+| 🔒 **Single-User Security** | Only the PAT owner gets in. Everyone else sees 403. |
+| 🌐 **AI Gateway** | Route all models through Databricks AI Gateway |
+| ✏️ **Micro Editor** | [micro](https://micro-editor.github.io/) — a modern terminal editor |
+| ⚙️ **Databricks CLI** | Pre-configured with your PAT, ready to go |
+| 🚀 **Gunicorn** | Production-grade server with gthread workers |
 
-✅ **Configurable Model** - Switch between Claude models via `app.yaml` (default: `databricks-claude-opus-4-6`)
+---
 
-✅ **Micro Editor** - Ships with [micro](https://micro-editor.github.io/), a modern terminal-based text editor
+### 🧠 30 Claude Code Skills
 
-✅ **Databricks CLI** - Pre-configured with your PAT for immediate use
+<table>
+<tr>
+<td width="50%">
 
-✅ **Single-User Security** - Only the token owner can access the terminal
+**🔶 16 Databricks Skills** — [ai-dev-kit](https://github.com/databricks-solutions/ai-dev-kit)
 
-✅ **MCP Servers** - DeepWiki for GitHub docs, Exa for web search
+| | |
+|---|---|
+| 🤖 AI & Agents | agent-bricks, genie, mlflow-eval, model-serving |
+| 📊 Analytics | aibi-dashboards, unity-catalog |
+| 🔧 Data Eng | declarative-pipelines, jobs, synthetic-data |
+| 💻 Dev | asset-bundles, app-apx, app-python, python-sdk, config |
+| 📚 Reference | docs, pdf-generation |
 
-### 30 Pre-installed Skills
+</td>
+<td width="50%">
 
-✅ **Databricks Skills (16)** - Make building Databricks products simple. Create dashboards, jobs, pipelines, agents, and more with guided workflows that understand Databricks APIs and best practices.
+**⚡ 14 Superpowers Skills** — [obra/superpowers](https://github.com/obra/superpowers)
 
-✅ **Superpowers Skills (14)** - Provide the agentic framework for Claude Code. Test-driven development, systematic debugging, brainstorming, parallel agent workflows, and structured planning for complex tasks.
+| | |
+|---|---|
+| 🏗️ Build | brainstorming, writing-plans, executing-plans |
+| 💻 Code | test-driven-dev, subagent-driven-dev |
+| 🐛 Debug | systematic-debugging, verification |
+| 👀 Review | requesting-review, receiving-review |
+| 📦 Ship | finishing-branch, git-worktrees |
+| 🔀 Meta | dispatching-agents, writing-skills, using-superpowers |
 
-## Skill Details
+</td>
+</tr>
+</table>
 
-### Databricks Skills
+---
 
-From [databricks-solutions/ai-dev-kit](https://github.com/databricks-solutions/ai-dev-kit):
+### 🔌 2 MCP Servers
 
-| Category | Skills |
-|----------|--------|
-| AI & Agents | agent-bricks, databricks-genie, mlflow-evaluation, model-serving |
-| Analytics | aibi-dashboards, databricks-unity-catalog |
-| Data Engineering | spark-declarative-pipelines, databricks-jobs, synthetic-data-generation |
-| Development | asset-bundles, databricks-app-apx, databricks-app-python, databricks-python-sdk, databricks-config |
-| Reference | databricks-docs, unstructured-pdf-generation |
-
-### Development Workflow Skills
-
-From [obra/superpowers](https://github.com/obra/superpowers):
-
-- brainstorming, test-driven-development, systematic-debugging, writing-plans
-- verification-before-completion, executing-plans, dispatching-parallel-agents
-- subagent-driven-development, using-git-worktrees, requesting-code-review
-- receiving-code-review, finishing-a-development-branch, writing-skills, using-superpowers
-
-## MCP Servers
-
-Pre-configured MCP servers for enhanced capabilities:
-
-| Server | Description |
+| Server | What it does |
 |--------|-------------|
-| **DeepWiki** | AI-powered documentation for any GitHub repository |
-| **Exa** | Web search and code context retrieval |
-
-### Updating Skills
-
-Skills are bundled with the app. To update:
-
-1. Pull latest from [ai-dev-kit](https://github.com/databricks-solutions/ai-dev-kit)
-2. Copy `databricks-skills/*` to `.claude/skills/`
-3. For superpowers, pull latest from [obra/superpowers](https://github.com/obra/superpowers) and copy `skills/*` to `.claude/skills/`
-4. Redeploy the app
+| 📖 **DeepWiki** | Ask questions about any GitHub repo — gets AI-powered answers from the codebase |
+| 🔍 **Exa** | Web search and code context retrieval for up-to-date information |
 
 ## Quick Start
 
 ### Prerequisites
 
-- Python 3.11+
-- [uv](https://github.com/astral-sh/uv) (recommended) or pip
+- A Databricks workspace with Model Serving endpoints enabled
+- A Personal Access Token (PAT)
+- Databricks CLI installed locally (for deployment)
 
-## Deploying to Databricks
+### Deploy to Databricks Apps
 
-1. Clone this repo to your Databricks Workspace
-2. Navigate to **Compute** → **Apps**
-3. Click **Create App** and select **Custom App**
-4. Point to the cloned repo and deploy
+1. Clone this repo:
+   ```bash
+   git clone <repo-url>
+   cd coding-agents-on-databricks
+   ```
 
-### Installation
-```bash
-# Clone the repository
-git clone https://github.com/your-username/claude-code-cli-bricks.git
-cd claude-code-cli-bricks
+2. Copy and configure `app.yaml`:
+   ```bash
+   cp app.yaml.template app.yaml
+   ```
+   Edit `app.yaml` — set your `DATABRICKS_GATEWAY_HOST` or remove the gateway lines to fall back to direct model serving endpoints.
 
-# Install dependencies
-uv pip install -r requirements.txt
-```
+3. Create the app and configure the `DATABRICKS_TOKEN` secret:
+   ```bash
+   databricks apps create <your-app-name>
+   ```
+   In the [App Resources tab](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/resources), add your PAT as the `DATABRICKS_TOKEN` secret. If using AI Gateway, also add `DATABRICKS_GATEWAY_TOKEN`.
 
-### Running Locally
+4. Sync and deploy:
+   ```bash
+   databricks sync . /Workspace/Users/<your-email>/apps/<your-app-name> --watch=false
+   databricks apps deploy <your-app-name> \
+     --source-code-path /Workspace/Users/<your-email>/apps/<your-app-name>
+   ```
+
+> **Important:** Use `databricks sync` (not `workspace import-dir`) to upload files. It respects `.gitignore` and handles the `.git` directory correctly.
+
+### Run Locally
 
 ```bash
 uv run python app.py
 ```
 
-Open http://localhost:8000 in your browser.
-
+Open http://localhost:8000. This starts Flask's dev server — production uses Gunicorn.
 
 ## Architecture
 
 ```
 ┌─────────────────────┐     HTTP      ┌─────────────────────┐
-│   Browser Client    │◄────────────►│   Flask Backend     │
+│   Browser Client    │◄────────────►│   Gunicorn + Flask   │
 │   (xterm.js)        │   Polling     │   (PTY Manager)     │
 └─────────────────────┘               └─────────────────────┘
-                                              │
-                                              ▼
+         │                                     │
+         │ on first load                       │ on startup
+         ▼                                     ▼
+┌─────────────────────┐               ┌─────────────────────┐
+│   Loading Screen    │               │   Background Setup  │
+│   (snake game)      │               │   (6 parallel steps)│
+└─────────────────────┘               └─────────────────────┘
+                                               │
+                                               ▼
                                       ┌─────────────────────┐
                                       │   Shell Process     │
                                       │   (/bin/bash)       │
                                       └─────────────────────┘
 ```
 
+### Startup Flow
+
+1. Gunicorn starts, calls `initialize_app()` via `post_worker_init` hook
+2. App immediately serves the loading screen (snake game)
+3. Background thread runs setup steps: git config, micro editor, Claude CLI, OpenCode, Gemini CLI, Databricks CLI
+4. `/api/setup-status` endpoint reports progress to the loading screen
+5. Once complete, the loading screen transitions to the terminal UI
+
 ### API Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/` | GET | Serves the terminal UI |
-| `/health` | GET | Health check with session count |
+| `/` | GET | Loading screen (during setup) or terminal UI |
+| `/health` | GET | Health check with session count and setup status |
+| `/api/setup-status` | GET | Setup progress for loading screen |
 | `/api/session` | POST | Create new terminal session |
 | `/api/input` | POST | Send input to terminal |
 | `/api/output` | POST | Poll for terminal output |
 | `/api/resize` | POST | Resize terminal dimensions |
-| `/api/session/close` | POST | Gracefully close terminal session |
-
-## Project Structure
-
-```
-claude-code-cli-bricks/
-├── .claude/
-│   └── skills/            # 30 pre-installed skills
-├── app.py                 # Flask backend with PTY management
-├── app.yaml               # Databricks Apps deployment config
-├── app.yaml.template      # Template for app.yaml configuration
-├── CLAUDE.md              # Claude Code welcome message
-├── requirements.txt       # Python dependencies
-├── setup_claude.py        # Claude Code CLI + MCP configuration
-├── setup_databricks.py    # Databricks CLI configuration
-├── sync_to_workspace.py   # Git hook for Databricks sync
-├── static/
-│   ├── index.html         # Terminal UI
-│   └── lib/               # xterm.js library files
-└── docs/
-    └── plans/             # Design documentation
-```
+| `/api/session/close` | POST | Close terminal session |
 
 ## Configuration
 
-### Setting up app.yaml
-
-Copy the template and configure your Databricks workspace:
-
-```bash
-cp app.yaml.template app.yaml
-```
-
-Edit `app.yaml` and replace `<your-workspace>` with your Databricks workspace URL:
-
-```yaml
-env:
-  - name: DATABRICKS_HOST
-    value: https://<your-workspace>.cloud.databricks.com
-```
-
-The `DATABRICKS_HOST` is used by both:
-- **Workspace sync** - To upload projects on git commits
-- **Claude Code CLI** - As the Anthropic API endpoint (via Databricks serving endpoints)
-
-## Databricks Deployment
-
-This project is configured for deployment as a Databricks App.
-
 ### Environment Variables
 
-| Variable | Description |
-|----------|-------------|
-| `DATABRICKS_HOST` | Databricks workspace URL |
-| `DATABRICKS_TOKEN` | Your Personal Access Token (PAT) |
-| `ANTHROPIC_MODEL` | Model name (default: `databricks-claude-opus-4-6`) |
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DATABRICKS_TOKEN` | Yes | Your Personal Access Token (secret) |
+| `HOME` | Yes | Set to `/app/python/source_code` in app.yaml |
+| `ANTHROPIC_MODEL` | No | Claude model name (default: `databricks-claude-opus-4-6`) |
+| `GEMINI_MODEL` | No | Gemini model name (default: `databricks-gemini-3-1-pro`) |
+| `DATABRICKS_GATEWAY_HOST` | No | AI Gateway URL (recommended). Falls back to direct model serving if unset |
+| `DATABRICKS_GATEWAY_TOKEN` | No | AI Gateway token (secret, required if using gateway) |
 
 ### Security Model
 
@@ -210,57 +199,53 @@ This is a **single-user app**. Each user deploys their own instance with their o
 3. Only requests from the token owner are allowed
 4. Other users see a 403 Forbidden error
 
-This ensures your terminal session is private and uses your Databricks permissions.
+### Gunicorn Configuration
 
-### Create App
+Production uses Gunicorn (`gunicorn.conf.py`) with:
+- `workers=1` — PTY file descriptors and in-memory session state can't survive forking
+- `threads=8` — Handles concurrent polling from the terminal client
+- `worker_class=gthread` — Single process + thread pool
+- `post_worker_init` hook calls `initialize_app()` to start setup
 
-First, create the app in your Databricks workspace:
+## Project Structure
 
-```bash
-databricks apps create xterm-terminal
 ```
-
-### Deploy via CLI
-
-Deploy the code using the Databricks CLI:
-
-```bash
-# 1. Import project files to workspace (wipe clean first for fresh deploy)
-databricks workspace delete /Workspace/Users/<your-email>/xterm-experiment --recursive
-databricks workspace import-dir . /Workspace/Users/<your-email>/xterm-experiment --overwrite
-
-# 2. Deploy the app
-databricks apps deploy xterm-terminal --source-code-path /Workspace/Users/<your-email>/xterm-experiment
+coding-agents-on-databricks/
+├── .claude/
+│   └── skills/              # 30 pre-installed Claude Code skills
+├── app.py                   # Flask backend with PTY management + setup orchestration
+├── app.yaml                 # Databricks Apps deployment config
+├── app.yaml.template        # Template for app.yaml
+├── gunicorn.conf.py         # Gunicorn production server config
+├── CLAUDE.md                # Claude Code instructions
+├── requirements.txt         # Python dependencies
+├── setup_claude.py          # Claude Code CLI + MCP configuration
+├── setup_gemini.py          # Gemini CLI configuration
+├── setup_opencode.py        # OpenCode CLI configuration
+├── setup_databricks.py      # Databricks CLI configuration
+├── sync_to_workspace.py     # Post-commit hook: sync to Databricks Workspace
+├── install_micro.sh         # Micro editor installer
+├── static/
+│   ├── index.html           # Terminal UI (xterm.js)
+│   ├── loading.html         # Loading screen with snake game
+│   └── lib/                 # xterm.js library files
+└── docs/
+    └── plans/               # Design documentation
 ```
-
-Replace `<your-email>` with your Databricks username (e.g., `user@example.com`).
-
-Once the app is deployed, create a secret with your PAT in your Databricks Workspace. In the [App Resources tab](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/resources), add the secret aliased as DATABRICKS_TOKEN.
-
-### Automatic Git Configuration
-
-When the app starts, it automatically configures git with your Databricks identity:
-- **Email**: From your Databricks `userName`
-- **Name**: From your Databricks `displayName` (or derived from email)
-
-This means commits made within the app will be attributed to your Databricks account.
 
 ## Workspace Sync
 
-When deployed, git commits automatically sync your projects to Databricks Workspace:
+Git commits automatically sync projects to Databricks Workspace:
 
 ```
 /Workspace/Users/{email}/projects/{project-name}/
 ```
 
-This is enabled via a git post-commit hook configured by `setup_claude.py`.
+The post-commit hook uses `nohup ... & disown` to ensure the sync process survives across all coding agents (Claude Code, Gemini CLI, OpenCode), since some agents kill the entire process group when a shell command finishes.
 
 ## Technologies
 
-- **Backend**: Flask, Python PTY/termios
+- **Backend**: Flask, Gunicorn (gthread), Python PTY/termios
 - **Frontend**: xterm.js, FitAddon
-- **Integration**: Databricks SDK, Claude Agent SDK
-
-## License
-
-MIT
+- **Agents**: Claude Code CLI, Gemini CLI, OpenCode
+- **Integration**: Databricks SDK, Databricks AI Gateway
