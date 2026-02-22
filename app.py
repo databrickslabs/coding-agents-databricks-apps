@@ -38,6 +38,7 @@ setup_state = {
     "completed_at": None,
     "error": None,
     "steps": [
+        {"id": "git",        "label": "Configuring git identity",     "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "micro",      "label": "Installing micro editor",      "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "claude",     "label": "Configuring Claude CLI",       "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "opencode",   "label": "Configuring OpenCode CLI",     "status": "pending", "started_at": None, "completed_at": None, "error": None},
@@ -85,10 +86,67 @@ def _run_step(step_id, command):
         _update_step(step_id, status="error", completed_at=time.time(), error=str(e))
 
 
+def _setup_git_config():
+    """Configure git identity and hooks by writing files directly (no subprocess)."""
+    home = os.environ.get("HOME", "/app/python/source_code")
+    if not home or home == "/":
+        home = "/app/python/source_code"
+
+    # Get user identity from Databricks token
+    user_email = None
+    display_name = None
+    try:
+        from databricks.sdk import WorkspaceClient
+        db_host = os.environ.get("DATABRICKS_HOST")
+        db_token = os.environ.get("DATABRICKS_TOKEN")
+        if db_host and db_token:
+            w = WorkspaceClient(host=db_host, token=db_token, auth_type="pat")
+            me = w.current_user.me()
+            user_email = me.user_name
+            display_name = me.display_name or user_email.split("@")[0]
+    except Exception as e:
+        logger.warning(f"Could not get user identity from token: {e}")
+
+    # Write ~/.gitconfig directly (more reliable than subprocess git config)
+    gitconfig_path = os.path.join(home, ".gitconfig")
+    hooks_dir = os.path.join(home, ".githooks")
+    os.makedirs(hooks_dir, exist_ok=True)
+
+    lines = []
+    if user_email and display_name:
+        lines.append("[user]")
+        lines.append(f"\temail = {user_email}")
+        lines.append(f"\tname = {display_name}")
+    lines.append("[core]")
+    lines.append(f"\thooksPath = {hooks_dir}")
+
+    with open(gitconfig_path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    logger.info(f"Git config written to {gitconfig_path}")
+
+    # Write post-commit hook for workspace sync
+    post_commit = os.path.join(hooks_dir, "post-commit")
+    with open(post_commit, "w") as f:
+        f.write("#!/bin/bash\n")
+        f.write("# Auto-sync to Databricks Workspace on commit\n")
+        f.write("source /app/python/source_code/.venv/bin/activate\n")
+        f.write('python /app/python/source_code/sync_to_workspace.py "$(pwd)" &\n')
+    os.chmod(post_commit, 0o755)
+    logger.info(f"Post-commit hook written to {post_commit}")
+
+
 def run_setup():
     with setup_lock:
         setup_state["status"] = "running"
         setup_state["started_at"] = time.time()
+
+    # Git config — done directly in Python, not as a subprocess
+    _update_step("git", status="running", started_at=time.time())
+    try:
+        _setup_git_config()
+        _update_step("git", status="complete", completed_at=time.time())
+    except Exception as e:
+        _update_step("git", status="error", completed_at=time.time(), error=str(e))
 
     _run_step("micro", ["bash", "-c",
         "mkdir -p ~/.local/bin && bash install_micro.sh && mv micro ~/.local/bin/ 2>/dev/null || true"])

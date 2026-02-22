@@ -90,43 +90,6 @@ projects_dir = home / "projects"
 projects_dir.mkdir(exist_ok=True)
 print(f"Projects directory: {projects_dir}")
 
-# 5. Set up global git identity from Databricks token owner
-try:
-    from databricks.sdk import WorkspaceClient
-    db_host = os.environ.get("DATABRICKS_HOST")
-    db_token = os.environ.get("DATABRICKS_TOKEN")
-    if db_host and db_token:
-        w = WorkspaceClient(host=db_host, token=db_token, auth_type="pat")
-        me = w.current_user.me()
-        user_email = me.user_name
-        display_name = me.display_name or user_email.split("@")[0]
-        subprocess.run(
-            ["git", "config", "--global", "user.email", user_email],
-            capture_output=True
-        )
-        subprocess.run(
-            ["git", "config", "--global", "user.name", display_name],
-            capture_output=True
-        )
-        print(f"Git identity configured: {display_name} <{user_email}>")
-except Exception as e:
-    print(f"Warning: Could not set git identity from token: {e}")
-
-# 6. Set up global git hooks directory (works for ALL repos including clones)
-global_hooks_dir = home / ".githooks"
-global_hooks_dir.mkdir(parents=True, exist_ok=True)
-
-post_commit_hook = global_hooks_dir / "post-commit"
-post_commit_hook.write_text('''#!/bin/bash
-# Auto-sync to Databricks Workspace on commit
-source /app/python/source_code/.venv/bin/activate
-python /app/python/source_code/sync_to_workspace.py "$(pwd)" &
-''')
-post_commit_hook.chmod(0o755)
-
-# Configure git to use global hooks for ALL repos (including clones)
-subprocess.run(
-    ["git", "config", "--global", "core.hooksPath", str(global_hooks_dir)],
-    capture_output=True
-)
-print(f"Git hooks configured: {global_hooks_dir} (applies to all repos)")
+# 5. Git identity and hooks are now configured by app.py's _setup_git_config()
+# (runs directly in Python before setup_claude.py, writes ~/.gitconfig and ~/.githooks/)
+print("Git identity and hooks: configured by app.py (skipping here)")
