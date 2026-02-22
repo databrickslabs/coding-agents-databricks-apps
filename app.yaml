@@ -5,8 +5,6 @@ command:
 env:
   - name: HOME
     value: /app/python/source_code
-  - name: DATABRICKS_HOST
-    value: https://fevm-serverless-9cefok.cloud.databricks.com
   - name: DATABRICKS_TOKEN
     valueFrom: DATABRICKS_TOKEN
   - name: ANTHROPIC_MODEL
