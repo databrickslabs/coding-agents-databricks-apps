@@ -90,7 +90,29 @@ projects_dir = home / "projects"
 projects_dir.mkdir(exist_ok=True)
 print(f"Projects directory: {projects_dir}")
 
-# 5. Set up global git hooks directory (works for ALL repos including clones)
+# 5. Set up global git identity from Databricks token owner
+try:
+    from databricks.sdk import WorkspaceClient
+    db_host = os.environ.get("DATABRICKS_HOST")
+    db_token = os.environ.get("DATABRICKS_TOKEN")
+    if db_host and db_token:
+        w = WorkspaceClient(host=db_host, token=db_token, auth_type="pat")
+        me = w.current_user.me()
+        user_email = me.user_name
+        display_name = me.display_name or user_email.split("@")[0]
+        subprocess.run(
+            ["git", "config", "--global", "user.email", user_email],
+            capture_output=True
+        )
+        subprocess.run(
+            ["git", "config", "--global", "user.name", display_name],
+            capture_output=True
+        )
+        print(f"Git identity configured: {display_name} <{user_email}>")
+except Exception as e:
+    print(f"Warning: Could not set git identity from token: {e}")
+
+# 6. Set up global git hooks directory (works for ALL repos including clones)
 global_hooks_dir = home / ".githooks"
 global_hooks_dir.mkdir(parents=True, exist_ok=True)
 
