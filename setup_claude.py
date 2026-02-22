@@ -17,23 +17,27 @@ claude_dir.mkdir(exist_ok=True)
 # Use DATABRICKS_GATEWAY_HOST if available (new AI Gateway), otherwise fall back to DATABRICKS_HOST
 gateway_host = os.environ.get("DATABRICKS_GATEWAY_HOST", "").rstrip("/")
 databricks_host = os.environ.get("DATABRICKS_HOST", "").rstrip("/")
-base_host = gateway_host if gateway_host else databricks_host
 
 if gateway_host:
-    print(f"Using Databricks AI Gateway: {gateway_host}")
-else:
-    print(f"Using Databricks Host: {databricks_host}")
+    gateway_token = os.environ.get("DATABRICKS_GATEWAY_TOKEN", "")
+    if not gateway_token:
+        print("Warning: DATABRICKS_GATEWAY_HOST set but DATABRICKS_GATEWAY_TOKEN missing, falling back to DATABRICKS_HOST")
+        gateway_host = ""
 
 if gateway_host:
     anthropic_base_url = f"{gateway_host}/anthropic"
+    auth_token = gateway_token
+    print(f"Using Databricks AI Gateway: {gateway_host}")
 else:
     anthropic_base_url = f"{databricks_host}/serving-endpoints/anthropic"
+    auth_token = os.environ["DATABRICKS_TOKEN"]
+    print(f"Using Databricks Host: {databricks_host}")
 
 settings = {
     "env": {
         "ANTHROPIC_MODEL": os.environ.get("ANTHROPIC_MODEL", "databricks-claude-sonnet-4-6"),
         "ANTHROPIC_BASE_URL": anthropic_base_url,
-        "ANTHROPIC_AUTH_TOKEN": os.environ["DATABRICKS_TOKEN"],
+        "ANTHROPIC_AUTH_TOKEN": auth_token,
         "ANTHROPIC_CUSTOM_HEADERS": "x-databricks-use-coding-agent-mode: true"
     }
 }

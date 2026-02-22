@@ -22,8 +22,13 @@ if not host or not token:
 # Strip trailing slash from host
 host = host.rstrip("/")
 
-# Use DATABRICKS_GATEWAY_HOST if available (new AI Gateway), otherwise fall back to DATABRICKS_HOST
+# Use DATABRICKS_GATEWAY_HOST if available (new AI Gateway), otherwise fall back to current gateway (DATABRICKS_HOST)
 gateway_host = os.environ.get("DATABRICKS_GATEWAY_HOST", "").rstrip("/")
+gateway_token = os.environ.get("DATABRICKS_GATEWAY_TOKEN", "") if gateway_host else ""
+if gateway_host and not gateway_token:
+    print("Warning: DATABRICKS_GATEWAY_HOST set but DATABRICKS_GATEWAY_TOKEN missing, falling back to DATABRICKS_HOST")
+    gateway_host = ""
+
 if gateway_host:
     print(f"Using Databricks AI Gateway: {gateway_host}")
 else:
@@ -67,8 +72,8 @@ if gateway_host:
                 "npm": "@ai-sdk/openai-compatible",
                 "name": "Databricks AI Gateway (MLflow)",
                 "options": {
-                    "baseURL": f"{gateway_host}/mlflow/v1",
-                    "apiKey": "{env:DATABRICKS_TOKEN}"
+                    "baseURL": f"{gateway_host}/mlflow/v1/chat/completions",
+                    "apiKey": "{env:DATABRICKS_GATEWAY_TOKEN}"
                 },
                 "models": {
                     "databricks-claude-opus-4-6": {
@@ -112,8 +117,8 @@ if gateway_host:
                 "npm": "@ai-sdk/openai-compatible",
                 "name": "Databricks AI Gateway (OpenAI)",
                 "options": {
-                    "baseURL": f"{gateway_host}/openai/v1",
-                    "apiKey": "{env:DATABRICKS_TOKEN}"
+                    "baseURL": f"{gateway_host}/openai/v1/responses",
+                    "apiKey": "{env:DATABRICKS_GATEWAY_TOKEN}"
                 },
                 "models": {
                     "databricks-gpt-5-2-codex": {
@@ -136,7 +141,7 @@ if gateway_host:
         "model": f"databricks/{anthropic_model}"
     }
 else:
-    # Fallback: single provider using DATABRICKS_HOST /serving-endpoints (OpenAI-compatible)
+    # Fallback: current gateway using DATABRICKS_HOST /serving-endpoints (OpenAI-compatible)
     opencode_config = {
         "$schema": "https://opencode.ai/config.json",
         "provider": {
@@ -198,14 +203,20 @@ print(f"OpenCode configured: {config_path}")
 opencode_data_dir = home / ".local" / "share" / "opencode"
 opencode_data_dir.mkdir(parents=True, exist_ok=True)
 
-auth_data = {
-    "databricks": {
-        "api_key": token
-    }
-}
 if gateway_host:
-    auth_data["databricks-openai"] = {
-        "api_key": token
+    auth_data = {
+        "databricks": {
+            "api_key": gateway_token
+        },
+        "databricks-openai": {
+            "api_key": gateway_token
+        }
+    }
+else:
+    auth_data = {
+        "databricks": {
+            "api_key": token
+        }
     }
 
 auth_path = opencode_data_dir / "auth.json"

@@ -34,11 +34,18 @@ host = host.rstrip("/")
 
 # Use DATABRICKS_GATEWAY_HOST if available (new AI Gateway), otherwise fall back to DATABRICKS_HOST
 gateway_host = os.environ.get("DATABRICKS_GATEWAY_HOST", "").rstrip("/")
+gateway_token = os.environ.get("DATABRICKS_GATEWAY_TOKEN", "") if gateway_host else ""
+if gateway_host and not gateway_token:
+    print("Warning: DATABRICKS_GATEWAY_HOST set but DATABRICKS_GATEWAY_TOKEN missing, falling back to DATABRICKS_HOST")
+    gateway_host = ""
+
 if gateway_host:
     gemini_base_url = f"{gateway_host}/gemini"
+    auth_token = gateway_token
     print(f"Using Databricks AI Gateway: {gateway_host}")
 else:
     gemini_base_url = f"{host}/serving-endpoints/google"
+    auth_token = token
     print(f"Using Databricks Host: {host}")
 
 # 1. Install Gemini CLI into ~/.local/bin (same approach as Claude Code)
@@ -73,7 +80,7 @@ env_content = f"""# Databricks Model Serving - Google Gemini native endpoint
 GEMINI_MODEL={gemini_model}
 GOOGLE_GEMINI_BASE_URL={gemini_base_url}
 GEMINI_API_KEY_AUTH_MECHANISM="bearer"
-GEMINI_API_KEY={token}
+GEMINI_API_KEY={auth_token}
 """
 
 env_path = gemini_dir / ".env"

@@ -16,3 +16,5 @@ env:
   #OPTIONAL: Move to the new Databricks Gateway if you have access (recommended), otherwise it will default to the older endpoint
   - name: DATABRICKS_GATEWAY_HOST
     value: https://6051921418418893.ai-gateway.staging.cloud.databricks.com
+  - name: DATABRICKS_GATEWAY_TOKEN
+    valueFrom: DATABRICKS_GATEWAY_TOKEN
