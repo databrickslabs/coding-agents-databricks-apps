@@ -1,7 +1,6 @@
 command:
-  - bash
-  - -c
-  - "mkdir -p ~/.local/bin && bash install_micro.sh && mv micro ~/.local/bin/ 2>/dev/null || true && python setup_claude.py && python setup_opencode.py && python setup_gemini.py && python setup_databricks.py && python app.py"
+  - python
+  - app.py
 env:
   - name: HOME
     value: /app/python/source_code

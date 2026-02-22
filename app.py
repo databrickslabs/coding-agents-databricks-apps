@@ -9,6 +9,7 @@ import uuid
 import threading
 import signal
 import time
+import copy
 import logging
 from flask import Flask, send_from_directory, request, jsonify, session
 from collections import deque
@@ -29,8 +30,77 @@ app.secret_key = os.urandom(24)
 sessions = {}
 sessions_lock = threading.Lock()
 
+# Setup state tracking
+setup_lock = threading.Lock()
+setup_state = {
+    "status": "pending",
+    "started_at": None,
+    "completed_at": None,
+    "error": None,
+    "steps": [
+        {"id": "micro",      "label": "Installing micro editor",      "status": "pending", "started_at": None, "completed_at": None, "error": None},
+        {"id": "claude",     "label": "Configuring Claude CLI",       "status": "pending", "started_at": None, "completed_at": None, "error": None},
+        {"id": "opencode",   "label": "Configuring OpenCode CLI",     "status": "pending", "started_at": None, "completed_at": None, "error": None},
+        {"id": "gemini",     "label": "Configuring Gemini CLI",       "status": "pending", "started_at": None, "completed_at": None, "error": None},
+        {"id": "databricks", "label": "Setting up Databricks CLI",    "status": "pending", "started_at": None, "completed_at": None, "error": None},
+    ]
+}
+
+
+def _update_step(step_id, **kwargs):
+    with setup_lock:
+        for step in setup_state["steps"]:
+            if step["id"] == step_id:
+                step.update(kwargs)
+                break
+
+
+def _get_setup_state_snapshot():
+    with setup_lock:
+        return copy.deepcopy(setup_state)
+
+
 # Single-user security: only the token owner can access the terminal
 app_owner = None
+
+
+def _run_step(step_id, command):
+    _update_step(step_id, status="running", started_at=time.time())
+    try:
+        env = os.environ.copy()
+        if not env.get("HOME") or env["HOME"] == "/":
+            env["HOME"] = "/app/python/source_code"
+        env.pop("DATABRICKS_CLIENT_ID", None)
+        env.pop("DATABRICKS_CLIENT_SECRET", None)
+
+        result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=300)
+        if result.returncode == 0:
+            _update_step(step_id, status="complete", completed_at=time.time())
+        else:
+            err = result.stderr.strip() or result.stdout.strip() or "Unknown error"
+            _update_step(step_id, status="error", completed_at=time.time(), error=err[:500])
+    except subprocess.TimeoutExpired:
+        _update_step(step_id, status="error", completed_at=time.time(), error="Timed out after 300s")
+    except Exception as e:
+        _update_step(step_id, status="error", completed_at=time.time(), error=str(e))
+
+
+def run_setup():
+    with setup_lock:
+        setup_state["status"] = "running"
+        setup_state["started_at"] = time.time()
+
+    _run_step("micro", ["bash", "-c",
+        "mkdir -p ~/.local/bin && bash install_micro.sh && mv micro ~/.local/bin/ 2>/dev/null || true"])
+    _run_step("claude", ["python", "setup_claude.py"])
+    _run_step("opencode", ["python", "setup_opencode.py"])
+    _run_step("gemini", ["python", "setup_gemini.py"])
+    _run_step("databricks", ["python", "setup_databricks.py"])
+
+    with setup_lock:
+        any_error = any(s["status"] == "error" for s in setup_state["steps"])
+        setup_state["status"] = "error" if any_error else "complete"
+        setup_state["completed_at"] = time.time()
 
 
 def get_token_owner():
@@ -162,8 +232,8 @@ def cleanup_stale_sessions():
 @app.before_request
 def authorize_request():
     """Check authorization before processing any request."""
-    # Skip auth for health check
-    if request.path == "/health":
+    # Skip auth for health check and setup status
+    if request.path in ("/health", "/api/setup-status"):
         return None
 
     authorized, user = check_authorization()
@@ -178,17 +248,30 @@ def authorize_request():
 
 @app.route("/")
 def index():
+    with setup_lock:
+        status = setup_state["status"]
+    if status in ("pending", "running"):
+        return send_from_directory("static", "loading.html")
     return send_from_directory("static", "index.html")
+
+
+@app.route("/api/setup-status")
+def get_setup_status():
+    return jsonify(_get_setup_state_snapshot())
 
 
 @app.route("/health")
 def health():
     with sessions_lock:
-        return jsonify({
-            "status": "healthy",
-            "active_sessions": len(sessions),
-            "session_timeout_seconds": SESSION_TIMEOUT_SECONDS
-        })
+        session_count = len(sessions)
+    with setup_lock:
+        current_setup_status = setup_state["status"]
+    return jsonify({
+        "status": "healthy",
+        "setup_status": current_setup_status,
+        "active_sessions": session_count,
+        "session_timeout_seconds": SESSION_TIMEOUT_SECONDS
+    })
 
 
 @app.route("/api/session", methods=["POST"])
@@ -340,5 +423,10 @@ if __name__ == "__main__":
     cleanup_thread = threading.Thread(target=cleanup_stale_sessions, daemon=True)
     cleanup_thread.start()
     logger.info(f"Started session cleanup thread (timeout={SESSION_TIMEOUT_SECONDS}s, interval={CLEANUP_INTERVAL_SECONDS}s)")
+
+    # Start setup in background thread — Flask starts immediately
+    setup_thread = threading.Thread(target=run_setup, daemon=True, name="setup-thread")
+    setup_thread.start()
+    logger.info("Started background setup thread")
 
     app.run(host="0.0.0.0", port=8000, threaded=True)
