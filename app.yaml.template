@@ -13,5 +13,8 @@ env:
   #OPTIONAL: Use the new Databricks AI Gateway if you have access (recommended), otherwise it will default to the older endpoint
   - name: DATABRICKS_GATEWAY_HOST
     value: https://<your-gateway-id>.ai-gateway.<env>.cloud.databricks.com
+  # NOTE: CLAUDE_CODE_DISABLE_AUTO_MEMORY=0 enables auto memory, allowing Claude Code to
+  # persist context and history across sessions. This flag is temporary — once Anthropic
+  # completes the rollout and auto memory is on by default, this can be removed entirely.
   - name: CLAUDE_CODE_DISABLE_AUTO_MEMORY
     value: 0
