@@ -58,7 +58,7 @@ if not gemini_bin.exists():
     # Use --prefix ~/.local so npm installs directly into ~/.local/bin (avoids EACCES on /usr/local)
     npm_prefix = str(home / ".local")
     result = subprocess.run(
-        ["npm", "install", "-g", f"--prefix={npm_prefix}", "@google/gemini-cli"],
+        ["npm", "install", "-g", f"--prefix={npm_prefix}", "@google/gemini-cli@nightly"],
         capture_output=True, text=True,
         env={**os.environ, "HOME": str(home)}
     )
@@ -91,7 +91,7 @@ print(f"Gemini CLI env configured: {env_path}")
 # 3. Write settings.json with model preferences
 settings = {
     "theme": "Default",
-    "selectedAuthType": "api-key"
+    "selectedAuthType": "gemini-api-key"
 }
 
 settings_path = gemini_dir / "settings.json"
