@@ -22,7 +22,7 @@ Just use it all on Databricks, from the browser. Wired up to model serving endpo
 
 | Agent | Model | Description |
 |-------|-------|-------------|
-| 🟠 **Claude Code** | `databricks-claude-opus-4-6` | Anthropic's coding agent with 30 skills + 2 MCP servers |
+| 🟠 **Claude Code** | `databricks-claude-opus-4-6` | Anthropic's coding agent with 39 skills + 2 MCP servers |
 | 🔵 **Gemini CLI** | `databricks-gemini-3-1-pro` | Google's coding agent with shared skills |
 | 🟢 **OpenCode** | Configurable | Open-source coding agent with multi-provider support |
 
@@ -43,24 +43,27 @@ Every agent starts **preconfigured to your Databricks AI Gateway endpoint** — 
 | ✏️ **Micro Editor** | [micro](https://micro-editor.github.io/) — a modern terminal editor |
 | ⚙️ **Databricks CLI** | Pre-configured with your PAT, ready to go |
 | 🚀 **Gunicorn** | Production-grade server with gthread workers |
+| 🔄 **Skill Refresh** | `/refresh-databricks-skills` pulls latest from [ai-dev-kit](https://github.com/databricks-solutions/ai-dev-kit) |
 
 ---
 
-### 🧠 30 Claude Code Skills
+### 🧠 39 Claude Code Skills
 
 <table>
 <tr>
 <td width="50%">
 
-**🔶 16 Databricks Skills** — [ai-dev-kit](https://github.com/databricks-solutions/ai-dev-kit)
+**🔶 25 Databricks Skills** — [ai-dev-kit](https://github.com/databricks-solutions/ai-dev-kit)
 
 | | |
 |---|---|
 | 🤖 AI & Agents | agent-bricks, genie, mlflow-eval, model-serving |
-| 📊 Analytics | aibi-dashboards, unity-catalog |
-| 🔧 Data Eng | declarative-pipelines, jobs, synthetic-data |
-| 💻 Dev | asset-bundles, app-apx, app-python, python-sdk, config |
-| 📚 Reference | docs, pdf-generation |
+| 📊 Analytics | aibi-dashboards, unity-catalog, metric-views |
+| 🔧 Data Eng | declarative-pipelines, jobs, structured-streaming, synthetic-data, zerobus-ingest |
+| 💻 Dev | asset-bundles, app-apx, app-python, python-sdk, config, spark-python-data-source |
+| 🗄️ Storage | lakebase-autoscale, lakebase-provisioned, vector-search |
+| 📚 Reference | docs, dbsql, pdf-generation |
+| 🔄 Meta | refresh-databricks-skills |
 
 </td>
 <td width="50%">
@@ -212,7 +215,7 @@ Production uses Gunicorn (`gunicorn.conf.py`) with:
 ```
 coding-agents-on-databricks/
 ├── .claude/
-│   └── skills/              # 30 pre-installed Claude Code skills
+│   └── skills/              # 39 pre-installed Claude Code skills
 ├── app.py                   # Flask backend with PTY management + setup orchestration
 ├── app.yaml                 # Databricks Apps deployment config
 ├── app.yaml.template        # Template for app.yaml

@@ -1,6 +1,6 @@
 # Claude Code on Databricks
 
-Welcome! This environment comes pre-configured with 30 skills and 2 MCP servers.
+Welcome! This environment comes pre-configured with 39 skills and 2 MCP servers.
 
 ## Skills (30 total)
 
