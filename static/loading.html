@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claude Code on Databricks - Setting Up</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #0d1117;
+    color: #c9d1d9;
+    font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, monospace;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* Header */
+  .header {
+    padding: 24px 32px 16px;
+    border-bottom: 1px solid #21262d;
+  }
+  .header h1 {
+    font-size: 20px;
+    font-weight: 600;
+    color: #58a6ff;
+    letter-spacing: -0.5px;
+  }
+  .header h1 .cursor {
+    display: inline-block;
+    width: 10px;
+    height: 20px;
+    background: #58a6ff;
+    margin-left: 4px;
+    animation: blink 1s step-end infinite;
+    vertical-align: text-bottom;
+  }
+  .header .subtitle {
+    font-size: 13px;
+    color: #8b949e;
+    margin-top: 6px;
+  }
+  .header .subtitle::before {
+    content: "> ";
+    color: #3fb950;
+  }
+
+  @keyframes blink {
+    50% { opacity: 0; }
+  }
+
+  /* Main layout */
+  .main {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+  }
+
+  /* Left panel - Snake game */
+  .game-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .game-label {
+    font-size: 12px;
+    color: #484f58;
+    margin-bottom: 12px;
+  }
+  .score-bar {
+    font-size: 13px;
+    color: #8b949e;
+    margin-bottom: 8px;
+    width: 600px;
+    display: flex;
+    justify-content: space-between;
+  }
+  .score-bar .score { color: #3fb950; }
+  .score-bar .high-score { color: #58a6ff; }
+
+  canvas {
+    border: 1px solid #30363d;
+    border-radius: 4px;
+    background: #0d1117;
+  }
+
+  .controls-hint {
+    font-size: 11px;
+    color: #484f58;
+    margin-top: 10px;
+  }
+
+  /* Right panel - Setup progress */
+  .progress-panel {
+    width: 280px;
+    border-left: 1px solid #21262d;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+  }
+  .progress-title {
+    font-size: 12px;
+    color: #484f58;
+    margin-bottom: 20px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .step {
+    margin-bottom: 16px;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  .step .icon {
+    display: inline-block;
+    width: 28px;
+    text-align: center;
+  }
+  .step.pending .icon { color: #484f58; }
+  .step.running .icon { color: #d29922; }
+  .step.complete .icon { color: #3fb950; }
+  .step.error .icon { color: #f85149; }
+
+  .step .label { color: #c9d1d9; }
+  .step.pending .label { color: #484f58; }
+  .step.running .label { color: #d29922; }
+  .step.complete .label { color: #3fb950; }
+  .step.error .label { color: #f85149; }
+
+  .step .time {
+    display: block;
+    margin-left: 28px;
+    font-size: 11px;
+    color: #484f58;
+  }
+
+  .step.running .time { color: #d29922; }
+
+  @keyframes spin {
+    0% { content: "[~]"; }
+    25% { content: "[/]"; }
+    50% { content: "[-]"; }
+    75% { content: "[\\]"; }
+  }
+
+  .overall-status {
+    margin-top: auto;
+    padding-top: 20px;
+    border-top: 1px solid #21262d;
+    font-size: 12px;
+    color: #484f58;
+  }
+
+  /* Fade-out transition */
+  .fade-out {
+    opacity: 0;
+    transition: opacity 0.6s ease-out;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>claude code on databricks<span class="cursor"></span></h1>
+  <div class="subtitle">Setting up your environment...</div>
+</div>
+
+<div class="main">
+  <div class="game-panel">
+    <div class="game-label">// play while you wait</div>
+    <div class="score-bar">
+      <span>Score: <span class="score" id="score">0</span></span>
+      <span>High: <span class="high-score" id="high-score">0</span></span>
+    </div>
+    <canvas id="game" width="600" height="400"></canvas>
+    <div class="controls-hint">Arrow keys / WASD to move</div>
+  </div>
+
+  <div class="progress-panel">
+    <div class="progress-title">// setup progress</div>
+    <div id="steps-container"></div>
+    <div class="overall-status" id="overall-status">Waiting to start...</div>
+  </div>
+</div>
+
+<script>
+// ==================== SETUP STATUS POLLING ====================
+const stepsContainer = document.getElementById('steps-container');
+const overallStatus = document.getElementById('overall-status');
+let setupComplete = false;
+
+function formatDuration(seconds) {
+  if (seconds < 1) return '<1s';
+  return Math.round(seconds) + 's';
+}
+
+function renderSteps(data) {
+  const now = Date.now() / 1000;
+  stepsContainer.innerHTML = '';
+
+  data.steps.forEach(step => {
+    const div = document.createElement('div');
+    div.className = 'step ' + step.status;
+
+    let icon = '[ ]';
+    if (step.status === 'running') icon = '[~]';
+    else if (step.status === 'complete') icon = '[✓]';
+    else if (step.status === 'error') icon = '[✗]';
+
+    let timeStr = '';
+    if (step.status === 'running' && step.started_at) {
+      timeStr = formatDuration(now - step.started_at) + ' elapsed';
+    } else if ((step.status === 'complete' || step.status === 'error') && step.started_at && step.completed_at) {
+      timeStr = formatDuration(step.completed_at - step.started_at);
+    }
+
+    div.innerHTML = '<span class="icon">' + icon + '</span><span class="label">' + step.label + '</span>' +
+      (timeStr ? '<span class="time">' + timeStr + '</span>' : '') +
+      (step.error ? '<span class="time" style="color:#f85149">' + step.error.substring(0, 80) + '</span>' : '');
+
+    stepsContainer.appendChild(div);
+  });
+
+  // Overall status
+  if (data.status === 'pending') {
+    overallStatus.textContent = 'Waiting to start...';
+  } else if (data.status === 'running') {
+    const elapsed = data.started_at ? formatDuration(now - data.started_at) : '';
+    overallStatus.textContent = 'Running... ' + elapsed + ' total';
+  } else if (data.status === 'complete') {
+    const duration = (data.started_at && data.completed_at) ? formatDuration(data.completed_at - data.started_at) : '';
+    overallStatus.textContent = 'Setup complete! ' + duration;
+    overallStatus.style.color = '#3fb950';
+  } else if (data.status === 'error') {
+    const duration = (data.started_at && data.completed_at) ? formatDuration(data.completed_at - data.started_at) : '';
+    overallStatus.textContent = 'Completed with errors. ' + duration;
+    overallStatus.style.color = '#d29922';
+  }
+}
+
+function pollSetupStatus() {
+  if (setupComplete) return;
+
+  fetch('/api/setup-status')
+    .then(r => r.json())
+    .then(data => {
+      renderSteps(data);
+
+      if (data.status === 'complete') {
+        setupComplete = true;
+        setTimeout(transitionToTerminal, 800);
+      } else if (data.status === 'error') {
+        setupComplete = true;
+        // Still transition — partial setup is better than stuck loading
+        setTimeout(transitionToTerminal, 4000);
+      } else {
+        setTimeout(pollSetupStatus, 2000);
+      }
+    })
+    .catch(() => {
+      setTimeout(pollSetupStatus, 3000);
+    });
+}
+
+function transitionToTerminal() {
+  document.body.classList.add('fade-out');
+  setTimeout(() => { window.location.href = '/'; }, 600);
+}
+
+// Start polling
+setTimeout(pollSetupStatus, 500);
+
+
+// ==================== SNAKE GAME ====================
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const scoreEl = document.getElementById('score');
+const highScoreEl = document.getElementById('high-score');
+
+const CELL = 20;
+const COLS = canvas.width / CELL;
+const ROWS = canvas.height / CELL;
+const COLORS = {
+  bg: '#0d1117',
+  grid: '#161b22',
+  snake: '#3fb950',
+  snakeHead: '#56d364',
+  food: '#58a6ff',
+  flash: '#f8514930'
+};
+const FOOD_SYMBOLS = ['{', '}', ';', '=>', '()', '[]', '//', '&&', '||', '!='];
+
+let snake, direction, nextDirection, food, score, highScore, gameOver, tick, speed;
+
+highScore = parseInt(localStorage.getItem('snakeHighScore') || '0', 10);
+highScoreEl.textContent = highScore;
+
+function init() {
+  const startX = Math.floor(COLS / 2);
+  const startY = Math.floor(ROWS / 2);
+  snake = [
+    { x: startX, y: startY },
+    { x: startX - 1, y: startY },
+    { x: startX - 2, y: startY }
+  ];
+  direction = { x: 1, y: 0 };
+  nextDirection = { x: 1, y: 0 };
+  score = 0;
+  scoreEl.textContent = '0';
+  speed = 150;
+  gameOver = false;
+  placeFood();
+  if (tick) clearInterval(tick);
+  tick = setInterval(update, speed);
+}
+
+function placeFood() {
+  let pos;
+  do {
+    pos = {
+      x: Math.floor(Math.random() * COLS),
+      y: Math.floor(Math.random() * ROWS),
+      symbol: FOOD_SYMBOLS[Math.floor(Math.random() * FOOD_SYMBOLS.length)]
+    };
+  } while (snake.some(s => s.x === pos.x && s.y === pos.y));
+  food = pos;
+}
+
+function update() {
+  if (gameOver) return;
+  if (document.hidden) return; // Pause when tab not visible
+
+  direction = nextDirection;
+  const head = {
+    x: snake[0].x + direction.x,
+    y: snake[0].y + direction.y
+  };
+
+  // Wall collision
+  if (head.x < 0 || head.x >= COLS || head.y < 0 || head.y >= ROWS) {
+    die();
+    return;
+  }
+
+  // Self collision
+  if (snake.some(s => s.x === head.x && s.y === head.y)) {
+    die();
+    return;
+  }
+
+  snake.unshift(head);
+
+  // Eat food
+  if (head.x === food.x && head.y === food.y) {
+    score++;
+    scoreEl.textContent = score;
+    if (score > highScore) {
+      highScore = score;
+      highScoreEl.textContent = highScore;
+      localStorage.setItem('snakeHighScore', highScore.toString());
+    }
+    placeFood();
+    // Speed up
+    if (speed > 80) {
+      speed -= 3;
+      clearInterval(tick);
+      tick = setInterval(update, speed);
+    }
+  } else {
+    snake.pop();
+  }
+
+  draw();
+}
+
+function die() {
+  gameOver = true;
+  // Flash red
+  ctx.fillStyle = COLORS.flash;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  // Show "Game Over" text
+  ctx.fillStyle = '#f85149';
+  ctx.font = '24px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('GAME OVER', canvas.width / 2, canvas.height / 2);
+  ctx.font = '13px monospace';
+  ctx.fillStyle = '#8b949e';
+  ctx.fillText('Restarting...', canvas.width / 2, canvas.height / 2 + 28);
+  // Auto-restart after brief pause
+  setTimeout(init, 1200);
+}
+
+function draw() {
+  // Background
+  ctx.fillStyle = COLORS.bg;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Grid lines
+  ctx.strokeStyle = COLORS.grid;
+  ctx.lineWidth = 0.5;
+  for (let x = 0; x <= canvas.width; x += CELL) {
+    ctx.beginPath();
+    ctx.moveTo(x, 0);
+    ctx.lineTo(x, canvas.height);
+    ctx.stroke();
+  }
+  for (let y = 0; y <= canvas.height; y += CELL) {
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(canvas.width, y);
+    ctx.stroke();
+  }
+
+  // Snake
+  snake.forEach((seg, i) => {
+    ctx.fillStyle = i === 0 ? COLORS.snakeHead : COLORS.snake;
+    ctx.fillRect(seg.x * CELL + 1, seg.y * CELL + 1, CELL - 2, CELL - 2);
+  });
+
+  // Food (code symbol)
+  ctx.fillStyle = COLORS.food;
+  ctx.font = '14px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(food.symbol, food.x * CELL + CELL / 2, food.y * CELL + CELL / 2);
+}
+
+// Keyboard controls
+document.addEventListener('keydown', (e) => {
+  const key = e.key.toLowerCase();
+  // Prevent 180-degree reversals
+  if ((key === 'arrowup' || key === 'w') && direction.y !== 1) {
+    nextDirection = { x: 0, y: -1 };
+  } else if ((key === 'arrowdown' || key === 's') && direction.y !== -1) {
+    nextDirection = { x: 0, y: 1 };
+  } else if ((key === 'arrowleft' || key === 'a') && direction.x !== 1) {
+    nextDirection = { x: -1, y: 0 };
+  } else if ((key === 'arrowright' || key === 'd') && direction.x !== -1) {
+    nextDirection = { x: 1, y: 0 };
+  }
+
+  // Prevent arrow keys from scrolling the page
+  if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(key)) {
+    e.preventDefault();
+  }
+});
+
+// Start game
+init();
+draw();
+</script>
+</body>
+</html>

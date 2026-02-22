@@ -90,31 +90,6 @@ projects_dir = home / "projects"
 projects_dir.mkdir(exist_ok=True)
 print(f"Projects directory: {projects_dir}")
 
-# 5. Set up global git hooks directory (works for ALL repos including clones)
-global_hooks_dir = home / ".githooks"
-global_hooks_dir.mkdir(parents=True, exist_ok=True)
-
-post_commit_hook = global_hooks_dir / "post-commit"
-post_commit_hook.write_text('''#!/bin/bash
-# Auto-sync to Databricks Workspace on commit (works from any CLI: Claude, Gemini, OpenCode, etc.)
-SYNC_LOG="$HOME/.sync.log"
-echo "[post-commit] $(date +%H:%M:%S) hook triggered in $(pwd)" >> "$SYNC_LOG"
-
-# Use venv python directly (avoids fragile 'source activate')
-VENV_PYTHON="/app/python/source_code/.venv/bin/python"
-SYNC_SCRIPT="/app/python/source_code/sync_to_workspace.py"
-
-if [ -x "$VENV_PYTHON" ] && [ -f "$SYNC_SCRIPT" ]; then
-    "$VENV_PYTHON" "$SYNC_SCRIPT" "$(pwd)" >> "$SYNC_LOG" 2>&1 &
-else
-    echo "[post-commit] $(date +%H:%M:%S) SKIP: venv=$VENV_PYTHON script=$SYNC_SCRIPT" >> "$SYNC_LOG"
-fi
-''')
-post_commit_hook.chmod(0o755)
-
-# Configure git to use global hooks for ALL repos (including clones)
-subprocess.run(
-    ["git", "config", "--global", "core.hooksPath", str(global_hooks_dir)],
-    capture_output=True
-)
-print(f"Git hooks configured: {global_hooks_dir} (applies to all repos)")
+# 5. Git identity and hooks are now configured by app.py's _setup_git_config()
+# (runs directly in Python before setup_claude.py, writes ~/.gitconfig and ~/.githooks/)
+print("Git identity and hooks: configured by app.py (skipping here)")
