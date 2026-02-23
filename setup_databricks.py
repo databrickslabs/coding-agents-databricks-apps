@@ -4,6 +4,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from utils import ensure_https
+
 # Set HOME if not properly set
 if not os.environ.get("HOME") or os.environ["HOME"] == "/":
     os.environ["HOME"] = "/app/python/source_code"
@@ -18,9 +20,7 @@ if not host or not token:
     print("Warning: DATABRICKS_HOST or DATABRICKS_TOKEN not set, skipping CLI config")
     exit(0)
 
-# Ensure host has https:// prefix (Databricks Apps may omit it)
-if not host.startswith(("http://", "https://")):
-    host = f"https://{host}"
+host = ensure_https(host)
 
 # Create ~/.databrickscfg with DEFAULT profile using PAT auth
 databrickscfg = home / ".databrickscfg"

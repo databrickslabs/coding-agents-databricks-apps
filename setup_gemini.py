@@ -16,6 +16,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from utils import ensure_https
+
 # Set HOME if not properly set
 if not os.environ.get("HOME") or os.environ["HOME"] == "/":
     os.environ["HOME"] = "/app/python/source_code"
@@ -30,19 +32,11 @@ if not host or not token:
     print("Warning: DATABRICKS_HOST or DATABRICKS_TOKEN not set, skipping Gemini CLI config")
     exit(0)
 
-# Strip trailing slash from host
-host = host.rstrip("/")
-
-# Ensure host has https:// prefix (Databricks Apps may omit it)
-if host and not host.startswith(("http://", "https://")):
-    host = f"https://{host}"
+# Strip trailing slash and ensure https:// prefix
+host = ensure_https(host.rstrip("/"))
 
 # Use DATABRICKS_GATEWAY_HOST if available (new AI Gateway), otherwise fall back to DATABRICKS_HOST
-gateway_host = os.environ.get("DATABRICKS_GATEWAY_HOST", "").rstrip("/")
-
-# Ensure gateway_host has https:// prefix
-if gateway_host and not gateway_host.startswith(("http://", "https://")):
-    gateway_host = f"https://{gateway_host}"
+gateway_host = ensure_https(os.environ.get("DATABRICKS_GATEWAY_HOST", "").rstrip("/"))
 gateway_token = os.environ.get("DATABRICKS_TOKEN", "") if gateway_host else ""
 if gateway_host and not gateway_token:
     print("Warning: DATABRICKS_GATEWAY_HOST set but DATABRICKS_TOKEN missing, falling back to DATABRICKS_HOST")
