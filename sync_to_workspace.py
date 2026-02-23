@@ -29,6 +29,15 @@ def get_user_email():
 
 def sync_project(project_path: Path):
     """Sync project to user's Workspace."""
+    # Only sync projects inside ~/projects/
+    project_path = project_path.resolve()
+    projects_dir = Path.home() / "projects"
+    try:
+        project_path.relative_to(projects_dir)
+    except ValueError:
+        print(f"⚠ SKIP: {project_path} is outside {projects_dir}", file=sys.stderr)
+        return
+
     try:
         user_email = get_user_email()
         workspace_dest = f"/Workspace/Users/{user_email}/projects/{project_path.name}"
