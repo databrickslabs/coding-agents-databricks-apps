@@ -18,11 +18,16 @@ claude_dir.mkdir(exist_ok=True)
 gateway_host = os.environ.get("DATABRICKS_GATEWAY_HOST", "").rstrip("/")
 databricks_host = os.environ.get("DATABRICKS_HOST", "").rstrip("/")
 
-if gateway_host:
-    gateway_token = os.environ.get("DATABRICKS_TOKEN", "")
-    if not gateway_token:
-        print("Warning: DATABRICKS_GATEWAY_HOST set but DATABRICKS_TOKEN missing, falling back to DATABRICKS_HOST")
-        gateway_host = ""
+# Ensure URLs have https:// prefix (Databricks Apps may omit it)
+if gateway_host and not gateway_host.startswith(("http://", "https://")):
+    gateway_host = f"https://{gateway_host}"
+if databricks_host and not databricks_host.startswith(("http://", "https://")):
+    databricks_host = f"https://{databricks_host}"
+
+gateway_token = os.environ.get("DATABRICKS_TOKEN", "") if gateway_host else ""
+if gateway_host and not gateway_token:
+    print("Warning: DATABRICKS_GATEWAY_HOST set but DATABRICKS_TOKEN missing, falling back to DATABRICKS_HOST")
+    gateway_host = ""
 
 if gateway_host:
     anthropic_base_url = f"{gateway_host}/anthropic"

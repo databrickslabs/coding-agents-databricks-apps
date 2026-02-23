@@ -97,8 +97,11 @@ def _setup_git_config():
     display_name = None
     try:
         from databricks.sdk import WorkspaceClient
-        db_host = os.environ.get("DATABRICKS_HOST")
+        db_host = os.environ.get("DATABRICKS_HOST", "")
         db_token = os.environ.get("DATABRICKS_TOKEN")
+        # Ensure host has https:// prefix (Databricks Apps may omit it)
+        if db_host and not db_host.startswith(("http://", "https://")):
+            db_host = f"https://{db_host}"
         if db_host and db_token:
             w = WorkspaceClient(host=db_host, token=db_token, auth_type="pat")
             me = w.current_user.me()
@@ -195,10 +198,13 @@ def get_token_owner():
     """Get the owner email from DATABRICKS_TOKEN at startup."""
     try:
         from databricks.sdk import WorkspaceClient
-        host = os.environ.get("DATABRICKS_HOST")
+        host = os.environ.get("DATABRICKS_HOST", "")
         token = os.environ.get("DATABRICKS_TOKEN")
         if not host or not token:
             return None
+        # Ensure host has https:// prefix (Databricks Apps may omit it)
+        if not host.startswith(("http://", "https://")):
+            host = f"https://{host}"
         w = WorkspaceClient(host=host, token=token, auth_type="pat")
         return w.current_user.me().user_name
     except Exception as e:

@@ -18,6 +18,10 @@ if not host or not token:
     print("Warning: DATABRICKS_HOST or DATABRICKS_TOKEN not set, skipping CLI config")
     exit(0)
 
+# Ensure host has https:// prefix (Databricks Apps may omit it)
+if not host.startswith(("http://", "https://")):
+    host = f"https://{host}"
+
 # Create ~/.databrickscfg with DEFAULT profile using PAT auth
 databrickscfg = home / ".databrickscfg"
 config_content = f"""[DEFAULT]
