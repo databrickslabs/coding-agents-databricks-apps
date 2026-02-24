@@ -14,6 +14,8 @@ import logging
 from flask import Flask, send_from_directory, request, jsonify, session
 from collections import deque
 
+from utils import ensure_https
+
 # Session timeout configuration
 SESSION_TIMEOUT_SECONDS = 60        # No poll for 60s = dead session
 CLEANUP_INTERVAL_SECONDS = 30       # How often to check for stale sessions
@@ -41,6 +43,7 @@ setup_state = {
         {"id": "git",        "label": "Configuring git identity",     "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "micro",      "label": "Installing micro editor",      "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "claude",     "label": "Configuring Claude CLI",       "status": "pending", "started_at": None, "completed_at": None, "error": None},
+        {"id": "codex",      "label": "Configuring Codex CLI",        "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "opencode",   "label": "Configuring OpenCode CLI",     "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "gemini",     "label": "Configuring Gemini CLI",       "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "databricks", "label": "Setting up Databricks CLI",    "status": "pending", "started_at": None, "completed_at": None, "error": None},
@@ -97,7 +100,7 @@ def _setup_git_config():
     display_name = None
     try:
         from databricks.sdk import WorkspaceClient
-        db_host = os.environ.get("DATABRICKS_HOST")
+        db_host = ensure_https(os.environ.get("DATABRICKS_HOST", ""))
         db_token = os.environ.get("DATABRICKS_TOKEN")
         if db_host and db_token:
             w = WorkspaceClient(host=db_host, token=db_token, auth_type="pat")
@@ -181,6 +184,7 @@ def run_setup():
     _run_step("micro", ["bash", "-c",
         "mkdir -p ~/.local/bin && bash install_micro.sh && mv micro ~/.local/bin/ 2>/dev/null || true"])
     _run_step("claude", ["python", "setup_claude.py"])
+    _run_step("codex", ["python", "setup_codex.py"])
     _run_step("opencode", ["python", "setup_opencode.py"])
     _run_step("gemini", ["python", "setup_gemini.py"])
     _run_step("databricks", ["python", "setup_databricks.py"])
@@ -195,7 +199,7 @@ def get_token_owner():
     """Get the owner email from DATABRICKS_TOKEN at startup."""
     try:
         from databricks.sdk import WorkspaceClient
-        host = os.environ.get("DATABRICKS_HOST")
+        host = ensure_https(os.environ.get("DATABRICKS_HOST", ""))
         token = os.environ.get("DATABRICKS_TOKEN")
         if not host or not token:
             return None

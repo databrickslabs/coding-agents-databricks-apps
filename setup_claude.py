@@ -3,6 +3,8 @@ import json
 import subprocess
 from pathlib import Path
 
+from utils import ensure_https
+
 # Set HOME if not properly set
 if not os.environ.get("HOME") or os.environ["HOME"] == "/":
     os.environ["HOME"] = "/app/python/source_code"
@@ -15,14 +17,13 @@ claude_dir.mkdir(exist_ok=True)
 
 # 1. Write settings.json for Databricks model serving
 # Use DATABRICKS_GATEWAY_HOST if available (new AI Gateway), otherwise fall back to DATABRICKS_HOST
-gateway_host = os.environ.get("DATABRICKS_GATEWAY_HOST", "").rstrip("/")
-databricks_host = os.environ.get("DATABRICKS_HOST", "").rstrip("/")
+gateway_host = ensure_https(os.environ.get("DATABRICKS_GATEWAY_HOST", "").rstrip("/"))
+databricks_host = ensure_https(os.environ.get("DATABRICKS_HOST", "").rstrip("/"))
 
-if gateway_host:
-    gateway_token = os.environ.get("DATABRICKS_TOKEN", "")
-    if not gateway_token:
-        print("Warning: DATABRICKS_GATEWAY_HOST set but DATABRICKS_TOKEN missing, falling back to DATABRICKS_HOST")
-        gateway_host = ""
+gateway_token = os.environ.get("DATABRICKS_TOKEN", "") if gateway_host else ""
+if gateway_host and not gateway_token:
+    print("Warning: DATABRICKS_GATEWAY_HOST set but DATABRICKS_TOKEN missing, falling back to DATABRICKS_HOST")
+    gateway_host = ""
 
 if gateway_host:
     anthropic_base_url = f"{gateway_host}/anthropic"
