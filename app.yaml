@@ -10,8 +10,10 @@ env:
     value: databricks-claude-opus-4-6
   - name: GEMINI_MODEL
     value: databricks-gemini-3-1-pro
+  - name: CODEX_MODEL
+    value: databricks-gpt-5-2
   #OPTIONAL: Move to the new Databricks Gateway if you have access (recommended), otherwise it will default to the older endpoint
-  - name: DATABRICKS_GATEWAY_HOST
-    value: https://6051921418418893.ai-gateway.staging.cloud.databricks.com
-  - name: CLAUDE_CODE_DISABLE_AUTO_MEMORY
-    value: 0
+  # - name: DATABRICKS_GATEWAY_HOST
+  #   value: https://6051921418418893.ai-gateway.staging.cloud.databricks.com
+  # - name: CLAUDE_CODE_DISABLE_AUTO_MEMORY
+  #   value: 0

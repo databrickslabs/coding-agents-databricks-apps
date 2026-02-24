@@ -16,7 +16,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from utils import ensure_https
+from utils import adapt_instructions_file, ensure_https
 
 # Set HOME if not properly set
 if not os.environ.get("HOME") or os.environ["HOME"] == "/":
@@ -114,6 +114,28 @@ if claude_skills_dir.exists():
     print(f"Skills copied: {claude_skills_dir} -> {gemini_skills_dir}")
 else:
     print(f"No Claude skills found at {claude_skills_dir}, skipping copy")
+
+# 5. Adapt CLAUDE.md to GEMINI.md for Gemini CLI
+# Look for CLAUDE.md in common locations
+claude_md_locations = [
+    Path(__file__).parent / "CLAUDE.md",  # Same directory as setup script
+    home / ".claude" / "CLAUDE.md",        # User's Claude config
+    Path("/app/python/source_code/CLAUDE.md"),  # Databricks App location
+]
+
+claude_md_path = None
+for loc in claude_md_locations:
+    if loc.exists():
+        claude_md_path = loc
+        break
+
+gemini_md_path = gemini_dir / "GEMINI.md"
+adapt_instructions_file(
+    source_path=claude_md_path or claude_md_locations[0],
+    target_path=gemini_md_path,
+    new_header="# Gemini CLI on Databricks",
+    cli_name="Gemini",
+)
 
 print("\nGemini CLI ready! Usage:")
 print("  gemini                                    # Start Gemini CLI")
