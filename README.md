@@ -2,7 +2,7 @@
 
 ### What is it?
 
-TL;DR: Run Claude Code, Gemini CLI, and OpenCode on Databricks Apps - all from the browser.
+TL;DR: Run Claude Code, Codex, Gemini CLI, and OpenCode on Databricks Apps - all from the browser.
 
 A browser-based terminal emulator that gives every Databricks user access to AI coding agents, wired up to model serving endpoints on their workspace. No IDE setup, no local installs.
 
@@ -23,6 +23,7 @@ Just use it all on Databricks, from the browser. Wired up to model serving endpo
 | Agent | Model | Description |
 |-------|-------|-------------|
 | 🟠 **Claude Code** | `databricks-claude-opus-4-6` | Anthropic's coding agent with 39 skills + 2 MCP servers (Claude Code) |
+| 🟣 **Codex** | `databricks-gpt-5-2` | OpenAI's coding agent with adapted instructions |
 | 🔵 **Gemini CLI** | `databricks-gemini-3-1-pro` | Google's coding agent with shared skills |
 | 🟢 **OpenCode** | Configurable | Open-source coding agent with multi-provider support |
 
@@ -152,7 +153,7 @@ Open http://localhost:8000. This starts Flask's dev server — production uses G
 
 1. Gunicorn starts, calls `initialize_app()` via `post_worker_init` hook
 2. App immediately serves the loading screen (snake game)
-3. Background thread runs setup steps: git config, micro editor, Claude CLI, OpenCode, Gemini CLI, Databricks CLI
+3. Background thread runs setup steps: git config, micro editor, Claude CLI, Codex CLI, OpenCode, Gemini CLI, Databricks CLI
 4. `/api/setup-status` endpoint reports progress to the loading screen
 5. Once complete, the loading screen transitions to the terminal UI
 
@@ -178,6 +179,7 @@ Open http://localhost:8000. This starts Flask's dev server — production uses G
 | `DATABRICKS_TOKEN` | Yes | Your Personal Access Token (secret) |
 | `HOME` | Yes | Set to `/app/python/source_code` in app.yaml |
 | `ANTHROPIC_MODEL` | No | Claude model name (default: `databricks-claude-opus-4-6`) |
+| `CODEX_MODEL` | No | Codex model name (default: `databricks-gpt-5-2`) |
 | `GEMINI_MODEL` | No | Gemini model name (default: `databricks-gemini-3-1-pro`) |
 | `DATABRICKS_GATEWAY_HOST` | No | AI Gateway URL (recommended). Falls back to direct model serving if unset |
 | `DATABRICKS_TOKEN` | No | AI Gateway token (secret, required if using gateway) |
@@ -212,6 +214,7 @@ coding-agents-on-databricks/
 ├── CLAUDE.md                # Claude Code instructions
 ├── requirements.txt         # Python dependencies
 ├── setup_claude.py          # Claude Code CLI + MCP configuration
+├── setup_codex.py           # Codex CLI configuration
 ├── setup_gemini.py          # Gemini CLI configuration
 ├── setup_opencode.py        # OpenCode CLI configuration
 ├── setup_databricks.py      # Databricks CLI configuration
@@ -233,11 +236,11 @@ Git commits automatically sync projects to Databricks Workspace:
 /Workspace/Users/{email}/projects/{project-name}/
 ```
 
-The post-commit hook uses `nohup ... & disown` to ensure the sync process survives across all coding agents (Claude Code, Gemini CLI, OpenCode), since some agents kill the entire process group when a shell command finishes.
+The post-commit hook uses `nohup ... & disown` to ensure the sync process survives across all coding agents (Claude Code, Codex, Gemini CLI, OpenCode), since some agents kill the entire process group when a shell command finishes.
 
 ## Technologies
 
 - **Backend**: Flask, Gunicorn (gthread), Python PTY/termios
 - **Frontend**: xterm.js, FitAddon
-- **Agents**: Claude Code CLI, Gemini CLI, OpenCode
+- **Agents**: Claude Code CLI, Codex CLI, Gemini CLI, OpenCode
 - **Integration**: Databricks SDK, Databricks AI Gateway
