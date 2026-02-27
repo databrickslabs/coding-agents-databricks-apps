@@ -4,6 +4,7 @@ __pycache__/
 .env
 .venv/
 venv/
+outstanding-todos.md
 
 # Workspace-specific config (use app.yaml.template)
 # app.yaml
