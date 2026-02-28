@@ -8,8 +8,23 @@
   <link href="https://fonts.googleapis.com/css2?family=Cascadia+Code&family=Fira+Code&family=JetBrains+Mono&family=Source+Code+Pro&display=swap" rel="stylesheet">
   <style>
     body { margin: 0; font-family: monospace; transition: background 0.3s, color 0.3s; }
-    #terminal { height: 100vh; width: 100vw; }
     #status { position: absolute; top: 10px; left: 10px; z-index: 1000; }
+
+    /* Pane container */
+    #pane-container { display: flex; flex-direction: row; height: 100vh; width: 100vw; }
+    .pane { flex: 1; position: relative; overflow: hidden; min-width: 0; }
+    .pane.active { box-shadow: inset 0 0 0 2px rgba(100,150,255,0.35); }
+
+    /* Divider */
+    #pane-divider {
+      flex: 0 0 4px; cursor: col-resize;
+      background: rgba(128,128,128,0.15);
+      transition: background 0.15s;
+      z-index: 1;
+    }
+    #pane-divider:hover, #pane-divider.dragging {
+      background: rgba(100,150,255,0.5);
+    }
 
     /* Toolbar — translucent right-edge drawer */
     #toolbar-tab {
@@ -31,7 +46,6 @@
     #toolbar-tab .arrow {
       font-size: 9px; transition: transform 0.3s ease; display: block;
     }
-    #toolbar-wrapper.open #toolbar-tab .arrow { transform: rotate(180deg); }
     #toolbar-wrapper { position: fixed; bottom: 0; right: 0; z-index: 1000; pointer-events: none; }
     #toolbar {
       pointer-events: auto;
@@ -202,10 +216,11 @@
       <div class="separator"></div>
       <div class="tool-row">
         <button id="search-btn" title="Search (Ctrl+Shift+F)">&#x1F50D;</button>
-        <button id="speak-btn" title="Speak (Option+V)">
+        <button id="speak-btn" title="Voice (Option+V)">
           <span class="speak-dot" style="display:none;"></span>
           &#x1F3A4;
         </button>
+        <button id="split-btn" title="Split pane (Ctrl+Shift+D)">&#x229E;</button>
       </div>
     </div>
   </div>
@@ -234,7 +249,7 @@
     </div>
   </div>
 
-  <div id="terminal"></div>
+  <div id="pane-container"></div>
 
   <script src="/static/lib/xterm.js"></script>
   <script src="/static/lib/addon-fit.js"></script>
@@ -344,9 +359,24 @@
     let currentThemeName = localStorage.getItem('terminal-theme-name') || null;
     let lastDarkTheme = localStorage.getItem('terminal-last-dark') || 'Dark';
     let lastLightTheme = localStorage.getItem('terminal-last-light') || 'Light';
-    let termInstance = null;
-    let fitAddonInstance = null;
-    let searchAddonInstance = null;
+
+    // ── Pane Object Model ─────────────────────────────────────────
+    // Each pane: { id, element, term, fitAddon, searchAddon, sessionId, pollInterval }
+    let panes = [];
+    let activePaneId = null;
+    let paneIdCounter = 0;
+
+    function getActivePane() {
+      return panes.find(p => p.id === activePaneId) || panes[0];
+    }
+
+    function focusPane(id) {
+      activePaneId = id;
+      panes.forEach(p => {
+        p.element.classList.toggle('active', p.id === id);
+        if (p.id === id) p.term.focus();
+      });
+    }
 
     // Resolve initial theme
     if (!currentThemeName || !themes[currentThemeName]) {
@@ -362,13 +392,11 @@
       document.body.style.background = preset.body;
       document.body.style.color = preset.type === 'dark' ? '#fff' : '#383a42';
       document.getElementById('theme-toggle').textContent = preset.type === 'dark' ? '\u2600\uFE0F' : '\uD83C\uDF19';
-      // Update overlay backgrounds for theme
       const overlayBg = preset.type === 'dark' ? 'rgba(30,30,30,0.9)' : 'rgba(245,245,245,0.9)';
       document.getElementById('search-bar').style.background = overlayBg;
       document.getElementById('dictation-preview').style.background = overlayBg;
-      if (termInstance) {
-        termInstance.options.theme = preset.theme;
-      }
+      // Apply to all panes
+      panes.forEach(p => { p.term.options.theme = preset.theme; });
       if (preset.type === 'dark') {
         lastDarkTheme = name;
         localStorage.setItem('terminal-last-dark', name);
@@ -389,10 +417,8 @@
       currentFontSize = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, size));
       localStorage.setItem('terminal-font-size', currentFontSize);
       updateFontSizeDisplay();
-      if (termInstance) {
-        termInstance.options.fontSize = currentFontSize;
-        refitAndResize();
-      }
+      panes.forEach(p => { p.term.options.fontSize = currentFontSize; });
+      refitAllPanes();
     }
 
     // ── Font Family ────────────────────────────────────────────────
@@ -401,19 +427,17 @@
       if (!family) return;
       currentFontFamily = name;
       localStorage.setItem('terminal-font-family', name);
-      if (termInstance) {
-        termInstance.options.fontFamily = family;
-        refitAndResize();
-      }
+      panes.forEach(p => { p.term.options.fontFamily = family; });
+      refitAllPanes();
       document.getElementById('font-family-select').value = name;
     }
 
-    // ── Refit helper ───────────────────────────────────────────────
-    function refitAndResize() {
-      if (fitAddonInstance && termInstance) {
-        fitAddonInstance.fit();
-        sendResize(termInstance.cols, termInstance.rows);
-      }
+    // ── Refit all panes ─────────────────────────────────────────────
+    function refitAllPanes() {
+      panes.forEach(p => {
+        p.fitAddon.fit();
+        if (p.sessionId) sendResize(p.term.cols, p.term.rows, p.sessionId);
+      });
     }
 
     // ── Populate toolbar dropdowns ─────────────────────────────────
@@ -453,7 +477,6 @@
     toolbarTab.addEventListener('click', () => {
       const isOpen = toolbarWrapper.classList.toggle('open');
       if (isOpen) {
-        // Wait for transition to get panel width, then offset tab
         requestAnimationFrame(() => {
           const w = toolbarPanel.offsetWidth;
           toolbarTab.style.right = w + 'px';
@@ -475,20 +498,22 @@
         searchInput.focus();
         searchInput.select();
       } else {
-        if (searchAddonInstance) searchAddonInstance.clearDecorations();
-        if (termInstance) termInstance.focus();
+        const ap = getActivePane();
+        if (ap && ap.searchAddon) ap.searchAddon.clearDecorations();
+        if (ap) ap.term.focus();
       }
     }
 
     function doSearch(direction) {
-      if (!searchAddonInstance) return;
+      const ap = getActivePane();
+      if (!ap || !ap.searchAddon) return;
       const query = searchInput.value;
       if (!query) return;
       const opts = { decorations: { matchOverviewRuler: '#888', activeMatchColorOverviewRuler: '#ffb000' } };
       if (direction === 'next') {
-        searchAddonInstance.findNext(query, opts);
+        ap.searchAddon.findNext(query, opts);
       } else {
-        searchAddonInstance.findPrevious(query, opts);
+        ap.searchAddon.findPrevious(query, opts);
       }
     }
 
@@ -555,7 +580,7 @@
       dictationActive = true;
       speakBtn.classList.add('recording');
       speakDot.style.display = '';
-      speakBtn.innerHTML = '<span class="speak-dot"></span> Recording...';
+      speakBtn.innerHTML = '<span class="speak-dot"></span> &#x1F3A4;';
       dictationPreview.classList.add('visible');
       dictationInput.value = '';
       dictationInterim.textContent = '';
@@ -567,7 +592,7 @@
     function stopDictation() {
       dictationActive = false;
       speakBtn.classList.remove('recording');
-      speakBtn.innerHTML = '&#x1F3A4; Speak';
+      speakBtn.innerHTML = '&#x1F3A4;';
       if (recognition) { try { recognition.stop(); } catch(e) {} }
     }
 
@@ -577,13 +602,15 @@
       dictationInput.value = '';
       dictationInterim.textContent = '';
       dictationInterim.classList.remove('has-text');
-      if (termInstance) termInstance.focus();
+      const ap = getActivePane();
+      if (ap) ap.term.focus();
     }
 
     function sendDictation() {
       const text = dictationInput.value.trim();
-      if (text && sessionId) {
-        sendInput(text);
+      const ap = getActivePane();
+      if (text && ap && ap.sessionId) {
+        sendInput(text, ap.sessionId);
       }
       closeDictation();
     }
@@ -617,19 +644,33 @@
       if (e.ctrlKey && e.shiftKey && e.key === 'F') {
         e.preventDefault(); toggleSearch(); return;
       }
-      // Alt+V (Option+V) : toggle voice dictation — use e.code because macOS Alt+V produces '√'
+      // Alt+V (Option+V) : toggle voice dictation
       if (e.altKey && !e.ctrlKey && !e.shiftKey && e.code === 'KeyV') {
         e.preventDefault();
         if (dictationActive) closeDictation();
         else startDictation();
         return;
       }
+      // Ctrl+Shift+D : split pane
+      if (e.ctrlKey && e.shiftKey && e.key === 'D') {
+        e.preventDefault(); splitPane(); return;
+      }
+      // Ctrl+Shift+W : close active pane
+      if (e.ctrlKey && e.shiftKey && e.key === 'W') {
+        e.preventDefault(); closeActivePane(); return;
+      }
+      // Ctrl+Shift+] : next pane
+      if (e.ctrlKey && e.shiftKey && e.key === ']') {
+        e.preventDefault(); cyclePaneFocus('next'); return;
+      }
+      // Ctrl+Shift+[ : prev pane
+      if (e.ctrlKey && e.shiftKey && e.key === '[') {
+        e.preventDefault(); cyclePaneFocus('prev'); return;
+      }
     });
 
-    // ── Session / IO ───────────────────────────────────────────────
+    // ── Session / IO (parameterized by sessionId) ──────────────────
     const status = document.getElementById('status');
-    let sessionId = null;
-    let pollInterval = null;
 
     async function createSession() {
       const resp = await fetch('/api/session', { method: 'POST' });
@@ -638,55 +679,203 @@
       return data.session_id;
     }
 
-    async function sendInput(input) {
-      if (!sessionId) return;
+    async function sendInput(input, sid) {
+      if (!sid) return;
       await fetch('/api/input', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId, input: input })
+        body: JSON.stringify({ session_id: sid, input: input })
       });
     }
 
-    async function sendResize(cols, rows) {
-      if (!sessionId) return;
+    async function sendResize(cols, rows, sid) {
+      if (!sid) return;
       await fetch('/api/resize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId, cols: cols, rows: rows })
+        body: JSON.stringify({ session_id: sid, cols: cols, rows: rows })
       });
     }
 
-    async function pollOutput(term) {
-      if (!sessionId) return;
+    async function pollOutput(pane) {
+      if (!pane.sessionId) return;
       try {
         const resp = await fetch('/api/output', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ session_id: sessionId })
+          body: JSON.stringify({ session_id: pane.sessionId })
         });
         if (!resp.ok) {
-          cleanupSession();
-          term.write('\r\n\x1b[31mSession ended.\x1b[0m\r\n');
+          pane.term.write('\r\n\x1b[31mSession ended.\x1b[0m\r\n');
+          cleanupPane(pane);
           return;
         }
         const data = await resp.json();
-        if (data.output) term.write(data.output);
+        if (data.output) pane.term.write(data.output);
         if (data.exited) {
-          term.write('\r\n\x1b[33mShell process exited. You can close this tab.\x1b[0m\r\n');
-          cleanupSession();
+          pane.term.write('\r\n\x1b[33mShell process exited.\x1b[0m\r\n');
+          cleanupPane(pane);
         }
       } catch (e) {
         console.error('Poll error:', e);
       }
     }
 
-    function cleanupSession() {
-      if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
-      if (sessionId) {
-        navigator.sendBeacon('/api/session/close', JSON.stringify({ session_id: sessionId }));
-        sessionId = null;
+    function cleanupPane(pane) {
+      if (pane.pollInterval) { clearInterval(pane.pollInterval); pane.pollInterval = null; }
+      if (pane.sessionId) {
+        navigator.sendBeacon('/api/session/close', JSON.stringify({ session_id: pane.sessionId }));
+        pane.sessionId = null;
       }
     }
+
+    function cleanupAllPanes() {
+      panes.forEach(p => cleanupPane(p));
+    }
+
+    // ── Pane Management ────────────────────────────────────────────
+    async function createPane() {
+      const id = 'pane-' + (++paneIdCounter);
+      const container = document.getElementById('pane-container');
+      const element = document.createElement('div');
+      element.className = 'pane';
+      element.id = id;
+
+      // Add divider before second pane
+      if (panes.length === 1) {
+        const divider = document.createElement('div');
+        divider.id = 'pane-divider';
+        container.appendChild(divider);
+        setupDividerDrag(divider);
+      }
+
+      container.appendChild(element);
+
+      const term = new Terminal({
+        cursorBlink: true,
+        fontSize: currentFontSize,
+        fontFamily: fontFamilies[currentFontFamily] || 'monospace',
+        theme: themes[currentThemeName].theme
+      });
+
+      const fitAddon = new FitAddon.FitAddon();
+      term.loadAddon(fitAddon);
+      term.loadAddon(new WebLinksAddon.WebLinksAddon());
+
+      let searchAddon = null;
+      if (typeof SearchAddon !== 'undefined') {
+        searchAddon = new SearchAddon.SearchAddon();
+        term.loadAddon(searchAddon);
+      }
+
+      term.open(element);
+      fitAddon.fit();
+
+      const sid = await createSession();
+      await sendResize(term.cols, term.rows, sid);
+
+      term.write('\x1b[32mConnected. Type "claude" to start coding.\x1b[0m\r\n');
+      term.write('\x1b[90mProjects in ~/projects auto-sync to Workspace on git commit.\x1b[0m\r\n');
+      term.write('\x1b[90mCtrl+Shift+D split pane \u2502 Ctrl+Shift+W close pane\x1b[0m\r\n\r\n');
+
+      const pane = { id, element, term, fitAddon, searchAddon, sessionId: sid, pollInterval: null };
+      term.onData(data => sendInput(data, pane.sessionId));
+      pane.pollInterval = setInterval(() => pollOutput(pane), 100);
+
+      // Click to focus
+      element.addEventListener('mousedown', () => focusPane(id));
+
+      panes.push(pane);
+      focusPane(id);
+
+      return pane;
+    }
+
+    async function splitPane() {
+      if (panes.length >= 2) return;
+      status.textContent = 'Splitting...';
+      status.style.display = '';
+      try {
+        await createPane();
+        // Reset flex for even split
+        panes.forEach(p => { p.element.style.flex = '1'; });
+        refitAllPanes();
+        status.style.display = 'none';
+      } catch (e) {
+        status.textContent = 'Split failed: ' + e.message;
+        status.style.color = '#ff5555';
+      }
+    }
+
+    function closeActivePane() {
+      if (panes.length <= 1) return;
+      const ap = getActivePane();
+      if (!ap) return;
+
+      cleanupPane(ap);
+      ap.term.dispose();
+      ap.element.remove();
+
+      // Remove divider
+      const divider = document.getElementById('pane-divider');
+      if (divider) divider.remove();
+
+      panes = panes.filter(p => p.id !== ap.id);
+
+      // Reset remaining pane to full width
+      if (panes.length === 1) {
+        panes[0].element.style.flex = '1';
+      }
+
+      focusPane(panes[0].id);
+      refitAllPanes();
+    }
+
+    function cyclePaneFocus(direction) {
+      if (panes.length <= 1) return;
+      const idx = panes.findIndex(p => p.id === activePaneId);
+      const next = direction === 'next'
+        ? (idx + 1) % panes.length
+        : (idx - 1 + panes.length) % panes.length;
+      focusPane(panes[next].id);
+    }
+
+    // ── Divider Drag ───────────────────────────────────────────────
+    function setupDividerDrag(divider) {
+      let dragging = false;
+
+      divider.addEventListener('mousedown', e => {
+        e.preventDefault();
+        dragging = true;
+        divider.classList.add('dragging');
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+      });
+
+      document.addEventListener('mousemove', e => {
+        if (!dragging || panes.length < 2) return;
+        const container = document.getElementById('pane-container');
+        const rect = container.getBoundingClientRect();
+        let pct = ((e.clientX - rect.left) / rect.width) * 100;
+        pct = Math.max(15, Math.min(85, pct));
+        panes[0].element.style.flex = `0 0 ${pct}%`;
+        panes[1].element.style.flex = '1 1 0';
+        refitAllPanes();
+      });
+
+      document.addEventListener('mouseup', () => {
+        if (dragging) {
+          dragging = false;
+          divider.classList.remove('dragging');
+          document.body.style.cursor = '';
+          document.body.style.userSelect = '';
+          refitAllPanes();
+        }
+      });
+    }
+
+    // ── Split button ───────────────────────────────────────────────
+    document.getElementById('split-btn').addEventListener('click', () => splitPane());
 
     // ── Init ───────────────────────────────────────────────────────
     async function init() {
@@ -696,45 +885,13 @@
         if (typeof Terminal === 'undefined') throw new Error('xterm.js not loaded');
         if (typeof FitAddon === 'undefined') throw new Error('FitAddon not loaded');
 
-        const term = new Terminal({
-          cursorBlink: true,
-          fontSize: currentFontSize,
-          fontFamily: fontFamilies[currentFontFamily] || 'monospace',
-          theme: themes[currentThemeName].theme
-        });
-        termInstance = term;
-
-        const fitAddon = new FitAddon.FitAddon();
-        fitAddonInstance = fitAddon;
-        const webLinksAddon = new WebLinksAddon.WebLinksAddon();
-        term.loadAddon(fitAddon);
-        term.loadAddon(webLinksAddon);
-
-        // Load search addon
-        if (typeof SearchAddon !== 'undefined') {
-          const searchAddon = new SearchAddon.SearchAddon();
-          searchAddonInstance = searchAddon;
-          term.loadAddon(searchAddon);
-        }
-
-        term.open(document.getElementById('terminal'));
-        fitAddon.fit();
-
-        status.textContent = 'Creating session...';
-        sessionId = await createSession();
-        await sendResize(term.cols, term.rows);
+        await createPane();
 
         status.textContent = 'Connected!';
         setTimeout(() => { status.style.display = 'none'; }, 1000);
 
-        term.write('\x1b[32mConnected. Type "claude" to start coding.\x1b[0m\r\n');
-        term.write('\x1b[90mProjects in ~/projects auto-sync to Workspace on git commit.\x1b[0m\r\n\r\n');
-
-        term.onData(data => sendInput(data));
-        pollInterval = setInterval(() => pollOutput(term), 100);
-
-        window.addEventListener('resize', () => refitAndResize());
-        window.addEventListener('beforeunload', () => cleanupSession());
+        window.addEventListener('resize', () => refitAllPanes());
+        window.addEventListener('beforeunload', () => cleanupAllPanes());
 
       } catch (e) {
         status.textContent = 'Error: ' + e.message;
