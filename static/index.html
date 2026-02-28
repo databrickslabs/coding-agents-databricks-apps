@@ -56,26 +56,59 @@
     #mic-btn.recording { color: #ff4444; animation: pulse 1s infinite; }
     @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
     #dictation-preview {
-      display: none; position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
-      z-index: 1001; padding: 10px 14px; border-radius: 8px;
-      border: 1px solid rgba(128,128,128,0.4);
-      backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-      gap: 8px; align-items: center; max-width: 600px; min-width: 300px;
+      display: none; position: fixed; bottom: 30px; left: 50%; transform: translateX(-50%);
+      z-index: 1001; width: min(85vw, 700px); border-radius: 16px;
+      border: 1px solid rgba(128,128,128,0.25);
+      backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+      box-shadow: 0 8px 32px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.05) inset;
+      flex-direction: column; overflow: hidden;
     }
     #dictation-preview.visible { display: flex; }
-    #dictation-preview input {
-      flex: 1; background: transparent; border: 1px solid rgba(128,128,128,0.3);
-      border-radius: 3px; padding: 4px 8px; font-size: 14px; color: inherit;
-      outline: none; font-family: inherit;
+    #dictation-header {
+      display: flex; align-items: center; gap: 8px;
+      padding: 12px 16px; border-bottom: 1px solid rgba(128,128,128,0.15);
+      font-size: 13px; font-weight: 600; letter-spacing: 0.3px;
     }
-    #dictation-preview input:focus { border-color: rgba(100,150,255,0.6); }
-    #dictation-preview button {
-      background: none; border: 1px solid rgba(128,128,128,0.3); border-radius: 3px;
-      padding: 3px 10px; cursor: pointer; color: inherit; font-size: 12px;
+    #dictation-header .rec-dot {
+      width: 8px; height: 8px; border-radius: 50%; background: #ff4444;
+      animation: pulse 1s infinite; flex-shrink: 0;
     }
-    #dictation-preview button:hover { border-color: rgba(128,128,128,0.7); }
-    #dictation-preview button.send-btn { border-color: rgba(80,200,120,0.6); }
-    #dictation-preview button.send-btn:hover { border-color: rgba(80,200,120,0.9); }
+    #dictation-header .shortcut {
+      margin-left: auto; font-size: 11px; opacity: 0.5; font-weight: 400;
+    }
+    #dictation-input {
+      width: 100%; min-height: 80px; max-height: 200px; resize: vertical;
+      background: transparent; border: none; padding: 14px 16px;
+      font-size: 16px; line-height: 1.5; color: inherit;
+      outline: none; font-family: inherit; word-wrap: break-word;
+      box-sizing: border-box;
+    }
+    #dictation-input::placeholder { opacity: 0.4; }
+    #dictation-interim {
+      padding: 0 16px 8px; font-size: 14px; line-height: 1.4;
+      font-style: italic; opacity: 0.45; min-height: 0;
+      word-wrap: break-word; display: none;
+    }
+    #dictation-interim.has-text { display: block; }
+    #dictation-actions {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 16px; border-top: 1px solid rgba(128,128,128,0.15);
+    }
+    #dictation-actions button {
+      background: none; border: 1px solid rgba(128,128,128,0.3); border-radius: 8px;
+      padding: 6px 16px; cursor: pointer; color: inherit; font-size: 13px;
+      font-weight: 500; transition: all 0.15s;
+    }
+    #dictation-actions button:hover { border-color: rgba(128,128,128,0.6); }
+    #dictation-actions button.send-btn {
+      background: rgba(80,200,120,0.15); border-color: rgba(80,200,120,0.5);
+    }
+    #dictation-actions button.send-btn:hover {
+      background: rgba(80,200,120,0.25); border-color: rgba(80,200,120,0.8);
+    }
+    #dictation-actions .hint {
+      margin-left: auto; font-size: 11px; opacity: 0.4;
+    }
   </style>
 </head>
 <body>
@@ -104,9 +137,18 @@
 
   <!-- Voice dictation preview -->
   <div id="dictation-preview">
-    <input id="dictation-input" type="text" placeholder="Listening...">
-    <button id="dictation-send" class="send-btn">Send</button>
-    <button id="dictation-cancel">Cancel</button>
+    <div id="dictation-header">
+      <span class="rec-dot"></span>
+      <span>Voice Dictation</span>
+      <span class="shortcut">&#x2325;V</span>
+    </div>
+    <textarea id="dictation-input" placeholder="Start speaking..."></textarea>
+    <div id="dictation-interim"></div>
+    <div id="dictation-actions">
+      <button id="dictation-send" class="send-btn">Send &#x23CE;</button>
+      <button id="dictation-cancel">Cancel</button>
+      <span class="hint">Enter to send &middot; Esc to cancel</span>
+    </div>
   </div>
 
   <div id="terminal"></div>
@@ -368,6 +410,7 @@
     const micBtn = document.getElementById('mic-btn');
     const dictationPreview = document.getElementById('dictation-preview');
     const dictationInput = document.getElementById('dictation-input');
+    const dictationInterim = document.getElementById('dictation-interim');
 
     if (SpeechRecognition) {
       micBtn.style.display = '';
@@ -388,13 +431,13 @@
           }
         }
         if (final) {
-          dictationInput.value = (dictationInput.value + ' ' + final).trim();
-          dictationInput.style.fontStyle = 'normal';
-          dictationInput.style.opacity = '1';
-        } else if (interim) {
-          dictationInput.placeholder = interim;
-          dictationInput.style.fontStyle = 'italic';
-          dictationInput.style.opacity = '0.6';
+          dictationInput.value = (dictationInput.value + (dictationInput.value ? ' ' : '') + final).trim();
+          dictationInterim.textContent = '';
+          dictationInterim.classList.remove('has-text');
+        }
+        if (interim) {
+          dictationInterim.textContent = interim;
+          dictationInterim.classList.add('has-text');
         }
       };
 
@@ -412,9 +455,8 @@
       micBtn.classList.add('recording');
       dictationPreview.classList.add('visible');
       dictationInput.value = '';
-      dictationInput.placeholder = 'Listening...';
-      dictationInput.style.fontStyle = 'normal';
-      dictationInput.style.opacity = '1';
+      dictationInterim.textContent = '';
+      dictationInterim.classList.remove('has-text');
       dictationInput.focus();
       try { recognition.start(); } catch(e) { stopDictation(); }
     }
@@ -429,6 +471,8 @@
       stopDictation();
       dictationPreview.classList.remove('visible');
       dictationInput.value = '';
+      dictationInterim.textContent = '';
+      dictationInterim.classList.remove('has-text');
       if (termInstance) termInstance.focus();
     }
 
@@ -447,7 +491,7 @@
     document.getElementById('dictation-send').addEventListener('click', sendDictation);
     document.getElementById('dictation-cancel').addEventListener('click', closeDictation);
     dictationInput.addEventListener('keydown', e => {
-      if (e.key === 'Enter') { e.preventDefault(); sendDictation(); }
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendDictation(); }
       if (e.key === 'Escape') { e.preventDefault(); closeDictation(); }
     });
 
@@ -469,8 +513,8 @@
       if (e.ctrlKey && e.shiftKey && e.key === 'F') {
         e.preventDefault(); toggleSearch(); return;
       }
-      // Alt+V (Option+V) : toggle voice dictation
-      if (e.altKey && !e.ctrlKey && !e.shiftKey && e.key === 'v') {
+      // Alt+V (Option+V) : toggle voice dictation — use e.code because macOS Alt+V produces '√'
+      if (e.altKey && !e.ctrlKey && !e.shiftKey && e.code === 'KeyV') {
         e.preventDefault();
         if (dictationActive) closeDictation();
         else startDictation();
