@@ -3,68 +3,281 @@
 <head>
   <title>Terminal</title>
   <link rel="stylesheet" href="/static/lib/xterm.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cascadia+Code&family=Fira+Code&family=JetBrains+Mono&family=Source+Code+Pro&display=swap" rel="stylesheet">
   <style>
     body { margin: 0; font-family: monospace; transition: background 0.3s, color 0.3s; }
-    body.dark { background: #1e1e1e; color: #fff; }
-    body.light { background: #f5f5f5; color: #383a42; }
     #terminal { height: 100vh; width: 100vw; }
     #status { position: absolute; top: 10px; left: 10px; z-index: 1000; }
-    #theme-toggle {
-      position: fixed; top: 10px; right: 10px; z-index: 1000;
-      background: none; border: 1px solid rgba(128,128,128,0.4); border-radius: 6px;
-      padding: 4px 8px; cursor: pointer; font-size: 18px; line-height: 1;
-      transition: border-color 0.3s;
+
+    /* Toolbar */
+    #toolbar {
+      position: fixed; top: 0; right: 0; z-index: 1000;
+      display: flex; align-items: center; gap: 6px;
+      padding: 6px 10px;
+      background: rgba(0,0,0,0.15);
+      border-bottom-left-radius: 8px;
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
     }
-    #theme-toggle:hover { border-color: rgba(128,128,128,0.8); }
+    #toolbar select, #toolbar button {
+      background: none; border: 1px solid rgba(128,128,128,0.4); border-radius: 4px;
+      padding: 2px 6px; cursor: pointer; font-size: 12px; line-height: 1.4;
+      color: inherit; transition: border-color 0.3s;
+    }
+    #toolbar select:hover, #toolbar button:hover { border-color: rgba(128,128,128,0.8); }
+    #toolbar select { font-family: inherit; }
+    #toolbar button.icon-btn { font-size: 16px; padding: 2px 6px; }
+    #toolbar .separator { width: 1px; height: 18px; background: rgba(128,128,128,0.3); }
   </style>
 </head>
 <body>
   <div id="status">Loading...</div>
-  <button id="theme-toggle" title="Toggle light/dark mode"></button>
+  <div id="toolbar">
+    <select id="theme-select" title="Color theme"></select>
+    <button id="theme-toggle" class="icon-btn" title="Toggle light/dark mode"></button>
+    <div class="separator"></div>
+    <select id="font-family-select" title="Font family"></select>
+    <div class="separator"></div>
+    <button id="font-decrease" class="icon-btn" title="Decrease font size (Ctrl+-)">A-</button>
+    <span id="font-size-display" style="font-size:12px; min-width:28px; text-align:center;"></span>
+    <button id="font-increase" class="icon-btn" title="Increase font size (Ctrl+=)">A+</button>
+  </div>
   <div id="terminal"></div>
 
   <script src="/static/lib/xterm.js"></script>
   <script src="/static/lib/addon-fit.js"></script>
   <script src="/static/lib/addon-web-links.js"></script>
   <script>
-    const darkTheme = {
-      background: '#1e1e1e', foreground: '#d4d4d4', cursor: '#d4d4d4',
-      selectionBackground: '#264f78',
-      black: '#1e1e1e', red: '#f44747', green: '#6a9955', yellow: '#d7ba7d',
-      blue: '#569cd6', magenta: '#c586c0', cyan: '#4ec9b0', white: '#d4d4d4'
-    };
-    const lightTheme = {
-      background: '#f5f5f5', foreground: '#383a42', cursor: '#526eff',
-      selectionBackground: '#d7d7ff',
-      black: '#383a42', red: '#e45649', green: '#50a14f', yellow: '#c18401',
-      blue: '#4078f2', magenta: '#a626a4', cyan: '#0184bc', white: '#fafafa'
-    };
-
-    function getPreferredMode() {
-      const saved = localStorage.getItem('terminal-theme');
-      if (saved) return saved;
-      return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
-    }
-
-    let currentMode = getPreferredMode();
-    let termInstance = null;
-
-    function applyTheme(mode) {
-      currentMode = mode;
-      document.body.className = mode;
-      document.getElementById('theme-toggle').textContent = mode === 'dark' ? '\u2600\uFE0F' : '\uD83C\uDF19';
-      if (termInstance) {
-        termInstance.options.theme = mode === 'dark' ? darkTheme : lightTheme;
+    // ── Theme Presets ──────────────────────────────────────────────
+    const themes = {
+      'Dark': {
+        type: 'dark',
+        body: '#1e1e1e',
+        theme: {
+          background: '#1e1e1e', foreground: '#d4d4d4', cursor: '#d4d4d4',
+          selectionBackground: '#264f78',
+          black: '#1e1e1e', red: '#f44747', green: '#6a9955', yellow: '#d7ba7d',
+          blue: '#569cd6', magenta: '#c586c0', cyan: '#4ec9b0', white: '#d4d4d4'
+        }
+      },
+      'Light': {
+        type: 'light',
+        body: '#f5f5f5',
+        theme: {
+          background: '#f5f5f5', foreground: '#383a42', cursor: '#526eff',
+          selectionBackground: '#d7d7ff',
+          black: '#383a42', red: '#e45649', green: '#50a14f', yellow: '#c18401',
+          blue: '#4078f2', magenta: '#a626a4', cyan: '#0184bc', white: '#fafafa'
+        }
+      },
+      'Dracula': {
+        type: 'dark',
+        body: '#282a36',
+        theme: {
+          background: '#282a36', foreground: '#f8f8f2', cursor: '#f8f8f2',
+          selectionBackground: '#44475a',
+          black: '#21222c', red: '#ff5555', green: '#50fa7b', yellow: '#f1fa8c',
+          blue: '#bd93f9', magenta: '#ff79c6', cyan: '#8be9fd', white: '#f8f8f2'
+        }
+      },
+      'Solarized Dark': {
+        type: 'dark',
+        body: '#002b36',
+        theme: {
+          background: '#002b36', foreground: '#839496', cursor: '#839496',
+          selectionBackground: '#073642',
+          black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900',
+          blue: '#268bd2', magenta: '#d33682', cyan: '#2aa198', white: '#eee8d5'
+        }
+      },
+      'Solarized Light': {
+        type: 'light',
+        body: '#fdf6e3',
+        theme: {
+          background: '#fdf6e3', foreground: '#657b83', cursor: '#657b83',
+          selectionBackground: '#eee8d5',
+          black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900',
+          blue: '#268bd2', magenta: '#d33682', cyan: '#2aa198', white: '#fdf6e3'
+        }
+      },
+      'Nord': {
+        type: 'dark',
+        body: '#2e3440',
+        theme: {
+          background: '#2e3440', foreground: '#d8dee9', cursor: '#d8dee9',
+          selectionBackground: '#434c5e',
+          black: '#3b4252', red: '#bf616a', green: '#a3be8c', yellow: '#ebcb8b',
+          blue: '#81a1c1', magenta: '#b48ead', cyan: '#88c0d0', white: '#e5e9f0'
+        }
+      },
+      'Monokai': {
+        type: 'dark',
+        body: '#272822',
+        theme: {
+          background: '#272822', foreground: '#f8f8f2', cursor: '#f8f8f0',
+          selectionBackground: '#49483e',
+          black: '#272822', red: '#f92672', green: '#a6e22e', yellow: '#e6db74',
+          blue: '#66d9ef', magenta: '#ae81ff', cyan: '#a1efe4', white: '#f8f8f2'
+        }
+      },
+      'GitHub Dark': {
+        type: 'dark',
+        body: '#0d1117',
+        theme: {
+          background: '#0d1117', foreground: '#c9d1d9', cursor: '#c9d1d9',
+          selectionBackground: '#1f2937',
+          black: '#0d1117', red: '#ff7b72', green: '#7ee787', yellow: '#d29922',
+          blue: '#79c0ff', magenta: '#d2a8ff', cyan: '#a5d6ff', white: '#c9d1d9'
+        }
       }
-      localStorage.setItem('terminal-theme', mode);
+    };
+
+    // ── Font Families ──────────────────────────────────────────────
+    const fontFamilies = {
+      'System Default': 'monospace',
+      'JetBrains Mono': '"JetBrains Mono", monospace',
+      'Fira Code': '"Fira Code", monospace',
+      'Cascadia Code': '"Cascadia Code", monospace',
+      'Source Code Pro': '"Source Code Pro", monospace'
+    };
+
+    // ── State ──────────────────────────────────────────────────────
+    const MIN_FONT_SIZE = 8;
+    const MAX_FONT_SIZE = 32;
+    const DEFAULT_FONT_SIZE = 14;
+
+    let currentFontSize = parseInt(localStorage.getItem('terminal-font-size')) || DEFAULT_FONT_SIZE;
+    let currentFontFamily = localStorage.getItem('terminal-font-family') || 'System Default';
+    let currentThemeName = localStorage.getItem('terminal-theme-name') || null;
+    let lastDarkTheme = localStorage.getItem('terminal-last-dark') || 'Dark';
+    let lastLightTheme = localStorage.getItem('terminal-last-light') || 'Light';
+    let termInstance = null;
+    let fitAddonInstance = null;
+
+    // Resolve initial theme
+    if (!currentThemeName || !themes[currentThemeName]) {
+      const prefersDark = window.matchMedia('(prefers-color-scheme: light)').matches ? false : true;
+      currentThemeName = prefersDark ? 'Dark' : 'Light';
     }
 
+    // ── Theme Application ──────────────────────────────────────────
+    function applyTheme(name) {
+      const preset = themes[name];
+      if (!preset) return;
+      currentThemeName = name;
+      document.body.style.background = preset.body;
+      document.body.style.color = preset.type === 'dark' ? '#fff' : '#383a42';
+      document.getElementById('theme-toggle').textContent = preset.type === 'dark' ? '\u2600\uFE0F' : '\uD83C\uDF19';
+      if (termInstance) {
+        termInstance.options.theme = preset.theme;
+      }
+      // Track last used dark/light
+      if (preset.type === 'dark') {
+        lastDarkTheme = name;
+        localStorage.setItem('terminal-last-dark', name);
+      } else {
+        lastLightTheme = name;
+        localStorage.setItem('terminal-last-light', name);
+      }
+      localStorage.setItem('terminal-theme-name', name);
+      document.getElementById('theme-select').value = name;
+    }
+
+    // ── Font Size ──────────────────────────────────────────────────
+    function updateFontSizeDisplay() {
+      document.getElementById('font-size-display').textContent = currentFontSize + 'px';
+    }
+
+    function setFontSize(size) {
+      currentFontSize = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, size));
+      localStorage.setItem('terminal-font-size', currentFontSize);
+      updateFontSizeDisplay();
+      if (termInstance) {
+        termInstance.options.fontSize = currentFontSize;
+        refitAndResize();
+      }
+    }
+
+    // ── Font Family ────────────────────────────────────────────────
+    function setFontFamily(name) {
+      const family = fontFamilies[name];
+      if (!family) return;
+      currentFontFamily = name;
+      localStorage.setItem('terminal-font-family', name);
+      if (termInstance) {
+        termInstance.options.fontFamily = family;
+        refitAndResize();
+      }
+      document.getElementById('font-family-select').value = name;
+    }
+
+    // ── Refit helper ───────────────────────────────────────────────
+    function refitAndResize() {
+      if (fitAddonInstance && termInstance) {
+        fitAddonInstance.fit();
+        sendResize(termInstance.cols, termInstance.rows);
+      }
+    }
+
+    // ── Populate toolbar dropdowns ─────────────────────────────────
+    const themeSelect = document.getElementById('theme-select');
+    Object.keys(themes).forEach(name => {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      themeSelect.appendChild(opt);
+    });
+    themeSelect.value = currentThemeName;
+    themeSelect.addEventListener('change', e => applyTheme(e.target.value));
+
+    const fontFamilySelect = document.getElementById('font-family-select');
+    Object.keys(fontFamilies).forEach(name => {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      fontFamilySelect.appendChild(opt);
+    });
+    fontFamilySelect.value = currentFontFamily;
+    fontFamilySelect.addEventListener('change', e => setFontFamily(e.target.value));
+
+    // ── Toolbar button handlers ────────────────────────────────────
     document.getElementById('theme-toggle').addEventListener('click', () => {
-      applyTheme(currentMode === 'dark' ? 'light' : 'dark');
+      const currentType = themes[currentThemeName].type;
+      applyTheme(currentType === 'dark' ? lastLightTheme : lastDarkTheme);
     });
 
-    applyTheme(currentMode);
+    document.getElementById('font-decrease').addEventListener('click', () => setFontSize(currentFontSize - 1));
+    document.getElementById('font-increase').addEventListener('click', () => setFontSize(currentFontSize + 1));
 
+    // Apply initial theme + font size display
+    applyTheme(currentThemeName);
+    updateFontSizeDisplay();
+
+    // ── Keyboard shortcuts for font size ───────────────────────────
+    document.addEventListener('keydown', e => {
+      // Ctrl+= / Ctrl+Shift+= : increase font
+      if (e.ctrlKey && !e.altKey && (e.key === '=' || e.key === '+')) {
+        e.preventDefault();
+        setFontSize(currentFontSize + 1);
+        return;
+      }
+      // Ctrl+- : decrease font
+      if (e.ctrlKey && !e.altKey && e.key === '-') {
+        e.preventDefault();
+        setFontSize(currentFontSize - 1);
+        return;
+      }
+      // Ctrl+0 : reset font
+      if (e.ctrlKey && !e.altKey && e.key === '0') {
+        e.preventDefault();
+        setFontSize(DEFAULT_FONT_SIZE);
+        return;
+      }
+    });
+
+    // ── Session / IO ───────────────────────────────────────────────
     const status = document.getElementById('status');
     let sessionId = null;
     let pollInterval = null;
@@ -103,7 +316,6 @@
           body: JSON.stringify({ session_id: sessionId })
         });
         if (!resp.ok) {
-          // Session gone on server side — stop polling
           cleanupSession();
           term.write('\r\n\x1b[31mSession ended.\x1b[0m\r\n');
           return;
@@ -132,6 +344,7 @@
       }
     }
 
+    // ── Init ───────────────────────────────────────────────────────
     async function init() {
       try {
         status.textContent = 'Initializing terminal...';
@@ -143,13 +356,16 @@
           throw new Error('FitAddon not loaded');
         }
 
-        // Initialize terminal
         const term = new Terminal({
           cursorBlink: true,
-          theme: currentMode === 'dark' ? darkTheme : lightTheme
+          fontSize: currentFontSize,
+          fontFamily: fontFamilies[currentFontFamily] || 'monospace',
+          theme: themes[currentThemeName].theme
         });
         termInstance = term;
+
         const fitAddon = new FitAddon.FitAddon();
+        fitAddonInstance = fitAddon;
         const webLinksAddon = new WebLinksAddon.WebLinksAddon();
         term.loadAddon(fitAddon);
         term.loadAddon(webLinksAddon);
@@ -157,11 +373,7 @@
         fitAddon.fit();
 
         status.textContent = 'Creating session...';
-
-        // Create session
         sessionId = await createSession();
-
-        // Send initial terminal size to PTY
         await sendResize(term.cols, term.rows);
 
         status.textContent = 'Connected!';
@@ -170,19 +382,10 @@
         term.write('\x1b[32mConnected. Type "claude" to start coding.\x1b[0m\r\n');
         term.write('\x1b[90mProjects in ~/projects auto-sync to Workspace on git commit.\x1b[0m\r\n\r\n');
 
-        // User types → send to backend
         term.onData(data => sendInput(data));
-
-        // Poll for output every 100ms
         pollInterval = setInterval(() => pollOutput(term), 100);
 
-        // Handle resize - update both xterm and PTY
-        window.addEventListener('resize', () => {
-          fitAddon.fit();
-          sendResize(term.cols, term.rows);
-        });
-
-        // Cleanup on page unload
+        window.addEventListener('resize', () => refitAndResize());
         window.addEventListener('beforeunload', () => cleanupSession());
 
       } catch (e) {
