@@ -659,12 +659,12 @@
       if (e.ctrlKey && e.shiftKey && e.key === 'W') {
         e.preventDefault(); closeActivePane(); return;
       }
-      // Ctrl+Shift+] : next pane
-      if (e.ctrlKey && e.shiftKey && e.key === ']') {
+      // Ctrl+Shift+] : next pane — use e.code because Shift+] produces '}'
+      if (e.ctrlKey && e.shiftKey && e.code === 'BracketRight') {
         e.preventDefault(); cyclePaneFocus('next'); return;
       }
-      // Ctrl+Shift+[ : prev pane
-      if (e.ctrlKey && e.shiftKey && e.key === '[') {
+      // Ctrl+Shift+[ : prev pane — use e.code because Shift+[ produces '{'
+      if (e.ctrlKey && e.shiftKey && e.code === 'BracketLeft') {
         e.preventDefault(); cyclePaneFocus('prev'); return;
       }
     });
