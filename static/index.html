@@ -202,7 +202,7 @@
       <div class="separator"></div>
       <div class="tool-row">
         <button id="search-btn" title="Search (Ctrl+Shift+F)">&#x1F50D;</button>
-        <button id="speak-btn" title="Speak (Option+V)">
+        <button id="speak-btn" title="Voice (Option+V)">
           <span class="speak-dot" style="display:none;"></span>
           &#x1F3A4;
         </button>
@@ -555,7 +555,7 @@
       dictationActive = true;
       speakBtn.classList.add('recording');
       speakDot.style.display = '';
-      speakBtn.innerHTML = '<span class="speak-dot"></span> Recording...';
+      speakBtn.innerHTML = '<span class="speak-dot"></span> &#x1F3A4;';
       dictationPreview.classList.add('visible');
       dictationInput.value = '';
       dictationInterim.textContent = '';
@@ -567,7 +567,7 @@
     function stopDictation() {
       dictationActive = false;
       speakBtn.classList.remove('recording');
-      speakBtn.innerHTML = '&#x1F3A4; Speak';
+      speakBtn.innerHTML = '&#x1F3A4;';
       if (recognition) { try { recognition.stop(); } catch(e) {} }
     }
 
