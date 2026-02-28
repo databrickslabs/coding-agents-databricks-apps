@@ -11,29 +11,61 @@
     #terminal { height: 100vh; width: 100vw; }
     #status { position: absolute; top: 10px; left: 10px; z-index: 1000; }
 
-    /* Toolbar */
-    #toolbar {
+    /* Toolbar — right-edge slide-out drawer */
+    #toolbar-wrapper {
       position: fixed; top: 0; right: 0; z-index: 1000;
-      display: flex; align-items: center; gap: 6px;
-      padding: 6px 10px;
-      background: rgba(0,0,0,0.15);
-      border-bottom-left-radius: 8px;
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
+      height: 100vh; display: flex; align-items: flex-start;
+      pointer-events: none;
+    }
+    #toolbar-tab {
+      pointer-events: auto; cursor: pointer;
+      margin-top: 10px; padding: 8px 3px;
+      background: rgba(0,0,0,0.25); border-radius: 6px 0 0 6px;
+      border: 1px solid rgba(128,128,128,0.25); border-right: none;
+      backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+      color: inherit; font-size: 14px; line-height: 1;
+      display: flex; align-items: center; justify-content: center;
+      writing-mode: vertical-rl; letter-spacing: 2px;
+      transition: background 0.2s, padding 0.2s;
+      user-select: none;
+    }
+    #toolbar-tab:hover { background: rgba(0,0,0,0.4); padding: 8px 5px; }
+    #toolbar-tab .arrow { font-size: 10px; transition: transform 0.3s; display: block; margin-bottom: 4px; }
+    #toolbar-wrapper.open #toolbar-tab .arrow { transform: rotate(180deg); }
+    #toolbar {
+      pointer-events: auto;
+      display: flex; flex-direction: column; gap: 10px;
+      padding: 12px 10px; min-width: 160px;
+      background: rgba(0,0,0,0.2);
+      border-left: 1px solid rgba(128,128,128,0.2);
+      backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+      height: 100vh; box-sizing: border-box; overflow-y: auto;
+      transform: translateX(100%); transition: transform 0.25s ease;
+    }
+    #toolbar-wrapper.open #toolbar { transform: translateX(0); }
+    #toolbar .group-label {
+      font-size: 10px; text-transform: uppercase; letter-spacing: 1px;
+      opacity: 0.45; padding: 0 2px; margin-top: 2px;
     }
     #toolbar select, #toolbar button {
       background: none; border: 1px solid rgba(128,128,128,0.4); border-radius: 4px;
-      padding: 2px 6px; cursor: pointer; font-size: 12px; line-height: 1.4;
-      color: inherit; transition: border-color 0.3s;
+      padding: 4px 8px; cursor: pointer; font-size: 12px; line-height: 1.4;
+      color: inherit; transition: border-color 0.2s; width: 100%;
+      text-align: left; box-sizing: border-box;
     }
     #toolbar select:hover, #toolbar button:hover { border-color: rgba(128,128,128,0.8); }
     #toolbar select { font-family: inherit; }
-    #toolbar button.icon-btn { font-size: 16px; padding: 2px 6px; }
-    #toolbar .separator { width: 1px; height: 18px; background: rgba(128,128,128,0.3); }
+    #toolbar button.icon-btn { font-size: 14px; display: flex; align-items: center; gap: 6px; }
+    #toolbar .font-size-row {
+      display: flex; align-items: center; gap: 4px;
+    }
+    #toolbar .font-size-row button { width: auto; flex-shrink: 0; padding: 4px 8px; text-align: center; }
+    #toolbar .font-size-row span { flex: 1; text-align: center; font-size: 12px; }
+    #toolbar .separator { height: 1px; width: 100%; background: rgba(128,128,128,0.2); }
 
     /* Search bar */
     #search-bar {
-      display: none; position: fixed; top: 36px; right: 10px; z-index: 1001;
+      display: none; position: fixed; top: 10px; right: 40px; z-index: 1001;
       padding: 6px 8px; border-radius: 6px;
       border: 1px solid rgba(128,128,128,0.4);
       backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
@@ -113,18 +145,27 @@
 </head>
 <body>
   <div id="status">Loading...</div>
-  <div id="toolbar">
-    <select id="theme-select" title="Color theme"></select>
-    <button id="theme-toggle" class="icon-btn" title="Toggle light/dark mode"></button>
-    <div class="separator"></div>
-    <select id="font-family-select" title="Font family"></select>
-    <div class="separator"></div>
-    <button id="font-decrease" class="icon-btn" title="Decrease font size (Ctrl+-)">A-</button>
-    <span id="font-size-display" style="font-size:12px; min-width:28px; text-align:center;"></span>
-    <button id="font-increase" class="icon-btn" title="Increase font size (Ctrl+=)">A+</button>
-    <div class="separator"></div>
-    <button id="search-btn" class="icon-btn" title="Search (Ctrl+Shift+F)">&#x1F50D;</button>
-    <button id="mic-btn" class="icon-btn" title="Voice dictation (Option+V)" style="display:none;">&#x1F3A4;</button>
+  <div id="toolbar-wrapper">
+    <div id="toolbar-tab" title="Toggle toolbar">
+      <span class="arrow">&#x25C0;</span>
+    </div>
+    <div id="toolbar">
+      <div class="group-label">Theme</div>
+      <select id="theme-select" title="Color theme"></select>
+      <button id="theme-toggle" class="icon-btn" title="Toggle light/dark mode">&#x2600;&#xFE0F; Toggle</button>
+      <div class="separator"></div>
+      <div class="group-label">Font</div>
+      <select id="font-family-select" title="Font family"></select>
+      <div class="font-size-row">
+        <button id="font-decrease" title="Decrease font size (Ctrl+-)">A-</button>
+        <span id="font-size-display"></span>
+        <button id="font-increase" title="Increase font size (Ctrl+=)">A+</button>
+      </div>
+      <div class="separator"></div>
+      <div class="group-label">Tools</div>
+      <button id="search-btn" class="icon-btn" title="Search (Ctrl+Shift+F)">&#x1F50D; Search</button>
+      <button id="mic-btn" class="icon-btn" title="Voice dictation (Option+V)" style="display:none;">&#x1F3A4; Dictation</button>
+    </div>
   </div>
 
   <!-- Search bar overlay -->
@@ -278,7 +319,7 @@
       currentThemeName = name;
       document.body.style.background = preset.body;
       document.body.style.color = preset.type === 'dark' ? '#fff' : '#383a42';
-      document.getElementById('theme-toggle').textContent = preset.type === 'dark' ? '\u2600\uFE0F' : '\uD83C\uDF19';
+      document.getElementById('theme-toggle').textContent = preset.type === 'dark' ? '\u2600\uFE0F Light' : '\uD83C\uDF19 Dark';
       // Update overlay backgrounds for theme
       const overlayBg = preset.type === 'dark' ? 'rgba(30,30,30,0.9)' : 'rgba(245,245,245,0.9)';
       document.getElementById('search-bar').style.background = overlayBg;
@@ -362,6 +403,12 @@
 
     applyTheme(currentThemeName);
     updateFontSizeDisplay();
+
+    // ── Toolbar drawer toggle ──────────────────────────────────────
+    const toolbarWrapper = document.getElementById('toolbar-wrapper');
+    document.getElementById('toolbar-tab').addEventListener('click', () => {
+      toolbarWrapper.classList.toggle('open');
+    });
 
     // ── Search ─────────────────────────────────────────────────────
     let searchVisible = false;
