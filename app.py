@@ -374,6 +374,9 @@ def create_session():
         # Set up environment for the shell
         shell_env = os.environ.copy()
         shell_env["TERM"] = "xterm-256color"
+        # Remove Claude Code env vars so the browser terminal isn't seen as nested
+        shell_env.pop("CLAUDECODE", None)
+        shell_env.pop("CLAUDE_CODE_SESSION", None)
         # Ensure HOME is set correctly
         if not shell_env.get("HOME") or shell_env["HOME"] == "/":
             shell_env["HOME"] = "/app/python/source_code"
