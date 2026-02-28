@@ -11,27 +11,23 @@
     #terminal { height: 100vh; width: 100vw; }
     #status { position: absolute; top: 10px; left: 10px; z-index: 1000; }
 
-    /* Toolbar — right-edge slide-out drawer, anchored bottom */
-    #toolbar-wrapper {
-      position: fixed; bottom: 0; right: 0; z-index: 1000;
-      display: flex; align-items: flex-end;
-      pointer-events: none;
-    }
+    /* Toolbar — right-edge slide-out drawer, anchored bottom-right */
     #toolbar-tab {
-      pointer-events: auto; cursor: pointer;
-      margin-bottom: 10px; padding: 8px 3px;
+      position: fixed; bottom: 10px; right: 0; z-index: 1001;
+      cursor: pointer; padding: 8px 3px;
       background: rgba(0,0,0,0.25); border-radius: 6px 0 0 6px;
       border: 1px solid rgba(128,128,128,0.25); border-right: none;
       backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
       color: inherit; font-size: 14px; line-height: 1;
       display: flex; align-items: center; justify-content: center;
       writing-mode: vertical-rl; letter-spacing: 2px;
-      transition: background 0.2s, padding 0.2s;
+      transition: background 0.2s, right 0.25s ease;
       user-select: none;
     }
-    #toolbar-tab:hover { background: rgba(0,0,0,0.4); padding: 8px 5px; }
+    #toolbar-tab:hover { background: rgba(0,0,0,0.4); }
     #toolbar-tab .arrow { font-size: 10px; transition: transform 0.3s; display: block; margin-bottom: 4px; }
     #toolbar-wrapper.open #toolbar-tab .arrow { transform: rotate(180deg); }
+    #toolbar-wrapper { position: fixed; bottom: 0; right: 0; z-index: 1000; pointer-events: none; }
     #toolbar {
       pointer-events: auto;
       display: flex; flex-direction: column; gap: 10px;
@@ -157,10 +153,10 @@
 </head>
 <body>
   <div id="status">Loading...</div>
+  <div id="toolbar-tab" title="Toggle toolbar">
+    <span class="arrow">&#x25C0;</span>
+  </div>
   <div id="toolbar-wrapper">
-    <div id="toolbar-tab" title="Toggle toolbar">
-      <span class="arrow">&#x25C0;</span>
-    </div>
     <div id="toolbar">
       <div class="group-label">Theme</div>
       <select id="theme-select" title="Color theme"></select>
@@ -421,8 +417,19 @@
 
     // ── Toolbar drawer toggle ──────────────────────────────────────
     const toolbarWrapper = document.getElementById('toolbar-wrapper');
-    document.getElementById('toolbar-tab').addEventListener('click', () => {
-      toolbarWrapper.classList.toggle('open');
+    const toolbarTab = document.getElementById('toolbar-tab');
+    const toolbarPanel = document.getElementById('toolbar');
+    toolbarTab.addEventListener('click', () => {
+      const isOpen = toolbarWrapper.classList.toggle('open');
+      if (isOpen) {
+        // Wait for transition to get panel width, then offset tab
+        requestAnimationFrame(() => {
+          const w = toolbarPanel.offsetWidth;
+          toolbarTab.style.right = w + 'px';
+        });
+      } else {
+        toolbarTab.style.right = '0';
+      }
     });
 
     // ── Search ─────────────────────────────────────────────────────
