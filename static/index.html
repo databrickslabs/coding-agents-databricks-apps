@@ -775,7 +775,8 @@
       await sendResize(term.cols, term.rows, sid);
 
       term.write('\x1b[32mConnected. Type "claude" to start coding.\x1b[0m\r\n');
-      term.write('\x1b[90mProjects in ~/projects auto-sync to Workspace on git commit.\x1b[0m\r\n\r\n');
+      term.write('\x1b[90mProjects in ~/projects auto-sync to Workspace on git commit.\x1b[0m\r\n');
+      term.write('\x1b[90mCtrl+Shift+D split pane \u2502 Ctrl+Shift+W close pane\x1b[0m\r\n\r\n');
 
       const pane = { id, element, term, fitAddon, searchAddon, sessionId: sid, pollInterval: null };
       term.onData(data => sendInput(data, pane.sessionId));
