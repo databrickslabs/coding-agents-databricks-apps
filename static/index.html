@@ -920,6 +920,7 @@
     }
 
     // ── Clipboard Paste (image upload) ─────────────────────────────
+    // Use capture phase (3rd arg = true) so we fire BEFORE xterm.js consumes the event
     document.addEventListener('paste', async (e) => {
       const active = getActivePane();
       if (!active || !active.sessionId) {
@@ -970,7 +971,7 @@
         }
       }
       // Text paste — xterm handles natively
-    });
+    }, true);  // capture phase
 
     // ── Drag-and-Drop (image upload fallback) ──────────────────────
     document.addEventListener('dragover', (e) => e.preventDefault());
