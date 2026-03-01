@@ -12,6 +12,7 @@ import time
 import copy
 import logging
 from flask import Flask, send_from_directory, request, jsonify, session
+from werkzeug.utils import secure_filename
 from collections import deque
 
 from utils import ensure_https
@@ -460,6 +461,36 @@ def send_input():
         return jsonify({"status": "ok"})
     except OSError as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/upload", methods=["POST"])
+def upload_file():
+    """Save an uploaded file (e.g. clipboard image) and return its path."""
+    logger.info(f"Upload request: content_type={request.content_type}, content_length={request.content_length}")
+
+    if "file" not in request.files:
+        logger.warning(f"Upload missing 'file' key. Keys: {list(request.files.keys())}")
+        return jsonify({"error": "No file provided"}), 400
+
+    f = request.files["file"]
+    if not f.filename:
+        return jsonify({"error": "Empty filename"}), 400
+
+    logger.info(f"Upload file: name={f.filename}, content_type={f.content_type}")
+
+    home = os.environ.get("HOME", "/app/python/source_code")
+    if not home or home == "/":
+        home = "/app/python/source_code"
+    upload_dir = os.path.join(home, "uploads")
+    os.makedirs(upload_dir, exist_ok=True)
+
+    safe_name = f"{uuid.uuid4().hex[:8]}_{secure_filename(f.filename)}"
+    file_path = os.path.join(upload_dir, safe_name)
+    f.save(file_path)
+
+    file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+    logger.info(f"Upload saved: {file_path} ({file_size} bytes)")
+    return jsonify({"path": file_path})
 
 
 @app.route("/api/output", methods=["POST"])

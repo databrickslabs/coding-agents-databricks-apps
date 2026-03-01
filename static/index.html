@@ -257,6 +257,7 @@
   <script src="/static/lib/addon-fit.js"></script>
   <script src="/static/lib/addon-web-links.js"></script>
   <script src="/static/lib/addon-search.js"></script>
+  <script src="/static/lib/addon-image.js"></script>
   <script>
     // ── Theme Presets ──────────────────────────────────────────────
     const themes = {
@@ -770,6 +771,16 @@
         term.loadAddon(searchAddon);
       }
 
+      if (typeof ImageAddon !== 'undefined' && ImageAddon.ImageAddon) {
+        term.loadAddon(new ImageAddon.ImageAddon({
+          sixelSupport: true,
+          sixelScrolling: true,
+          iipSupport: true,
+          enableSizeReports: true,
+          storageLimit: 128
+        }));
+      }
+
       term.open(element);
       fitAddon.fit();
 
@@ -889,6 +900,114 @@
       document.getElementById('next-pane-btn').style.display = multi ? '' : 'none';
       document.getElementById('split-btn').style.display = panes.length >= 2 ? 'none' : '';
     }
+
+    // ── Toast Notification ──────────────────────────────────────────
+    function showToast(message, type = 'info') {
+      const toast = document.createElement('div');
+      toast.textContent = message;
+      toast.style.cssText = `
+        position: fixed; bottom: 20px; right: 20px; padding: 10px 18px;
+        background: ${type === 'error' ? '#e74c3c' : '#2ecc71'}; color: white;
+        border-radius: 6px; font-size: 13px; z-index: 10000;
+        opacity: 0; transition: opacity 0.3s;
+      `;
+      document.body.appendChild(toast);
+      requestAnimationFrame(() => toast.style.opacity = '1');
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => toast.remove(), 300);
+      }, 3000);
+    }
+
+    // ── Clipboard Paste (image upload) ─────────────────────────────
+    // Use capture phase (3rd arg = true) so we fire BEFORE xterm.js consumes the event
+    document.addEventListener('paste', async (e) => {
+      const active = getActivePane();
+      if (!active || !active.sessionId) {
+        console.log('[paste] No active pane or session');
+        return;
+      }
+
+      const items = e.clipboardData?.items;
+      if (!items) {
+        console.log('[paste] No clipboardData items');
+        return;
+      }
+
+      console.log('[paste] Items:', Array.from(items).map(i => i.type));
+
+      for (const item of items) {
+        if (item.type.startsWith('image/')) {
+          e.preventDefault();
+          const blob = item.getAsFile();
+          if (!blob) { console.log('[paste] Could not get file from item'); continue; }
+
+          console.log('[paste] Uploading image:', blob.type, blob.size, 'bytes');
+          const ext = item.type.split('/')[1] || 'png';
+          const formData = new FormData();
+          formData.append('file', blob, `clipboard-${Date.now()}.${ext}`);
+
+          try {
+            const resp = await fetch('/api/upload', { method: 'POST', body: formData });
+            console.log('[paste] Response status:', resp.status);
+            if (!resp.ok) {
+              const text = await resp.text();
+              console.error('[paste] Upload failed:', resp.status, text);
+              showToast(`Upload failed (${resp.status})`, 'error');
+              return;
+            }
+            const data = await resp.json();
+            if (data.path) {
+              sendInput(data.path + ' ', active.sessionId);
+              showToast('Image saved: ' + data.path);
+            } else if (data.error) {
+              showToast('Upload error: ' + data.error, 'error');
+            }
+          } catch (err) {
+            console.error('[paste] Upload exception:', err);
+            showToast('Upload failed: ' + err.message, 'error');
+          }
+          return;
+        }
+      }
+      // Text paste — xterm handles natively
+    }, true);  // capture phase
+
+    // ── Drag-and-Drop (image upload fallback) ──────────────────────
+    document.addEventListener('dragover', (e) => e.preventDefault());
+    document.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      const active = getActivePane();
+      if (!active || !active.sessionId) return;
+
+      for (const file of e.dataTransfer.files) {
+        if (!file.type.startsWith('image/')) continue;
+
+        const formData = new FormData();
+        formData.append('file', file, file.name);
+
+        try {
+          const resp = await fetch('/api/upload', { method: 'POST', body: formData });
+          console.log('[drop] Response status:', resp.status);
+          if (!resp.ok) {
+            const text = await resp.text();
+            console.error('[drop] Upload failed:', resp.status, text);
+            showToast(`Upload failed (${resp.status})`, 'error');
+            continue;
+          }
+          const data = await resp.json();
+          if (data.path) {
+            sendInput(data.path + ' ', active.sessionId);
+            showToast('Image saved: ' + data.path);
+          } else if (data.error) {
+            showToast('Upload error: ' + data.error, 'error');
+          }
+        } catch (err) {
+          console.error('[drop] Upload exception:', err);
+          showToast('Upload failed: ' + err.message, 'error');
+        }
+      }
+    });
 
     // ── Init ───────────────────────────────────────────────────────
     async function init() {
