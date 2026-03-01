@@ -466,12 +466,17 @@ def send_input():
 @app.route("/api/upload", methods=["POST"])
 def upload_file():
     """Save an uploaded file (e.g. clipboard image) and return its path."""
+    logger.info(f"Upload request: content_type={request.content_type}, content_length={request.content_length}")
+
     if "file" not in request.files:
+        logger.warning(f"Upload missing 'file' key. Keys: {list(request.files.keys())}")
         return jsonify({"error": "No file provided"}), 400
 
     f = request.files["file"]
     if not f.filename:
         return jsonify({"error": "Empty filename"}), 400
+
+    logger.info(f"Upload file: name={f.filename}, content_type={f.content_type}")
 
     home = os.environ.get("HOME", "/app/python/source_code")
     if not home or home == "/":
@@ -483,6 +488,8 @@ def upload_file():
     file_path = os.path.join(upload_dir, safe_name)
     f.save(file_path)
 
+    file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
+    logger.info(f"Upload saved: {file_path} ({file_size} bytes)")
     return jsonify({"path": file_path})
 
 

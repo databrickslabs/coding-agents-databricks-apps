@@ -922,30 +922,49 @@
     // ── Clipboard Paste (image upload) ─────────────────────────────
     document.addEventListener('paste', async (e) => {
       const active = getActivePane();
-      if (!active || !active.sessionId) return;
+      if (!active || !active.sessionId) {
+        console.log('[paste] No active pane or session');
+        return;
+      }
 
       const items = e.clipboardData?.items;
-      if (!items) return;
+      if (!items) {
+        console.log('[paste] No clipboardData items');
+        return;
+      }
+
+      console.log('[paste] Items:', Array.from(items).map(i => i.type));
 
       for (const item of items) {
         if (item.type.startsWith('image/')) {
           e.preventDefault();
           const blob = item.getAsFile();
-          if (!blob) continue;
+          if (!blob) { console.log('[paste] Could not get file from item'); continue; }
 
+          console.log('[paste] Uploading image:', blob.type, blob.size, 'bytes');
           const ext = item.type.split('/')[1] || 'png';
           const formData = new FormData();
           formData.append('file', blob, `clipboard-${Date.now()}.${ext}`);
 
           try {
             const resp = await fetch('/api/upload', { method: 'POST', body: formData });
+            console.log('[paste] Response status:', resp.status);
+            if (!resp.ok) {
+              const text = await resp.text();
+              console.error('[paste] Upload failed:', resp.status, text);
+              showToast(`Upload failed (${resp.status})`, 'error');
+              return;
+            }
             const data = await resp.json();
             if (data.path) {
               sendInput(data.path + ' ', active.sessionId);
               showToast('Image saved: ' + data.path);
+            } else if (data.error) {
+              showToast('Upload error: ' + data.error, 'error');
             }
           } catch (err) {
-            showToast('Failed to upload image', 'error');
+            console.error('[paste] Upload exception:', err);
+            showToast('Upload failed: ' + err.message, 'error');
           }
           return;
         }
@@ -968,13 +987,23 @@
 
         try {
           const resp = await fetch('/api/upload', { method: 'POST', body: formData });
+          console.log('[drop] Response status:', resp.status);
+          if (!resp.ok) {
+            const text = await resp.text();
+            console.error('[drop] Upload failed:', resp.status, text);
+            showToast(`Upload failed (${resp.status})`, 'error');
+            continue;
+          }
           const data = await resp.json();
           if (data.path) {
             sendInput(data.path + ' ', active.sessionId);
             showToast('Image saved: ' + data.path);
+          } else if (data.error) {
+            showToast('Upload error: ' + data.error, 'error');
           }
         } catch (err) {
-          showToast('Failed to upload image', 'error');
+          console.error('[drop] Upload exception:', err);
+          showToast('Upload failed: ' + err.message, 'error');
         }
       }
     });
