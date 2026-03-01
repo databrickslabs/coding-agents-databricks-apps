@@ -33,6 +33,7 @@ Every agent starts **pre-wired to your Databricks AI Gateway** — models, auth 
 | ✂️ **Split Panes** | Run two sessions side by side with a draggable divider |
 | 🔍 **Search** | Find anything in your terminal history (Ctrl+Shift+F) |
 | 🎤 **Voice Input** | Dictate commands with your mic (Option+V) |
+| 📋 **Image Paste** | Paste or drag-and-drop images into the terminal — saved to `~/uploads/`, path inserted automatically |
 | ⌨️ **Customizable** | Fonts, font sizes, themes — all persisted across sessions |
 | 🐍 **Loading Screen** | Play snake while 6 setup steps run in parallel |
 | 🔄 **Workspace Sync** | Every `git commit` auto-syncs to `/Workspace/Users/{you}/projects/` |
@@ -160,6 +161,7 @@ This template repo opens that vision up for every Databricks user — no IDE set
 | `/api/input` | POST | Send input to terminal |
 | `/api/output` | POST | Poll for terminal output |
 | `/api/resize` | POST | Resize terminal dimensions |
+| `/api/upload` | POST | Upload file (clipboard image paste) |
 | `/api/session/close` | POST | Close terminal session |
 
 </details>
