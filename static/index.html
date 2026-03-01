@@ -257,6 +257,7 @@
   <script src="/static/lib/addon-fit.js"></script>
   <script src="/static/lib/addon-web-links.js"></script>
   <script src="/static/lib/addon-search.js"></script>
+  <script src="/static/lib/addon-image.js"></script>
   <script>
     // ── Theme Presets ──────────────────────────────────────────────
     const themes = {
@@ -770,6 +771,16 @@
         term.loadAddon(searchAddon);
       }
 
+      if (typeof ImageAddon !== 'undefined' && ImageAddon.ImageAddon) {
+        term.loadAddon(new ImageAddon.ImageAddon({
+          sixelSupport: true,
+          sixelScrolling: true,
+          iipSupport: true,
+          enableSizeReports: true,
+          storageLimit: 128
+        }));
+      }
+
       term.open(element);
       fitAddon.fit();
 
@@ -889,6 +900,84 @@
       document.getElementById('next-pane-btn').style.display = multi ? '' : 'none';
       document.getElementById('split-btn').style.display = panes.length >= 2 ? 'none' : '';
     }
+
+    // ── Toast Notification ──────────────────────────────────────────
+    function showToast(message, type = 'info') {
+      const toast = document.createElement('div');
+      toast.textContent = message;
+      toast.style.cssText = `
+        position: fixed; bottom: 20px; right: 20px; padding: 10px 18px;
+        background: ${type === 'error' ? '#e74c3c' : '#2ecc71'}; color: white;
+        border-radius: 6px; font-size: 13px; z-index: 10000;
+        opacity: 0; transition: opacity 0.3s;
+      `;
+      document.body.appendChild(toast);
+      requestAnimationFrame(() => toast.style.opacity = '1');
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => toast.remove(), 300);
+      }, 3000);
+    }
+
+    // ── Clipboard Paste (image upload) ─────────────────────────────
+    document.addEventListener('paste', async (e) => {
+      const active = getActivePane();
+      if (!active || !active.sessionId) return;
+
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      for (const item of items) {
+        if (item.type.startsWith('image/')) {
+          e.preventDefault();
+          const blob = item.getAsFile();
+          if (!blob) continue;
+
+          const ext = item.type.split('/')[1] || 'png';
+          const formData = new FormData();
+          formData.append('file', blob, `clipboard-${Date.now()}.${ext}`);
+
+          try {
+            const resp = await fetch('/api/upload', { method: 'POST', body: formData });
+            const data = await resp.json();
+            if (data.path) {
+              sendInput(data.path + ' ', active.sessionId);
+              showToast('Image saved: ' + data.path);
+            }
+          } catch (err) {
+            showToast('Failed to upload image', 'error');
+          }
+          return;
+        }
+      }
+      // Text paste — xterm handles natively
+    });
+
+    // ── Drag-and-Drop (image upload fallback) ──────────────────────
+    document.addEventListener('dragover', (e) => e.preventDefault());
+    document.addEventListener('drop', async (e) => {
+      e.preventDefault();
+      const active = getActivePane();
+      if (!active || !active.sessionId) return;
+
+      for (const file of e.dataTransfer.files) {
+        if (!file.type.startsWith('image/')) continue;
+
+        const formData = new FormData();
+        formData.append('file', file, file.name);
+
+        try {
+          const resp = await fetch('/api/upload', { method: 'POST', body: formData });
+          const data = await resp.json();
+          if (data.path) {
+            sendInput(data.path + ' ', active.sessionId);
+            showToast('Image saved: ' + data.path);
+          }
+        } catch (err) {
+          showToast('Failed to upload image', 'error');
+        }
+      }
+    });
 
     // ── Init ───────────────────────────────────────────────────────
     async function init() {

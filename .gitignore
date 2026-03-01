@@ -11,3 +11,9 @@ outstanding-todos.md
 
 # Git worktrees
 .worktrees/
+
+# Human tokens (brainstorming notes)
+.humantokens/
+
+# Uploaded files (clipboard paste images)
+uploads/
