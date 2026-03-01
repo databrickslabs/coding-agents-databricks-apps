@@ -167,6 +167,30 @@ def _setup_git_config():
     os.chmod(post_commit, 0o755)
     logger.info(f"Post-commit hook written to {post_commit}")
 
+    # Reinit app source git to remove template origin (Databricks Apps only)
+    _reinit_app_git()
+
+
+def _reinit_app_git():
+    """On Databricks Apps, reinit git to remove template origin remote."""
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    if app_dir != "/app/python/source_code":
+        return  # Local dev — leave git intact
+
+    git_dir = os.path.join(app_dir, ".git")
+    if not os.path.isdir(git_dir):
+        return  # Already clean
+
+    import shutil
+    shutil.rmtree(git_dir)
+    subprocess.run(["git", "init"], cwd=app_dir, capture_output=True)
+    subprocess.run(["git", "add", "."], cwd=app_dir, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "Initial commit from coding-agents template"],
+        cwd=app_dir, capture_output=True,
+    )
+    logger.info("Reinitialized app source git (template origin removed)")
+
 
 def run_setup():
     with setup_lock:

@@ -57,9 +57,12 @@ That's it. Open the app URL and start coding.
 
 ### Run locally
 
+1. Click [**Use this template**](https://github.com/datasciencemonkey/coding-agents-databricks-apps/generate) to create your own repo
+2. Clone your new repo and run:
+
 ```bash
-git clone https://github.com/datasciencemonkey/coding-agents-in-databricks.git
-cd coding-agents-in-databricks
+git clone https://github.com/<you>/<your-repo>.git
+cd <your-repo>
 uv run python app.py
 ```
 

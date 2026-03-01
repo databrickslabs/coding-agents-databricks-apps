@@ -19,7 +19,9 @@ The simplest way — no CLI, no cloning, everything stays in the Databricks UI.
 
 The app pulls the code directly from Git. To update later, just re-deploy — it picks up the latest from the repo.
 
-> **Optional:** If you use [Databricks AI Gateway](https://docs.databricks.com/aws/en/ai-gateway/), also add `DATABRICKS_GATEWAY_HOST` as a secret or environment variable. Otherwise the app falls back to direct model serving endpoints.
+> **Note:** On first startup, the app automatically removes the template's `.git` history and reinitializes a clean, remote-free git repo. This prevents accidental pushes back to the template repo from the in-browser terminal.
+
+> **Optional (Highly Recommended):** If you use [Databricks AI Gateway](https://docs.databricks.com/aws/en/ai-gateway/), also add `DATABRICKS_GATEWAY_HOST` as a secret or environment variable. Otherwise the app falls back to direct model serving endpoints.
 
 ## Alternative: Deploy with CLI
 
