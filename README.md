@@ -1,8 +1,8 @@
 # Coding Agents on Databricks Apps
 
 [![Deploy to Databricks](https://img.shields.io/badge/Deploy-Databricks%20Apps-FF3621?logo=databricks&logoColor=white)](docs/deployment.md)
-[![Agents](https://img.shields.io/badge/Agents-4%20included-green)]()
-[![Skills](https://img.shields.io/badge/Skills-39%20built--in-blue)]()
+[![Agents](https://img.shields.io/badge/Agents-4%20included-green)](#whats-inside)
+[![Skills](https://img.shields.io/badge/Skills-39%20built--in-blue)](#-all-39-skills)
 
 > Run Claude Code, Codex, Gemini CLI, and OpenCode in your browser — zero setup, wired to your Databricks workspace.
 
