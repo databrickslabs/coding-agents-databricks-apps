@@ -1,5 +1,6 @@
 # Coding Agents on Databricks Apps
 
+[![Use this template](https://img.shields.io/badge/Use%20this%20template-2ea44f?logo=github)](https://github.com/datasciencemonkey/coding-agents-databricks-apps/generate)
 [![Deploy to Databricks](https://img.shields.io/badge/Deploy-Databricks%20Apps-FF3621?logo=databricks&logoColor=white)](docs/deployment.md)
 [![Agents](https://img.shields.io/badge/Agents-4%20included-green)](#whats-inside)
 [![Skills](https://img.shields.io/badge/Skills-39%20built--in-blue)](#-all-39-skills)
@@ -44,13 +45,11 @@ Every agent starts **pre-wired to your Databricks AI Gateway** — models, auth 
 
 ### Deploy to Databricks Apps
 
-1. Go to **Databricks → Apps → Create App**
-2. Choose **Custom App** and connect this Git repo:
-   ```
-   https://github.com/datasciencemonkey/coding-agents-in-databricks.git
-   ```
-3. Add your PAT as the `DATABRICKS_TOKEN` secret in **App Resources**
-4. Deploy
+1. Click [**Use this template**](https://github.com/datasciencemonkey/coding-agents-databricks-apps/generate) to create your own repo
+2. Go to **Databricks → Apps → Create App**
+3. Choose **Custom App** and connect your new repo
+4. Add your PAT as the `DATABRICKS_TOKEN` secret in **App Resources**
+5. Deploy
 
 That's it. Open the app URL and start coding.
 
@@ -74,7 +73,7 @@ On Jan 26, 2026, Andrej Karpathy made [this viral tweet](https://x.com/karpathy/
 
 ![Boris Cherny's response](image.png)
 
-This app template opens that vision up for every Databricks user — no IDE setup, no local installs. Just open the browser and start coding with AI.
+This template repo opens that vision up for every Databricks user — no IDE setup, no local installs. Click "Use this template", deploy to Databricks Apps, and start coding with AI in your browser.
 
 ---
 
