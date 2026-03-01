@@ -44,7 +44,7 @@ Every agent starts **pre-wired to your Databricks AI Gateway** — models, auth 
 1. Go to **Databricks → Apps → Create App**
 2. Choose **Custom App** and connect this Git repo:
    ```
-   https://github.com/datasciencemonkey/coding-agents-databricks-apps.git
+   https://github.com/datasciencemonkey/coding-agents-in-databricks.git
    ```
 3. Add your PAT as the `DATABRICKS_TOKEN` secret in **App Resources**
 4. Deploy
@@ -56,8 +56,8 @@ That's it. Open the app URL and start coding.
 ### Run locally
 
 ```bash
-git clone https://github.com/datasciencemonkey/coding-agents-databricks-apps.git
-cd coding-agents-databricks-apps
+git clone https://github.com/datasciencemonkey/coding-agents-in-databricks.git
+cd coding-agents-in-databricks
 uv run python app.py
 ```
 
@@ -187,7 +187,7 @@ Production uses `workers=1` (PTY state is process-local), `threads=8` (concurren
 <summary><strong>📁 Project Structure</strong></summary>
 
 ```
-coding-agents-databricks-apps/
+coding-agents-in-databricks/
 ├── app.py                   # Flask backend + PTY management + setup orchestration
 ├── app.yaml.template        # Databricks Apps deployment config template
 ├── gunicorn.conf.py         # Gunicorn production server config

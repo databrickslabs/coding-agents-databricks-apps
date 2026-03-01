@@ -12,7 +12,7 @@ The simplest way — no CLI, no cloning, everything stays in the Databricks UI.
 1. Go to **Databricks → Apps → Create App**
 2. Choose **Custom App** and connect this Git repo:
    ```
-   https://github.com/datasciencemonkey/coding-agents-databricks-apps.git
+   https://github.com/datasciencemonkey/coding-agents-in-databricks.git
    ```
 3. In the **App Resources** tab, add your PAT as the `DATABRICKS_TOKEN` secret
 4. Click **Deploy**
@@ -29,8 +29,8 @@ If you prefer working from the terminal or need more control:
 
 ```bash
 databricks repos create \
-  --url https://github.com/datasciencemonkey/coding-agents-databricks-apps.git \
-  --path /Workspace/Users/<your-email>/apps/coding-agents-databricks-apps
+  --url https://github.com/datasciencemonkey/coding-agents-in-databricks.git \
+  --path /Workspace/Users/<your-email>/apps/coding-agents-in-databricks
 ```
 
 ### 2. Configure `app.yaml`
@@ -55,7 +55,7 @@ In the [App Resources tab](https://docs.databricks.com/aws/en/dev-tools/databric
 
 ```bash
 databricks apps deploy <your-app-name> \
-  --source-code-path /Workspace/Users/<your-email>/apps/coding-agents-databricks-apps
+  --source-code-path /Workspace/Users/<your-email>/apps/coding-agents-in-databricks
 ```
 
 > **Tip:** To update later, just `git pull` in the workspace repo and re-deploy.
