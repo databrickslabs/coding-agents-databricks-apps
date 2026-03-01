@@ -221,6 +221,8 @@
           &#x1F3A4;
         </button>
         <button id="split-btn" title="Split pane (Ctrl+Shift+D)">&#x229E;</button>
+        <button id="close-pane-btn" title="Close pane (Ctrl+Shift+W)" style="display:none;">&#x2715;</button>
+        <button id="next-pane-btn" title="Next pane (Ctrl+Shift+])" style="display:none;">&#x21C6;</button>
       </div>
     </div>
   </div>
@@ -776,7 +778,7 @@
 
       term.write('\x1b[32mConnected. Type "claude" to start coding.\x1b[0m\r\n');
       term.write('\x1b[90mProjects in ~/projects auto-sync to Workspace on git commit.\x1b[0m\r\n');
-      term.write('\x1b[90mCtrl+Shift+D split pane \u2502 Ctrl+Shift+W close pane\x1b[0m\r\n\r\n');
+      term.write('\x1b[90mCtrl+Shift+D split pane \u2502 Ctrl+Shift+W close pane \u2502 Ctrl+Shift+] switch pane\x1b[0m\r\n\r\n');
 
       const pane = { id, element, term, fitAddon, searchAddon, sessionId: sid, pollInterval: null };
       term.onData(data => sendInput(data, pane.sessionId));
@@ -800,6 +802,7 @@
         // Reset flex for even split
         panes.forEach(p => { p.element.style.flex = '1'; });
         refitAllPanes();
+        updatePaneButtons();
         status.style.display = 'none';
       } catch (e) {
         status.textContent = 'Split failed: ' + e.message;
@@ -829,6 +832,7 @@
 
       focusPane(panes[0].id);
       refitAllPanes();
+      updatePaneButtons();
     }
 
     function cyclePaneFocus(direction) {
@@ -874,8 +878,17 @@
       });
     }
 
-    // ── Split button ───────────────────────────────────────────────
+    // ── Pane toolbar buttons ────────────────────────────────────────
     document.getElementById('split-btn').addEventListener('click', () => splitPane());
+    document.getElementById('close-pane-btn').addEventListener('click', () => closeActivePane());
+    document.getElementById('next-pane-btn').addEventListener('click', () => cyclePaneFocus('next'));
+
+    function updatePaneButtons() {
+      const multi = panes.length > 1;
+      document.getElementById('close-pane-btn').style.display = multi ? '' : 'none';
+      document.getElementById('next-pane-btn').style.display = multi ? '' : 'none';
+      document.getElementById('split-btn').style.display = panes.length >= 2 ? 'none' : '';
+    }
 
     // ── Init ───────────────────────────────────────────────────────
     async function init() {
