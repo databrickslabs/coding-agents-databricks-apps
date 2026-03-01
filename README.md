@@ -13,8 +13,11 @@
 ## What's Inside
 
 🟠 **Claude Code** — Anthropic's coding agent with 39 Databricks skills + 2 MCP servers
+
 🟣 **Codex** — OpenAI's coding agent, pre-configured for Databricks
+
 🔵 **Gemini CLI** — Google's coding agent with shared skills
+
 🟢 **OpenCode** — Open-source agent with multi-provider support
 
 Every agent starts **pre-wired to your Databricks AI Gateway** — models, auth tokens, and base URLs are all configured at boot. No API keys to manage.
@@ -217,7 +220,3 @@ coding-agents-in-databricks/
 ## Technologies
 
 Flask · Gunicorn · xterm.js · Python PTY · Databricks SDK · Databricks AI Gateway
-
----
-
-*Built with Claude Code on Databricks.*
