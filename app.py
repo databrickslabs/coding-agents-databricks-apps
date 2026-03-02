@@ -18,8 +18,8 @@ from collections import deque
 from utils import ensure_https
 
 # Session timeout configuration
-SESSION_TIMEOUT_SECONDS = 60        # No poll for 60s = dead session
-CLEANUP_INTERVAL_SECONDS = 30       # How often to check for stale sessions
+SESSION_TIMEOUT_SECONDS = 300       # No poll for 5 min = dead session
+CLEANUP_INTERVAL_SECONDS = 60       # How often to check for stale sessions
 GRACEFUL_SHUTDOWN_WAIT = 3          # Seconds to wait after SIGHUP before SIGKILL
 
 # Logging setup
