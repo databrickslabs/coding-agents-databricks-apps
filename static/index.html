@@ -2,6 +2,7 @@
 <html>
 <head>
   <title>Terminal</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/lib/xterm.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -709,11 +710,23 @@
           body: JSON.stringify({ session_id: pane.sessionId })
         });
         if (!resp.ok) {
-          pane.term.write('\r\n\x1b[31mSession ended.\x1b[0m\r\n');
+          if (resp.status === 403) {
+            pane.term.write('\r\n\x1b[33m⚠ Authentication expired. Please refresh the page to re-authenticate.\x1b[0m\r\n');
+          } else {
+            pane.term.write('\r\n\x1b[31mSession ended.\x1b[0m\r\n');
+          }
           cleanupPane(pane);
           return;
         }
         const data = await resp.json();
+        if (data.shutting_down) {
+          pane.term.write('\r\n\x1b[33m⚠ App is restarting. Please reconnect shortly.\x1b[0m\r\n');
+          cleanupPane(pane);
+          return;
+        }
+        if (data.timeout_warning) {
+          pane.term.write('\r\n\x1b[33m⚠ Session idle — will terminate soon if no activity.\x1b[0m\r\n');
+        }
         if (data.output) pane.term.write(data.output);
         if (data.exited) {
           pane.term.write('\r\n\x1b[33mShell process exited.\x1b[0m\r\n');

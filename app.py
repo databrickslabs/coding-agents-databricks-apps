@@ -33,6 +33,17 @@ app.secret_key = os.urandom(24)
 sessions = {}
 sessions_lock = threading.Lock()
 
+# SIGTERM graceful shutdown: notify clients before gunicorn stops the worker
+shutting_down = False
+
+def handle_sigterm(signum, frame):
+    """Notify clients that app is shutting down, then let gunicorn handle the rest."""
+    global shutting_down
+    shutting_down = True
+    logger.info("SIGTERM received — setting shutting_down flag for clients")
+
+signal.signal(signal.SIGTERM, handle_sigterm)
+
 # Setup state tracking
 setup_lock = threading.Lock()
 setup_state = {
@@ -331,12 +342,15 @@ def cleanup_stale_sessions():
 
         now = time.time()
         stale_sessions = []
+        warning_threshold = SESSION_TIMEOUT_SECONDS * 0.8
 
-        # Find stale sessions
         with sessions_lock:
             for session_id, session in sessions.items():
-                if now - session["last_poll_time"] > SESSION_TIMEOUT_SECONDS:
+                idle = now - session["last_poll_time"]
+                if idle > SESSION_TIMEOUT_SECONDS:
                     stale_sessions.append((session_id, session["pid"], session["master_fd"]))
+                elif idle > warning_threshold:
+                    session["timeout_warning"] = True
 
         if stale_sessions:
             logger.info(f"Found {len(stale_sessions)} stale session(s) to clean up")
@@ -509,8 +523,9 @@ def get_output():
         output = "".join(buffer)
         buffer.clear()
         exited = session.get("exited", False)
+        timeout_warning = session.pop("timeout_warning", False)
 
-    return jsonify({"output": output, "exited": exited})
+    return jsonify({"output": output, "exited": exited, "shutting_down": shutting_down, "timeout_warning": timeout_warning})
 
 
 @app.route("/api/resize", methods=["POST"])
