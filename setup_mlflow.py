@@ -42,7 +42,7 @@ mlflow_hook = {
     "hooks": [
         {
             "type": "command",
-            "command": "python -c \"from mlflow.claude_code.hooks import stop_hook_handler; stop_hook_handler()\""
+            "command": "python3 -c \"from mlflow.claude_code.hooks import stop_hook_handler; stop_hook_handler()\""
         }
     ]
 }
