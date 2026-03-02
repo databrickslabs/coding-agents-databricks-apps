@@ -59,6 +59,7 @@ setup_state = {
         {"id": "opencode",   "label": "Configuring OpenCode CLI",     "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "gemini",     "label": "Configuring Gemini CLI",       "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "databricks", "label": "Setting up Databricks CLI",    "status": "pending", "started_at": None, "completed_at": None, "error": None},
+        {"id": "mlflow",     "label": "Enabling MLflow tracing",       "status": "pending", "started_at": None, "completed_at": None, "error": None},
     ]
 }
 
@@ -224,6 +225,7 @@ def run_setup():
     _run_step("opencode", ["python", "setup_opencode.py"])
     _run_step("gemini", ["python", "setup_gemini.py"])
     _run_step("databricks", ["python", "setup_databricks.py"])
+    _run_step("mlflow", ["python", "setup_mlflow.py"])
 
     with setup_lock:
         any_error = any(s["status"] == "error" for s in setup_state["steps"])
@@ -583,6 +585,7 @@ def initialize_app():
     app_owner = get_token_owner()
     if app_owner:
         logger.info(f"App owner (from token): {app_owner}")
+        os.environ["APP_OWNER"] = app_owner
     else:
         logger.warning("Could not determine app owner - authorization disabled")
 
