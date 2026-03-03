@@ -530,6 +530,20 @@ def get_output():
     return jsonify({"output": output, "exited": exited, "shutting_down": shutting_down, "timeout_warning": timeout_warning})
 
 
+@app.route("/api/heartbeat", methods=["POST"])
+def heartbeat():
+    """Lightweight keep-alive — resets timeout without draining output buffer."""
+    data = request.json
+    session_id = data.get("session_id")
+    with sessions_lock:
+        if session_id not in sessions:
+            return jsonify({"error": "Session not found"}), 404
+        session = sessions[session_id]
+        session["last_poll_time"] = time.time()
+        timeout_warning = session.pop("timeout_warning", False)
+    return jsonify({"status": "ok", "timeout_warning": timeout_warning})
+
+
 @app.route("/api/resize", methods=["POST"])
 def resize_terminal():
     """Resize the terminal."""

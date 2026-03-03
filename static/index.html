@@ -365,7 +365,7 @@
     let lastLightTheme = localStorage.getItem('terminal-last-light') || 'Light';
 
     // ── Pane Object Model ─────────────────────────────────────────
-    // Each pane: { id, element, term, fitAddon, searchAddon, sessionId, pollInterval }
+    // Each pane: { id, element, term, fitAddon, searchAddon, sessionId }
     let panes = [];
     let activePaneId = null;
     let paneIdCounter = 0;
@@ -701,44 +701,64 @@
       });
     }
 
-    async function pollOutput(pane) {
-      if (!pane.sessionId) return;
-      try {
-        const resp = await fetch('/api/output', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ session_id: pane.sessionId })
-        });
-        if (!resp.ok) {
-          if (resp.status === 403) {
+    // ── Web Worker for polling ──────────────────────────────────────
+    const pollWorker = new Worker('/static/poll-worker.js');
+
+    pollWorker.onmessage = function(event) {
+      const msg = event.data;
+      const pane = panes.find(p => p.id === msg.paneId);
+      if (!pane) return;
+
+      switch (msg.type) {
+        case 'output': {
+          const data = msg.data;
+          if (data.timeout_warning) {
+            pane.term.write('\r\n\x1b[33m⚠ Session idle — will terminate soon if no activity.\x1b[0m\r\n');
+          }
+          if (data.output) pane.term.write(data.output);
+          break;
+        }
+        case 'session_ended':
+          if (msg.reason === 'auth_expired') {
             pane.term.write('\r\n\x1b[33m⚠ Authentication expired. Please refresh the page to re-authenticate.\x1b[0m\r\n');
+          } else if (msg.reason === 'shutting_down') {
+            pane.term.write('\r\n\x1b[33m⚠ App is restarting. Please reconnect shortly.\x1b[0m\r\n');
           } else {
-            pane.term.write('\r\n\x1b[31mSession ended.\x1b[0m\r\n');
+            pane.term.write('\r\n\x1b[33mShell process exited.\x1b[0m\r\n');
           }
           cleanupPane(pane);
-          return;
-        }
-        const data = await resp.json();
-        if (data.shutting_down) {
-          pane.term.write('\r\n\x1b[33m⚠ App is restarting. Please reconnect shortly.\x1b[0m\r\n');
+          break;
+        case 'connection_status':
+          if (msg.status === 'reconnecting') {
+            pane.term.write(`\r\n\x1b[33m⚠ Connection lost. Retrying (${msg.attempt}/${msg.maxAttempts})...\x1b[0m\r\n`);
+          }
+          break;
+        case 'session_dead':
+          pane.term.write('\r\n\x1b[31mConnection lost. Please refresh the page.\x1b[0m\r\n');
           cleanupPane(pane);
-          return;
-        }
-        if (data.timeout_warning) {
-          pane.term.write('\r\n\x1b[33m⚠ Session idle — will terminate soon if no activity.\x1b[0m\r\n');
-        }
-        if (data.output) pane.term.write(data.output);
-        if (data.exited) {
-          pane.term.write('\r\n\x1b[33mShell process exited.\x1b[0m\r\n');
-          cleanupPane(pane);
-        }
-      } catch (e) {
-        console.error('Poll error:', e);
+          break;
       }
-    }
+    };
+
+    // Switch worker to background/foreground on visibility change
+    document.addEventListener('visibilitychange', () => {
+      pollWorker.postMessage({ type: 'visibility_change', hidden: document.hidden });
+    });
+
+    // sendBeacon heartbeat on pagehide as safety net before Worker dies
+    window.addEventListener('pagehide', () => {
+      panes.forEach(p => {
+        if (p.sessionId) {
+          navigator.sendBeacon(
+            '/api/heartbeat',
+            new Blob([JSON.stringify({ session_id: p.sessionId })], { type: 'application/json' })
+          );
+        }
+      });
+    });
 
     function cleanupPane(pane) {
-      if (pane.pollInterval) { clearInterval(pane.pollInterval); pane.pollInterval = null; }
+      pollWorker.postMessage({ type: 'stop_poll', paneId: pane.id });
       if (pane.sessionId) {
         navigator.sendBeacon('/api/session/close', JSON.stringify({ session_id: pane.sessionId }));
         pane.sessionId = null;
@@ -804,9 +824,9 @@
       term.write('\x1b[90mProjects in ~/projects auto-sync to Workspace on git commit.\x1b[0m\r\n');
       term.write('\x1b[90mCtrl+Shift+D split pane \u2502 Ctrl+Shift+W close pane \u2502 Ctrl+Shift+] switch pane\x1b[0m\r\n\r\n');
 
-      const pane = { id, element, term, fitAddon, searchAddon, sessionId: sid, pollInterval: null };
+      const pane = { id, element, term, fitAddon, searchAddon, sessionId: sid };
       term.onData(data => sendInput(data, pane.sessionId));
-      pane.pollInterval = setInterval(() => pollOutput(pane), 100);
+      pollWorker.postMessage({ type: 'start_poll', paneId: id, sessionId: sid });
 
       // Click to focus
       element.addEventListener('mousedown', () => focusPane(id));
