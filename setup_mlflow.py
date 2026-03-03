@@ -40,7 +40,7 @@ settings["env"]["MLFLOW_EXPERIMENT_NAME"] = experiment_name
 
 # Add Stop hook (processes full transcript at session end)
 # Use the absolute path to this Python so the hook works regardless of shell PATH
-python_cmd = sys.executable
+python_cmd = str(Path(sys.executable).resolve())
 mlflow_hook = {
     "hooks": [
         {
