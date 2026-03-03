@@ -7,6 +7,7 @@ experiment at /Users/{app_owner}/{app_name}.
 
 import os
 import json
+import sys
 from pathlib import Path
 
 # Set HOME if not properly set
@@ -38,11 +39,13 @@ settings["env"]["MLFLOW_TRACKING_URI"] = "databricks"
 settings["env"]["MLFLOW_EXPERIMENT_NAME"] = experiment_name
 
 # Add Stop hook (processes full transcript at session end)
+# Use the absolute path to this Python so the hook works regardless of shell PATH
+python_cmd = sys.executable
 mlflow_hook = {
     "hooks": [
         {
             "type": "command",
-            "command": "python3 -c \"from mlflow.claude_code.hooks import stop_hook_handler; stop_hook_handler()\""
+            "command": f"{python_cmd} -c \"from mlflow.claude_code.hooks import stop_hook_handler; stop_hook_handler()\""
         }
     ]
 }
