@@ -1,3 +1,5 @@
 flask>=2.0
 claude-agent-sdk
 databricks-sdk>=0.20.0
+mlflow[genai]>=3.4
+opentelemetry-exporter-otlp-proto-grpc
