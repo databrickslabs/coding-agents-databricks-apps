@@ -36,6 +36,9 @@ settings.setdefault("env", {})
 settings["env"]["MLFLOW_CLAUDE_TRACING_ENABLED"] = "true"
 settings["env"]["MLFLOW_TRACKING_URI"] = "databricks"
 settings["env"]["MLFLOW_EXPERIMENT_NAME"] = experiment_name
+# Override container-level OTEL endpoint so MLflow uses its native MlflowV3SpanExporter
+# instead of sending traces to a non-existent localhost:4314 OTLP collector
+settings["env"]["OTEL_EXPORTER_OTLP_ENDPOINT"] = ""
 
 # Add Stop hook (processes full transcript at session end)
 # Use `uv run python` so mlflow resolves correctly regardless of venv paths
