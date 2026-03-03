@@ -25,6 +25,22 @@ Every agent starts **pre-wired to your Databricks AI Gateway** — models, auth 
 
 ---
 
+## Why Databricks
+
+This isn't just a terminal in the cloud. Running coding agents on Databricks gives you enterprise-grade infrastructure out of the box:
+
+| | Benefit | What you get |
+|---|---|---|
+| 🔐 | **Unity Catalog Integration** | All data access governed by UC permissions — agents can only touch what your identity allows |
+| 🤖 | **AI Gateway** | Route all LLM calls through a single control plane — swap models, set rate limits, and manage API keys centrally |
+| 🔀 | **Multi-AI & Multi-Agent** | Switch between Claude, GPT, Gemini, and open-source models on the fly — change the model or agent without redeploying |
+| 📊 | **Consumption Monitoring** | Track token usage, cost, and latency per user and per model via the AI Gateway control center dashboard |
+| 🔍 | **MLflow Tracing** | Every Claude Code session is automatically traced — review prompts, tool calls, and outputs in your MLflow experiment |
+| 🧬 | **Assess Traces with Genie** | Point Genie at your MLflow traces to ask natural-language questions about agent behavior, cost patterns, and session quality |
+| 📝 | **App Logs to Delta** | Optionally route application logs to Delta tables for long-term retention, querying, and dashboarding |
+
+---
+
 ## Terminal Features
 
 | | |
@@ -35,10 +51,72 @@ Every agent starts **pre-wired to your Databricks AI Gateway** — models, auth 
 | 🎤 **Voice Input** | Dictate commands with your mic (Option+V) |
 | 📋 **Image Paste** | Paste or drag-and-drop images into the terminal — saved to `~/uploads/`, path inserted automatically |
 | ⌨️ **Customizable** | Fonts, font sizes, themes — all persisted across sessions |
-| 🐍 **Loading Screen** | Play snake while 6 setup steps run in parallel |
+| 🐍 **Loading Screen** | Play snake while setup steps run in parallel |
 | 🔄 **Workspace Sync** | Every `git commit` auto-syncs to `/Workspace/Users/{you}/projects/` |
 | ✏️ **Micro Editor** | Modern terminal editor, pre-installed |
 | ⚙️ **Databricks CLI** | Pre-configured with your PAT, ready to go |
+| 📊 **MLflow Tracing** | Every Claude Code session is automatically traced to your Databricks MLflow experiment |
+
+---
+
+## MLflow Tracing
+
+Every Claude Code session is **automatically traced** to a Databricks MLflow experiment — zero configuration required.
+
+### How it works
+
+```
+Claude Code session starts
+        │
+        ▼
+   Environment vars set automatically:
+   MLFLOW_TRACKING_URI=databricks
+   MLFLOW_EXPERIMENT_NAME=/Users/{you}/{app-name}
+        │
+        ▼
+   You work normally — code, debug, deploy
+        │
+        ▼
+   Session ends → Stop hook fires
+        │
+        ▼
+   Full session transcript logged as an MLflow trace
+   at /Users/{you}/{app-name} in your workspace
+```
+
+### What gets traced
+
+When a Claude Code session ends, the **Stop hook** automatically calls `mlflow.claude_code.hooks.stop_hook_handler()`, which captures the full session transcript — your prompts, agent actions, tool calls, and outputs — and logs it as an MLflow trace.
+
+### Where traces live
+
+Traces are stored in a Databricks MLflow experiment at:
+
+```
+/Users/{your-email}/{app-name}
+```
+
+For example, if you're `jane@company.com` and your app is named `coding-agents`:
+
+```
+/Users/jane@company.com/coding-agents
+```
+
+View them in the Databricks UI: **Workspace > Machine Learning > Experiments**.
+
+### Configuration
+
+Tracing is configured during app startup by `setup_mlflow.py`, which merges the following into `~/.claude/settings.json`:
+
+| Setting | Value | Purpose |
+|---------|-------|---------|
+| `MLFLOW_CLAUDE_TRACING_ENABLED` | `true` | Enables Claude Code tracing |
+| `MLFLOW_TRACKING_URI` | `databricks` | Routes traces to Databricks backend |
+| `MLFLOW_EXPERIMENT_NAME` | `/Users/{owner}/{app}` | Target experiment path |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `""` | Overrides container OTEL to prevent trace loss |
+| Stop hook | `uv run python -c "from mlflow.claude_code.hooks import stop_hook_handler; stop_hook_handler()"` | Fires on session end |
+
+Tracing is skipped gracefully if `APP_OWNER` is not set (e.g., local dev without Databricks).
 
 ---
 
@@ -132,7 +210,7 @@ This template repo opens that vision up for every Databricks user — no IDE set
          ▼                                     ▼
 ┌─────────────────────┐               ┌─────────────────────┐
 │   Loading Screen    │               │   Background Setup  │
-│   (snake game)      │               │   (6 parallel steps)│
+│   (snake game)      │               │   (8 setup steps)   │
 └─────────────────────┘               └─────────────────────┘
                                                │
                                                ▼
@@ -146,7 +224,7 @@ This template repo opens that vision up for every Databricks user — no IDE set
 
 1. Gunicorn starts, calls `initialize_app()` via `post_worker_init` hook
 2. App immediately serves the loading screen (snake game)
-3. Background thread runs setup: git config, micro editor, Claude CLI, Codex CLI, OpenCode, Gemini CLI, Databricks CLI
+3. Background thread runs setup: git config, micro editor, Claude CLI, Codex CLI, OpenCode, Gemini CLI, Databricks CLI, MLflow tracing
 4. `/api/setup-status` endpoint reports progress to the loading screen
 5. Once complete, the loading screen transitions to the terminal UI
 
@@ -204,6 +282,7 @@ coding-agents-in-databricks/
 ├── setup_gemini.py          # Gemini CLI configuration
 ├── setup_opencode.py        # OpenCode configuration
 ├── setup_databricks.py      # Databricks CLI configuration
+├── setup_mlflow.py          # MLflow tracing auto-configuration
 ├── sync_to_workspace.py     # Post-commit hook: sync to Workspace
 ├── install_micro.sh         # Micro editor installer
 ├── static/
@@ -223,4 +302,4 @@ coding-agents-in-databricks/
 
 ## Technologies
 
-Flask · Gunicorn · xterm.js · Python PTY · Databricks SDK · Databricks AI Gateway
+Flask · Gunicorn · xterm.js · Python PTY · Databricks SDK · Databricks AI Gateway · MLflow
