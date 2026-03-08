@@ -700,6 +700,7 @@
     });
 
     // ── Global Keyboard Shortcuts ──────────────────────────────────
+    // Use capture phase so shortcuts fire before xterm.js swallows the event
     document.addEventListener('keydown', e => {
       // Ctrl+= : increase font
       if (e.ctrlKey && !e.altKey && !e.shiftKey && (e.key === '=' || e.key === '+')) {
@@ -744,7 +745,7 @@
       }
       // Ctrl+Shift+1-9 : jump to tab
       if (e.ctrlKey && e.shiftKey && e.code >= 'Digit1' && e.code <= 'Digit9') {
-        e.preventDefault(); jumpToTab(parseInt(e.code.slice(-1))); return;
+        e.preventDefault(); e.stopPropagation(); jumpToTab(parseInt(e.code.slice(-1))); return;
       }
 
       // ── Pane shortcuts (Alt+Shift) ──
@@ -764,7 +765,7 @@
       if (e.altKey && e.shiftKey && e.code === 'BracketLeft') {
         e.preventDefault(); cyclePaneFocus('prev'); return;
       }
-    });
+    }, true);  // capture phase — fire before xterm.js
 
     // ── Session / IO (parameterized by sessionId) ──────────────────
     const status = document.getElementById('status');
