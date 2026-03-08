@@ -1357,7 +1357,7 @@
         if (typeof Terminal === 'undefined') throw new Error('xterm.js not loaded');
         if (typeof FitAddon === 'undefined') throw new Error('FitAddon not loaded');
 
-        await createPane();
+        await createTab();
 
         status.textContent = 'Connected!';
         setTimeout(() => { status.style.display = 'none'; }, 1000);
