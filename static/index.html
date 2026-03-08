@@ -270,9 +270,9 @@
           <span class="speak-dot" style="display:none;"></span>
           &#x1F3A4;
         </button>
-        <button id="split-btn" title="Split pane (Ctrl+Shift+D)">&#x229E;</button>
-        <button id="close-pane-btn" title="Close pane (Ctrl+Shift+W)" style="display:none;">&#x2715;</button>
-        <button id="next-pane-btn" title="Next pane (Ctrl+Shift+])" style="display:none;">&#x21C6;</button>
+        <button id="split-btn" title="Split pane (Alt+Shift+D)">&#x229E;</button>
+        <button id="close-pane-btn" title="Close pane (Alt+Shift+W)" style="display:none;">&#x2715;</button>
+        <button id="next-pane-btn" title="Next pane (Alt+Shift+])" style="display:none;">&#x21C6;</button>
       </div>
     </div>
   </div>
@@ -724,20 +724,44 @@
         else startDictation();
         return;
       }
-      // Ctrl+Shift+D : split pane
-      if (e.ctrlKey && e.shiftKey && e.key === 'D') {
-        e.preventDefault(); splitPane(); return;
+
+      // ── Tab shortcuts (Ctrl+Shift) ──
+      // Ctrl+Shift+T : new tab
+      if (e.ctrlKey && e.shiftKey && e.key === 'T') {
+        e.preventDefault(); createTab(); return;
       }
-      // Ctrl+Shift+W : close active pane
+      // Ctrl+Shift+W : close active pane (closes tab if last pane)
       if (e.ctrlKey && e.shiftKey && e.key === 'W') {
         e.preventDefault(); closeActivePane(); return;
       }
-      // Ctrl+Shift+] : next pane — use e.code because Shift+] produces '}'
+      // Ctrl+Shift+] : next tab
       if (e.ctrlKey && e.shiftKey && e.code === 'BracketRight') {
+        e.preventDefault(); cycleTabFocus('next'); return;
+      }
+      // Ctrl+Shift+[ : prev tab
+      if (e.ctrlKey && e.shiftKey && e.code === 'BracketLeft') {
+        e.preventDefault(); cycleTabFocus('prev'); return;
+      }
+      // Ctrl+Shift+1-5 : jump to tab
+      if (e.ctrlKey && e.shiftKey && e.code >= 'Digit1' && e.code <= 'Digit5') {
+        e.preventDefault(); jumpToTab(parseInt(e.code.slice(-1))); return;
+      }
+
+      // ── Pane shortcuts (Alt+Shift) ──
+      // Alt+Shift+D : split pane
+      if (e.altKey && e.shiftKey && e.key === 'D') {
+        e.preventDefault(); splitPane(); return;
+      }
+      // Alt+Shift+W : close pane
+      if (e.altKey && e.shiftKey && e.key === 'W') {
+        e.preventDefault(); closeActivePane(); return;
+      }
+      // Alt+Shift+] : next pane
+      if (e.altKey && e.shiftKey && e.code === 'BracketRight') {
         e.preventDefault(); cyclePaneFocus('next'); return;
       }
-      // Ctrl+Shift+[ : prev pane — use e.code because Shift+[ produces '{'
-      if (e.ctrlKey && e.shiftKey && e.code === 'BracketLeft') {
+      // Alt+Shift+[ : prev pane
+      if (e.altKey && e.shiftKey && e.code === 'BracketLeft') {
         e.preventDefault(); cyclePaneFocus('prev'); return;
       }
     });
