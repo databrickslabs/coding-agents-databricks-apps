@@ -749,21 +749,22 @@
       }
 
       // ── Pane shortcuts (Alt+Shift) ──
+      // Use e.code (physical key) because Alt/Option on macOS changes e.key
       // Alt+Shift+D : split pane
-      if (e.altKey && e.shiftKey && e.key === 'D') {
-        e.preventDefault(); splitPane(); return;
+      if (e.altKey && e.shiftKey && e.code === 'KeyD') {
+        e.preventDefault(); e.stopPropagation(); splitPane(); return;
       }
       // Alt+Shift+W : close pane
-      if (e.altKey && e.shiftKey && e.key === 'W') {
-        e.preventDefault(); closeActivePane(); return;
+      if (e.altKey && e.shiftKey && e.code === 'KeyW') {
+        e.preventDefault(); e.stopPropagation(); closeActivePane(); return;
       }
       // Alt+Shift+] : next pane
       if (e.altKey && e.shiftKey && e.code === 'BracketRight') {
-        e.preventDefault(); cyclePaneFocus('next'); return;
+        e.preventDefault(); e.stopPropagation(); cyclePaneFocus('next'); return;
       }
       // Alt+Shift+[ : prev pane
       if (e.altKey && e.shiftKey && e.code === 'BracketLeft') {
-        e.preventDefault(); cyclePaneFocus('prev'); return;
+        e.preventDefault(); e.stopPropagation(); cyclePaneFocus('prev'); return;
       }
     }, true);  // capture phase — fire before xterm.js
 
