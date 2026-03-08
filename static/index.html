@@ -917,9 +917,26 @@
       const sid = await createSession();
       await sendResize(term.cols, term.rows, sid);
 
-      term.write('\x1b[32mConnected. Type "claude" to start coding.\x1b[0m\r\n');
-      term.write('\x1b[90mProjects in ~/projects auto-sync to Workspace on git commit.\x1b[0m\r\n');
-      term.write('\x1b[90mCtrl+Shift+T new tab \u2502 Alt+Shift+D split pane \u2502 Alt+Shift+W close pane\x1b[0m\r\n\r\n');
+      // CoDA splash screen (lowercase o)
+      const splashArt = [
+        ' \u2588\u2588\u2588\u2588\u2588\u2588\u2557          \u2588\u2588\u2588\u2588\u2588\u2588\u2557   \u2588\u2588\u2588\u2588\u2588\u2557 ',
+        '\u2588\u2588\u2554\u2550\u2550\u2550\u2550\u255d          \u2588\u2588\u2554\u2550\u2550\u2588\u2588\u2557 \u2588\u2588\u2554\u2550\u2550\u2588\u2588\u2557',
+        '\u2588\u2588\u2551       \u2588\u2588\u2588\u2588\u2588\u2557  \u2588\u2588\u2551  \u2588\u2588\u2551 \u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2551',
+        '\u2588\u2588\u2551      \u2588\u2588\u2554\u2550\u2550\u2588\u2588\u2557 \u2588\u2588\u2551  \u2588\u2588\u2551 \u2588\u2588\u2554\u2550\u2550\u2588\u2588\u2551',
+        '\u255a\u2588\u2588\u2588\u2588\u2588\u2588\u2557 \u255a\u2588\u2588\u2588\u2588\u2588\u2554\u255d \u2588\u2588\u2588\u2588\u2588\u2588\u2554\u255d \u2588\u2588\u2551  \u2588\u2588\u2551',
+        ' \u255a\u2550\u2550\u2550\u2550\u2550\u255d  \u255a\u2550\u2550\u2550\u2550\u255d  \u255a\u2550\u2550\u2550\u2550\u2550\u255d  \u255a\u2550\u255d  \u255a\u2550\u255d',
+      ];
+      term.write('\x1b[2J\x1b[H');  // clear screen, cursor home
+      term.write('\r\n');
+      splashArt.forEach(line => term.write('\x1b[36m' + line + '\x1b[0m\r\n'));
+      term.write('\r\n');
+      term.write('\x1b[1;37m         CoWorking Developer Agents\x1b[0m\r\n');
+      term.write('\x1b[90m \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\x1b[0m\r\n');
+      term.write('\x1b[90m v0.1.0  \u2502  Ready\x1b[0m\r\n');
+      term.write('\r\n');
+      term.write('\x1b[90m Ctrl+Shift+T new tab \u2502 Alt+Shift+D split \u2502 Alt+Shift+W close\x1b[0m\r\n');
+      term.write('\x1b[90m Projects in ~/projects auto-sync to Workspace on commit\x1b[0m\r\n');
+      term.write('\r\n');
 
       const pane = { id, element, term, fitAddon, searchAddon, sessionId: sid };
       term.onData(data => sendInput(data, pane.sessionId));
