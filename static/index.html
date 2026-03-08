@@ -1179,7 +1179,7 @@
     }
 
     // ── Divider Drag ───────────────────────────────────────────────
-    function setupDividerDrag(divider) {
+    function setupDividerDrag(divider, tab) {
       let dragging = false;
 
       divider.addEventListener('mousedown', e => {
@@ -1191,13 +1191,12 @@
       });
 
       document.addEventListener('mousemove', e => {
-        if (!dragging || panes.length < 2) return;
-        const container = document.getElementById('pane-container');
-        const rect = container.getBoundingClientRect();
+        if (!dragging || tab.panes.length < 2) return;
+        const rect = tab.paneContainer.getBoundingClientRect();
         let pct = ((e.clientX - rect.left) / rect.width) * 100;
         pct = Math.max(15, Math.min(85, pct));
-        panes[0].element.style.flex = `0 0 ${pct}%`;
-        panes[1].element.style.flex = '1 1 0';
+        tab.panes[0].element.style.flex = `0 0 ${pct}%`;
+        tab.panes[1].element.style.flex = '1 1 0';
         refitAllPanes();
       });
 
