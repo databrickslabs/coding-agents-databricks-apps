@@ -15,15 +15,15 @@
 
 **CODA — Ready to code**
 
-![CODA splash screen](docs/screenshots/coda-splash.png)
+![CODA splash screen](docs/screenshots/coda.png)
 
 **Multi-tab terminals with theme switcher**
 
-![Multi-tab view with theme selector](docs/screenshots/multi-tab-themes.png)
+![Multi-tab view with theme selector](docs/screenshots/multi-pane.png)
 
 **Keyboard shortcuts reference**
 
-![Keyboard shortcuts modal](docs/screenshots/keyboard-shortcuts.png)
+![Keyboard shortcuts modal](docs/screenshots/quickview.png)
 
 </div>
 
