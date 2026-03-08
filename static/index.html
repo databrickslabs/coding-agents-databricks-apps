@@ -416,19 +416,34 @@
     let lastDarkTheme = localStorage.getItem('terminal-last-dark') || 'Dark';
     let lastLightTheme = localStorage.getItem('terminal-last-light') || 'Light';
 
-    // ── Pane Object Model ─────────────────────────────────────────
-    // Each pane: { id, element, term, fitAddon, searchAddon, sessionId }
-    let panes = [];
-    let activePaneId = null;
+    // ── Tab & Pane Object Model ───────────────────────────────────
+    // Tab: { id, label, panes[], activePaneId, paneContainer, divider }
+    // Pane: { id, element, term, fitAddon, searchAddon, sessionId }
+    const MAX_TABS = 5;
+    let tabs = [];
+    let activeTabId = null;
+    let tabIdCounter = 0;
     let paneIdCounter = 0;
 
+    function getActiveTab() {
+      return tabs.find(t => t.id === activeTabId) || tabs[0];
+    }
+
     function getActivePane() {
-      return panes.find(p => p.id === activePaneId) || panes[0];
+      const tab = getActiveTab();
+      if (!tab) return null;
+      return tab.panes.find(p => p.id === tab.activePaneId) || tab.panes[0];
+    }
+
+    function getAllPanes() {
+      return tabs.flatMap(t => t.panes);
     }
 
     function focusPane(id) {
-      activePaneId = id;
-      panes.forEach(p => {
+      const tab = getActiveTab();
+      if (!tab) return;
+      tab.activePaneId = id;
+      tab.panes.forEach(p => {
         p.element.classList.toggle('active', p.id === id);
         if (p.id === id) p.term.focus();
       });
