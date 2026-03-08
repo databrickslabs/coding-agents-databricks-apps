@@ -7,7 +7,25 @@
 
 > Run Claude Code, Codex, Gemini CLI, and OpenCode in your browser — zero setup, wired to your Databricks workspace.
 
-<!-- TODO: Add demo GIF here — screen recording of terminal in action -->
+---
+
+## Screenshots
+
+<div align="center">
+
+**CODA — Ready to code**
+
+![CODA splash screen](docs/screenshots/coda-splash.png)
+
+**Multi-tab terminals with theme switcher**
+
+![Multi-tab view with theme selector](docs/screenshots/multi-tab-themes.png)
+
+**Keyboard shortcuts reference**
+
+![Keyboard shortcuts modal](docs/screenshots/keyboard-shortcuts.png)
+
+</div>
 
 ---
 
