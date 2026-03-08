@@ -969,7 +969,9 @@
     }
 
     function switchTab(id) {
-      const prevTab = getActiveTab();
+      // Skip if already on this tab (preserves DOM for dblclick rename)
+      if (activeTabId === id) return;
+
       activeTabId = id;
 
       // Toggle pane container visibility
