@@ -1,0 +1,120 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: "Mark as pre-release?"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read version from pyproject.toml
+        id: version
+        run: |
+          VERSION=$(grep -m1 '^version' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "Error: version '$VERSION' in pyproject.toml is not valid semver"
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "TAG=v$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing $VERSION"
+
+      - name: Check tag does not already exist
+        run: |
+          TAG="${{ steps.version.outputs.TAG }}"
+          if git tag -l "$TAG" | grep -q "$TAG"; then
+            echo "Error: tag $TAG already exists — did you forget to bump the version in pyproject.toml?"
+            exit 1
+          fi
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          TAG="${{ steps.version.outputs.TAG }}"
+          PREV_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+
+          if [ -z "$PREV_TAG" ]; then
+            RANGE="HEAD"
+            SINCE_MSG="(all commits — first release)"
+          else
+            RANGE="${PREV_TAG}..HEAD"
+            SINCE_MSG="since $PREV_TAG"
+          fi
+
+          echo "Generating notes for $RANGE"
+
+          # Categorize commits by conventional commit prefix
+          FEATURES=$(git log $RANGE --pretty=format:"- %s (%h)" | grep -E "^- feat" | sed 's/^- feat[^:]*: /- /' || true)
+          FIXES=$(git log $RANGE --pretty=format:"- %s (%h)" | grep -E "^- fix" | sed 's/^- fix[^:]*: /- /' || true)
+          DOCS=$(git log $RANGE --pretty=format:"- %s (%h)" | grep -E "^- docs" | sed 's/^- docs[^:]*: /- /' || true)
+          REFACTORS=$(git log $RANGE --pretty=format:"- %s (%h)" | grep -E "^- refactor" | sed 's/^- refactor[^:]*: /- /' || true)
+          OTHER=$(git log $RANGE --pretty=format:"- %s (%h)" | grep -vE "^- (feat|fix|docs|refactor|chore|ci|test|style|perf|revert|Merge)" || true)
+
+          {
+            echo "NOTES<<EOF"
+            echo "## What's Changed $SINCE_MSG"
+            echo ""
+
+            if [ -n "$FEATURES" ]; then
+              echo "### Features"
+              echo "$FEATURES"
+              echo ""
+            fi
+
+            if [ -n "$FIXES" ]; then
+              echo "### Bug Fixes"
+              echo "$FIXES"
+              echo ""
+            fi
+
+            if [ -n "$DOCS" ]; then
+              echo "### Documentation"
+              echo "$DOCS"
+              echo ""
+            fi
+
+            if [ -n "$REFACTORS" ]; then
+              echo "### Refactoring"
+              echo "$REFACTORS"
+              echo ""
+            fi
+
+            if [ -n "$OTHER" ]; then
+              echo "### Other"
+              echo "$OTHER"
+              echo ""
+            fi
+
+            echo "**Full Changelog**: https://github.com/${{ github.repository }}/commits/$TAG"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tag
+        run: |
+          TAG="${{ steps.version.outputs.TAG }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "${{ steps.version.outputs.TAG }}"
+          name: "${{ steps.version.outputs.TAG }}"
+          body: ${{ steps.notes.outputs.NOTES }}
+          prerelease: ${{ inputs.prerelease }}
