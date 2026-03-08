@@ -8,22 +8,73 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cascadia+Code&family=Fira+Code&family=JetBrains+Mono&family=Source+Code+Pro&display=swap" rel="stylesheet">
   <style>
-    body { margin: 0; font-family: monospace; transition: background 0.3s, color 0.3s; }
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+    body { font-family: monospace; transition: background 0.3s, color 0.3s; }
     #status { position: absolute; top: 10px; left: 10px; z-index: 1000; }
 
+    /* Tab bar */
+    #tab-bar {
+      display: flex; align-items: center; height: 32px; width: 100%;
+      background: rgba(255,255,255,0.04);
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+      overflow-x: auto; overflow-y: hidden;
+      user-select: none; flex-shrink: 0;
+    }
+    .tab {
+      display: flex; align-items: center; gap: 6px;
+      padding: 0 12px; height: 100%; cursor: pointer;
+      font-size: 12px; white-space: nowrap;
+      border-right: 1px solid rgba(255,255,255,0.06);
+      transition: background 0.15s;
+      position: relative;
+    }
+    .tab:hover { background: rgba(255,255,255,0.06); }
+    .tab.active {
+      background: rgba(255,255,255,0.08);
+      border-bottom: 2px solid rgba(100,150,255,0.6);
+    }
+    .tab-label {
+      outline: none; border: none; background: none;
+      color: inherit; font: inherit; padding: 0;
+      min-width: 30px; max-width: 120px;
+      overflow: hidden; text-overflow: ellipsis;
+      cursor: inherit;
+    }
+    .tab-label:focus {
+      cursor: text;
+      border-bottom: 1px solid rgba(100,150,255,0.5);
+    }
+    .tab-close {
+      opacity: 0; font-size: 10px; padding: 2px 4px;
+      border-radius: 3px; border: none; background: none;
+      color: inherit; cursor: pointer; transition: opacity 0.15s, background 0.15s;
+      line-height: 1; flex-shrink: 0;
+    }
+    .tab:hover .tab-close, .tab.active .tab-close { opacity: 0.6; }
+    .tab-close:hover { opacity: 1 !important; background: rgba(255,255,255,0.1); }
+    #new-tab-btn {
+      padding: 0 10px; height: 100%; border: none; background: none;
+      color: inherit; font-size: 16px; cursor: pointer;
+      opacity: 0.5; transition: opacity 0.15s;
+    }
+    #new-tab-btn:hover { opacity: 1; }
+    #new-tab-btn:disabled { opacity: 0.2; cursor: default; }
+
     /* Pane container */
-    #pane-container { display: flex; flex-direction: row; height: 100vh; width: 100vw; }
-    .pane { flex: 1; position: relative; overflow: hidden; min-width: 0; }
+    .tab-pane-container { display: flex; flex-direction: row; height: calc(100% - 33px); width: 100%; }
+    .tab-pane-container.hidden { display: none; }
+    .pane { flex: 1; position: relative; overflow: hidden; min-width: 0; padding-bottom: 2px; box-sizing: border-box; }
     .pane.active { box-shadow: inset 0 0 0 2px rgba(100,150,255,0.35); }
 
     /* Divider */
-    #pane-divider {
+    .pane-divider {
       flex: 0 0 4px; cursor: col-resize;
       background: rgba(128,128,128,0.15);
       transition: background 0.15s;
       z-index: 1;
     }
-    #pane-divider:hover, #pane-divider.dragging {
+    .pane-divider:hover, .pane-divider.dragging {
       background: rgba(100,150,255,0.5);
     }
 
@@ -115,6 +166,44 @@
     #speak-btn.recording .speak-dot {
       width: 8px; height: 8px; border-radius: 50%; background: #ff4444;
       animation: pulse 1s infinite; flex-shrink: 0;
+    }
+
+    /* Shortcuts help modal */
+    #shortcuts-overlay {
+      display: none; position: fixed; inset: 0; z-index: 2000;
+      background: rgba(0,0,0,0.5); backdrop-filter: blur(4px);
+      align-items: center; justify-content: center;
+    }
+    #shortcuts-overlay.visible { display: flex; }
+    #shortcuts-modal {
+      width: min(90vw, 460px); max-height: 80vh; overflow-y: auto;
+      border-radius: 14px; padding: 24px;
+      border: 1px solid rgba(255,255,255,0.1);
+      backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+      box-shadow: 0 16px 48px rgba(0,0,0,0.4);
+    }
+    #shortcuts-modal h2 {
+      margin: 0 0 16px; font-size: 16px; font-weight: 600;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    #shortcuts-modal h2 button {
+      background: none; border: none; color: inherit; cursor: pointer;
+      font-size: 18px; opacity: 0.5; padding: 2px 6px; border-radius: 4px;
+    }
+    #shortcuts-modal h2 button:hover { opacity: 1; background: rgba(255,255,255,0.1); }
+    #shortcuts-modal h3 {
+      margin: 14px 0 6px; font-size: 11px; text-transform: uppercase;
+      letter-spacing: 1.5px; opacity: 0.4; font-weight: 600;
+    }
+    #shortcuts-modal h3:first-of-type { margin-top: 0; }
+    #shortcuts-modal .shortcut-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 5px 0; font-size: 13px;
+    }
+    #shortcuts-modal .shortcut-row span:last-child {
+      font-family: monospace; font-size: 11px; opacity: 0.6;
+      background: rgba(255,255,255,0.06); padding: 2px 8px;
+      border-radius: 4px; border: 1px solid rgba(255,255,255,0.08);
     }
 
     /* Search bar */
@@ -221,9 +310,10 @@
           <span class="speak-dot" style="display:none;"></span>
           &#x1F3A4;
         </button>
-        <button id="split-btn" title="Split pane (Ctrl+Shift+D)">&#x229E;</button>
-        <button id="close-pane-btn" title="Close pane (Ctrl+Shift+W)" style="display:none;">&#x2715;</button>
-        <button id="next-pane-btn" title="Next pane (Ctrl+Shift+])" style="display:none;">&#x21C6;</button>
+        <button id="split-btn" title="Split pane (Alt+Shift+D)">&#x229E;</button>
+        <button id="close-pane-btn" title="Close pane (Alt+Shift+W)" style="display:none;">&#x2715;</button>
+        <button id="next-pane-btn" title="Next pane (Alt+Shift+])" style="display:none;">&#x21C6;</button>
+        <button id="shortcuts-btn" title="Keyboard shortcuts (Ctrl+/)">?</button>
       </div>
     </div>
   </div>
@@ -252,7 +342,35 @@
     </div>
   </div>
 
-  <div id="pane-container"></div>
+  <!-- Keyboard shortcuts modal -->
+  <div id="shortcuts-overlay">
+    <div id="shortcuts-modal">
+      <h2>Keyboard Shortcuts <button id="shortcuts-close" title="Close">&times;</button></h2>
+      <h3>Tabs</h3>
+      <div class="shortcut-row"><span>New tab</span><span>Ctrl+Shift+T</span></div>
+      <div class="shortcut-row"><span>Close tab</span><span>Ctrl+Shift+W</span></div>
+      <div class="shortcut-row"><span>Next tab</span><span>Ctrl+Shift+]</span></div>
+      <div class="shortcut-row"><span>Previous tab</span><span>Ctrl+Shift+[</span></div>
+      <div class="shortcut-row"><span>Jump to tab 1-9</span><span>Ctrl+Shift+1-9</span></div>
+      <h3>Panes</h3>
+      <div class="shortcut-row"><span>Split pane</span><span>Alt+Shift+D</span></div>
+      <div class="shortcut-row"><span>Close pane</span><span>Alt+Shift+W</span></div>
+      <div class="shortcut-row"><span>Next pane</span><span>Alt+Shift+]</span></div>
+      <div class="shortcut-row"><span>Previous pane</span><span>Alt+Shift+[</span></div>
+      <h3>General</h3>
+      <div class="shortcut-row"><span>Search</span><span>Ctrl+Shift+F</span></div>
+      <div class="shortcut-row"><span>Voice dictation</span><span>Alt+V</span></div>
+      <div class="shortcut-row"><span>Increase font</span><span>Ctrl+=</span></div>
+      <div class="shortcut-row"><span>Decrease font</span><span>Ctrl+-</span></div>
+      <div class="shortcut-row"><span>Reset font</span><span>Ctrl+0</span></div>
+      <div class="shortcut-row"><span>This help</span><span>Ctrl+/</span></div>
+    </div>
+  </div>
+
+  <div id="tab-bar">
+    <button id="new-tab-btn" title="New tab (Ctrl+Shift+T)">+</button>
+  </div>
+  <!-- Tab pane containers are created dynamically by createTab() -->
 
   <script src="/static/lib/xterm.js"></script>
   <script src="/static/lib/addon-fit.js"></script>
@@ -266,7 +384,7 @@
         type: 'dark',
         body: '#1e1e1e',
         theme: {
-          background: '#1e1e1e', foreground: '#d4d4d4', cursor: '#d4d4d4',
+          background: '#1e1e1e', foreground: '#d4d4d4', cursor: '#ffffff', cursorAccent: '#1e1e1e',
           selectionBackground: '#264f78',
           black: '#1e1e1e', red: '#f44747', green: '#6a9955', yellow: '#d7ba7d',
           blue: '#569cd6', magenta: '#c586c0', cyan: '#4ec9b0', white: '#d4d4d4'
@@ -276,7 +394,7 @@
         type: 'light',
         body: '#f5f5f5',
         theme: {
-          background: '#f5f5f5', foreground: '#383a42', cursor: '#526eff',
+          background: '#f5f5f5', foreground: '#383a42', cursor: '#526eff', cursorAccent: '#f5f5f5',
           selectionBackground: '#d7d7ff',
           black: '#383a42', red: '#e45649', green: '#50a14f', yellow: '#c18401',
           blue: '#4078f2', magenta: '#a626a4', cyan: '#0184bc', white: '#fafafa'
@@ -286,7 +404,7 @@
         type: 'dark',
         body: '#282a36',
         theme: {
-          background: '#282a36', foreground: '#f8f8f2', cursor: '#f8f8f2',
+          background: '#282a36', foreground: '#f8f8f2', cursor: '#f8f8f2', cursorAccent: '#282a36',
           selectionBackground: '#44475a',
           black: '#21222c', red: '#ff5555', green: '#50fa7b', yellow: '#f1fa8c',
           blue: '#bd93f9', magenta: '#ff79c6', cyan: '#8be9fd', white: '#f8f8f2'
@@ -296,7 +414,7 @@
         type: 'dark',
         body: '#002b36',
         theme: {
-          background: '#002b36', foreground: '#839496', cursor: '#839496',
+          background: '#002b36', foreground: '#839496', cursor: '#93a1a1', cursorAccent: '#002b36',
           selectionBackground: '#073642',
           black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900',
           blue: '#268bd2', magenta: '#d33682', cyan: '#2aa198', white: '#eee8d5'
@@ -306,7 +424,7 @@
         type: 'light',
         body: '#fdf6e3',
         theme: {
-          background: '#fdf6e3', foreground: '#657b83', cursor: '#657b83',
+          background: '#fdf6e3', foreground: '#657b83', cursor: '#586e75', cursorAccent: '#fdf6e3',
           selectionBackground: '#eee8d5',
           black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900',
           blue: '#268bd2', magenta: '#d33682', cyan: '#2aa198', white: '#fdf6e3'
@@ -316,7 +434,7 @@
         type: 'dark',
         body: '#2e3440',
         theme: {
-          background: '#2e3440', foreground: '#d8dee9', cursor: '#d8dee9',
+          background: '#2e3440', foreground: '#d8dee9', cursor: '#eceff4', cursorAccent: '#2e3440',
           selectionBackground: '#434c5e',
           black: '#3b4252', red: '#bf616a', green: '#a3be8c', yellow: '#ebcb8b',
           blue: '#81a1c1', magenta: '#b48ead', cyan: '#88c0d0', white: '#e5e9f0'
@@ -326,7 +444,7 @@
         type: 'dark',
         body: '#272822',
         theme: {
-          background: '#272822', foreground: '#f8f8f2', cursor: '#f8f8f0',
+          background: '#272822', foreground: '#f8f8f2', cursor: '#f8f8f0', cursorAccent: '#272822',
           selectionBackground: '#49483e',
           black: '#272822', red: '#f92672', green: '#a6e22e', yellow: '#e6db74',
           blue: '#66d9ef', magenta: '#ae81ff', cyan: '#a1efe4', white: '#f8f8f2'
@@ -336,7 +454,7 @@
         type: 'dark',
         body: '#0d1117',
         theme: {
-          background: '#0d1117', foreground: '#c9d1d9', cursor: '#c9d1d9',
+          background: '#0d1117', foreground: '#c9d1d9', cursor: '#e6edf3', cursorAccent: '#0d1117',
           selectionBackground: '#1f2937',
           black: '#0d1117', red: '#ff7b72', green: '#7ee787', yellow: '#d29922',
           blue: '#79c0ff', magenta: '#d2a8ff', cyan: '#a5d6ff', white: '#c9d1d9'
@@ -364,19 +482,34 @@
     let lastDarkTheme = localStorage.getItem('terminal-last-dark') || 'Dark';
     let lastLightTheme = localStorage.getItem('terminal-last-light') || 'Light';
 
-    // ── Pane Object Model ─────────────────────────────────────────
-    // Each pane: { id, element, term, fitAddon, searchAddon, sessionId }
-    let panes = [];
-    let activePaneId = null;
+    // ── Tab & Pane Object Model ───────────────────────────────────
+    // Tab: { id, label, panes[], activePaneId, paneContainer, divider }
+    // Pane: { id, element, term, fitAddon, searchAddon, sessionId }
+    const MAX_TABS = 10;
+    let tabs = [];
+    let activeTabId = null;
+    let tabIdCounter = 0;
     let paneIdCounter = 0;
 
+    function getActiveTab() {
+      return tabs.find(t => t.id === activeTabId) || tabs[0];
+    }
+
     function getActivePane() {
-      return panes.find(p => p.id === activePaneId) || panes[0];
+      const tab = getActiveTab();
+      if (!tab) return null;
+      return tab.panes.find(p => p.id === tab.activePaneId) || tab.panes[0];
+    }
+
+    function getAllPanes() {
+      return tabs.flatMap(t => t.panes);
     }
 
     function focusPane(id) {
-      activePaneId = id;
-      panes.forEach(p => {
+      const tab = getActiveTab();
+      if (!tab) return;
+      tab.activePaneId = id;
+      tab.panes.forEach(p => {
         p.element.classList.toggle('active', p.id === id);
         if (p.id === id) p.term.focus();
       });
@@ -400,7 +533,7 @@
       document.getElementById('search-bar').style.background = overlayBg;
       document.getElementById('dictation-preview').style.background = overlayBg;
       // Apply to all panes
-      panes.forEach(p => { p.term.options.theme = preset.theme; });
+      getAllPanes().forEach(p => { p.term.options.theme = preset.theme; });
       if (preset.type === 'dark') {
         lastDarkTheme = name;
         localStorage.setItem('terminal-last-dark', name);
@@ -421,7 +554,7 @@
       currentFontSize = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, size));
       localStorage.setItem('terminal-font-size', currentFontSize);
       updateFontSizeDisplay();
-      panes.forEach(p => { p.term.options.fontSize = currentFontSize; });
+      getAllPanes().forEach(p => { p.term.options.fontSize = currentFontSize; });
       refitAllPanes();
     }
 
@@ -431,14 +564,16 @@
       if (!family) return;
       currentFontFamily = name;
       localStorage.setItem('terminal-font-family', name);
-      panes.forEach(p => { p.term.options.fontFamily = family; });
+      getAllPanes().forEach(p => { p.term.options.fontFamily = family; });
       refitAllPanes();
       document.getElementById('font-family-select').value = name;
     }
 
     // ── Refit all panes ─────────────────────────────────────────────
     function refitAllPanes() {
-      panes.forEach(p => {
+      const tab = getActiveTab();
+      if (!tab) return;
+      tab.panes.forEach(p => {
         p.fitAddon.fit();
         if (p.sessionId) sendResize(p.term.cols, p.term.rows, p.sessionId);
       });
@@ -530,6 +665,30 @@
     searchInput.addEventListener('keydown', e => {
       if (e.key === 'Enter') { e.preventDefault(); doSearch(e.shiftKey ? 'prev' : 'next'); }
       if (e.key === 'Escape') { e.preventDefault(); toggleSearch(); }
+    });
+
+    // ── Shortcuts Help Modal ────────────────────────────────────────
+    const shortcutsOverlay = document.getElementById('shortcuts-overlay');
+    const shortcutsModal = document.getElementById('shortcuts-modal');
+
+    function toggleShortcutsHelp() {
+      const visible = shortcutsOverlay.classList.toggle('visible');
+      if (!visible) {
+        const ap = getActivePane();
+        if (ap) ap.term.focus();
+      }
+      // Theme-aware background
+      const preset = themes[currentThemeName];
+      if (preset) {
+        shortcutsModal.style.background = preset.type === 'dark'
+          ? 'rgba(30,30,30,0.95)' : 'rgba(245,245,245,0.95)';
+      }
+    }
+
+    document.getElementById('shortcuts-btn').addEventListener('click', toggleShortcutsHelp);
+    document.getElementById('shortcuts-close').addEventListener('click', toggleShortcutsHelp);
+    shortcutsOverlay.addEventListener('click', (e) => {
+      if (e.target === shortcutsOverlay) toggleShortcutsHelp();
     });
 
     // ── Voice Dictation ────────────────────────────────────────────
@@ -631,6 +790,7 @@
     });
 
     // ── Global Keyboard Shortcuts ──────────────────────────────────
+    // Use capture phase so shortcuts fire before xterm.js swallows the event
     document.addEventListener('keydown', e => {
       // Ctrl+= : increase font
       if (e.ctrlKey && !e.altKey && !e.shiftKey && (e.key === '=' || e.key === '+')) {
@@ -644,6 +804,14 @@
       if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key === '0') {
         e.preventDefault(); setFontSize(DEFAULT_FONT_SIZE); return;
       }
+      // Ctrl+/ : toggle shortcuts help
+      if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key === '/') {
+        e.preventDefault(); toggleShortcutsHelp(); return;
+      }
+      // Escape : close shortcuts help if open
+      if (e.key === 'Escape' && shortcutsOverlay.classList.contains('visible')) {
+        e.preventDefault(); e.stopPropagation(); toggleShortcutsHelp(); return;
+      }
       // Ctrl+Shift+F : toggle search
       if (e.ctrlKey && e.shiftKey && e.key === 'F') {
         e.preventDefault(); toggleSearch(); return;
@@ -655,23 +823,48 @@
         else startDictation();
         return;
       }
-      // Ctrl+Shift+D : split pane
-      if (e.ctrlKey && e.shiftKey && e.key === 'D') {
-        e.preventDefault(); splitPane(); return;
+
+      // ── Tab shortcuts (Ctrl+Shift) ──
+      // Ctrl+Shift+T : new tab
+      if (e.ctrlKey && e.shiftKey && e.key === 'T') {
+        e.preventDefault(); createTab(); return;
       }
-      // Ctrl+Shift+W : close active pane
+      // Ctrl+Shift+W : close active pane (closes tab if last pane)
       if (e.ctrlKey && e.shiftKey && e.key === 'W') {
         e.preventDefault(); closeActivePane(); return;
       }
-      // Ctrl+Shift+] : next pane — use e.code because Shift+] produces '}'
+      // Ctrl+Shift+] : next tab
       if (e.ctrlKey && e.shiftKey && e.code === 'BracketRight') {
-        e.preventDefault(); cyclePaneFocus('next'); return;
+        e.preventDefault(); cycleTabFocus('next'); return;
       }
-      // Ctrl+Shift+[ : prev pane — use e.code because Shift+[ produces '{'
+      // Ctrl+Shift+[ : prev tab
       if (e.ctrlKey && e.shiftKey && e.code === 'BracketLeft') {
-        e.preventDefault(); cyclePaneFocus('prev'); return;
+        e.preventDefault(); cycleTabFocus('prev'); return;
       }
-    });
+      // Ctrl+Shift+1-9 : jump to tab
+      if (e.ctrlKey && e.shiftKey && e.code >= 'Digit1' && e.code <= 'Digit9') {
+        e.preventDefault(); e.stopPropagation(); jumpToTab(parseInt(e.code.slice(-1))); return;
+      }
+
+      // ── Pane shortcuts (Alt+Shift) ──
+      // Use e.code (physical key) because Alt/Option on macOS changes e.key
+      // Alt+Shift+D : split pane
+      if (e.altKey && e.shiftKey && e.code === 'KeyD') {
+        e.preventDefault(); e.stopPropagation(); splitPane(); return;
+      }
+      // Alt+Shift+W : close pane
+      if (e.altKey && e.shiftKey && e.code === 'KeyW') {
+        e.preventDefault(); e.stopPropagation(); closeActivePane(); return;
+      }
+      // Alt+Shift+] : next pane
+      if (e.altKey && e.shiftKey && e.code === 'BracketRight') {
+        e.preventDefault(); e.stopPropagation(); cyclePaneFocus('next'); return;
+      }
+      // Alt+Shift+[ : prev pane
+      if (e.altKey && e.shiftKey && e.code === 'BracketLeft') {
+        e.preventDefault(); e.stopPropagation(); cyclePaneFocus('prev'); return;
+      }
+    }, true);  // capture phase — fire before xterm.js
 
     // ── Session / IO (parameterized by sessionId) ──────────────────
     const status = document.getElementById('status');
@@ -706,7 +899,7 @@
 
     pollWorker.onmessage = function(event) {
       const msg = event.data;
-      const pane = panes.find(p => p.id === msg.paneId);
+      const pane = getAllPanes().find(p => p.id === msg.paneId);
       if (!pane) return;
 
       switch (msg.type) {
@@ -747,7 +940,7 @@
 
     // sendBeacon heartbeat on pagehide as safety net before Worker dies
     window.addEventListener('pagehide', () => {
-      panes.forEach(p => {
+      getAllPanes().forEach(p => {
         if (p.sessionId) {
           navigator.sendBeacon(
             '/api/heartbeat',
@@ -766,23 +959,24 @@
     }
 
     function cleanupAllPanes() {
-      panes.forEach(p => cleanupPane(p));
+      getAllPanes().forEach(p => cleanupPane(p));
     }
 
     // ── Pane Management ────────────────────────────────────────────
-    async function createPane() {
+    async function createPane(tab) {
       const id = 'pane-' + (++paneIdCounter);
-      const container = document.getElementById('pane-container');
+      const container = tab.paneContainer;
       const element = document.createElement('div');
       element.className = 'pane';
       element.id = id;
 
       // Add divider before second pane
-      if (panes.length === 1) {
+      if (tab.panes.length === 1) {
         const divider = document.createElement('div');
-        divider.id = 'pane-divider';
+        divider.className = 'pane-divider';
         container.appendChild(divider);
-        setupDividerDrag(divider);
+        tab.divider = divider;
+        setupDividerDrag(divider, tab);
       }
 
       container.appendChild(element);
@@ -820,9 +1014,26 @@
       const sid = await createSession();
       await sendResize(term.cols, term.rows, sid);
 
-      term.write('\x1b[32mConnected. Type "claude" to start coding.\x1b[0m\r\n');
-      term.write('\x1b[90mProjects in ~/projects auto-sync to Workspace on git commit.\x1b[0m\r\n');
-      term.write('\x1b[90mCtrl+Shift+D split pane \u2502 Ctrl+Shift+W close pane \u2502 Ctrl+Shift+] switch pane\x1b[0m\r\n\r\n');
+      // CoDA splash screen
+      const splashArt = [
+        ' \u2588\u2588\u2588\u2588\u2588\u2588\u2557  \u2588\u2588\u2588\u2588\u2588\u2588\u2557 \u2588\u2588\u2588\u2588\u2588\u2588\u2557  \u2588\u2588\u2588\u2588\u2588\u2557 ',
+        '\u2588\u2588\u2554\u2550\u2550\u2550\u2550\u255d \u2588\u2588\u2554\u2550\u2550\u2550\u2588\u2588\u2557\u2588\u2588\u2554\u2550\u2550\u2588\u2588\u2557\u2588\u2588\u2554\u2550\u2550\u2588\u2588\u2557',
+        '\u2588\u2588\u2551      \u2588\u2588\u2551   \u2588\u2588\u2551\u2588\u2588\u2551  \u2588\u2588\u2551\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2551',
+        '\u2588\u2588\u2551      \u2588\u2588\u2551   \u2588\u2588\u2551\u2588\u2588\u2551  \u2588\u2588\u2551\u2588\u2588\u2554\u2550\u2550\u2588\u2588\u2551',
+        '\u255a\u2588\u2588\u2588\u2588\u2588\u2588\u2557 \u255a\u2588\u2588\u2588\u2588\u2588\u2588\u2554\u255d\u2588\u2588\u2588\u2588\u2588\u2588\u2554\u255d\u2588\u2588\u2551  \u2588\u2588\u2551',
+        ' \u255a\u2550\u2550\u2550\u2550\u2550\u255d  \u255a\u2550\u2550\u2550\u2550\u2550\u255d \u255a\u2550\u2550\u2550\u2550\u2550\u255d \u255a\u2550\u255d  \u255a\u2550\u255d',
+      ];
+      term.write('\x1b[2J\x1b[H');  // clear screen, cursor home
+      term.write('\r\n');
+      splashArt.forEach(line => term.write('\x1b[36m' + line + '\x1b[0m\r\n'));
+      term.write('\r\n');
+      term.write('\x1b[1;37m         CoWorking Developer Agents\x1b[0m\r\n');
+      term.write('\x1b[90m \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\x1b[0m\r\n');
+      term.write('\x1b[90m v' + appVersion + '  \u2502  Ready\x1b[0m\r\n');
+      term.write('\r\n');
+      term.write('\x1b[90m Ctrl+/ for keyboard shortcuts\x1b[0m\r\n');
+      term.write('\x1b[90m Projects in ~/projects auto-sync to Workspace on commit\x1b[0m\r\n');
+      term.write('\r\n');
 
       const pane = { id, element, term, fitAddon, searchAddon, sessionId: sid };
       term.onData(data => sendInput(data, pane.sessionId));
@@ -831,22 +1042,217 @@
       // Click to focus
       element.addEventListener('mousedown', () => focusPane(id));
 
-      panes.push(pane);
+      tab.panes.push(pane);
       focusPane(id);
 
       return pane;
     }
 
+    // ── Tab Management ──────────────────────────────────────────────
+    async function createTab() {
+      if (tabs.length >= MAX_TABS) return null;
+
+      const id = 'tab-' + (++tabIdCounter);
+      const label = 'Shell ' + tabIdCounter;
+
+      // Create per-tab pane container
+      const paneContainer = document.createElement('div');
+      paneContainer.className = 'tab-pane-container';
+      paneContainer.id = id + '-panes';
+      document.body.appendChild(paneContainer);
+
+      const tab = {
+        id,
+        label,
+        panes: [],
+        activePaneId: null,
+        paneContainer,
+        divider: null
+      };
+
+      tabs.push(tab);
+
+      // Render tab in the tab bar
+      renderTabBar();
+
+      // Switch to new tab (hides others)
+      switchTab(id);
+
+      // Create first pane
+      await createPane(tab);
+
+      updateTabButtons();
+      return tab;
+    }
+
+    function switchTab(id) {
+      // Skip if already on this tab (preserves DOM for dblclick rename)
+      if (activeTabId === id) return;
+
+      activeTabId = id;
+
+      // Toggle pane container visibility
+      tabs.forEach(t => {
+        t.paneContainer.classList.toggle('hidden', t.id !== id);
+      });
+
+      // Update tab bar active state
+      renderTabBar();
+
+      // Refit panes in the newly visible tab and focus
+      const tab = getActiveTab();
+      if (tab && tab.panes.length > 0) {
+        requestAnimationFrame(() => {
+          refitAllPanes();
+          const ap = tab.panes.find(p => p.id === tab.activePaneId) || tab.panes[0];
+          if (ap) ap.term.focus();
+        });
+      }
+    }
+
+    function closeTab(id) {
+      const tab = tabs.find(t => t.id === id);
+      if (!tab) return;
+
+      // Cleanup all panes in this tab
+      tab.panes.forEach(p => {
+        cleanupPane(p);
+        p.term.dispose();
+      });
+
+      // Remove DOM
+      tab.paneContainer.remove();
+
+      // Remove from array
+      tabs = tabs.filter(t => t.id !== id);
+
+      // If we closed the active tab, switch to the last tab
+      if (activeTabId === id) {
+        if (tabs.length > 0) {
+          switchTab(tabs[tabs.length - 1].id);
+        }
+      }
+
+      // If no tabs left, create a new one
+      if (tabs.length === 0) {
+        tabIdCounter = 0;
+        createTab();
+        return;
+      }
+
+      renderTabBar();
+      updateTabButtons();
+    }
+
+    function startRenameTab(id) {
+      const labelEl = document.querySelector(`#tab-bar .tab[data-tab-id="${id}"] .tab-label`);
+      if (!labelEl) return;
+      labelEl.contentEditable = 'true';
+      labelEl.focus();
+
+      // Select all text
+      const range = document.createRange();
+      range.selectNodeContents(labelEl);
+      window.getSelection().removeAllRanges();
+      window.getSelection().addRange(range);
+
+      function finishRename() {
+        labelEl.contentEditable = 'false';
+        const newLabel = labelEl.textContent.trim();
+        const tab = tabs.find(t => t.id === id);
+        if (tab && newLabel) {
+          tab.label = newLabel;
+        } else if (tab) {
+          labelEl.textContent = tab.label; // revert empty
+        }
+        labelEl.removeEventListener('blur', finishRename);
+        labelEl.removeEventListener('keydown', handleKey);
+        // Refocus terminal
+        const ap = getActivePane();
+        if (ap) ap.term.focus();
+      }
+
+      function handleKey(e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          finishRename();
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          const tab = tabs.find(t => t.id === id);
+          if (tab) labelEl.textContent = tab.label;
+          finishRename();
+        }
+      }
+
+      labelEl.addEventListener('blur', finishRename);
+      labelEl.addEventListener('keydown', handleKey);
+    }
+
+    function renderTabBar() {
+      const tabBar = document.getElementById('tab-bar');
+      const newTabBtn = document.getElementById('new-tab-btn');
+
+      // Remove old tab elements (keep the + button)
+      tabBar.querySelectorAll('.tab').forEach(el => el.remove());
+
+      // Insert tabs before the + button
+      tabs.forEach((tab, index) => {
+        const tabEl = document.createElement('div');
+        tabEl.className = 'tab' + (tab.id === activeTabId ? ' active' : '');
+        tabEl.dataset.tabId = tab.id;
+
+        const label = document.createElement('span');
+        label.className = 'tab-label';
+        label.textContent = tab.label;
+        tabEl.appendChild(label);
+
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'tab-close';
+        closeBtn.textContent = '\u00D7';
+        closeBtn.title = 'Close tab';
+        closeBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          closeTab(tab.id);
+        });
+        tabEl.appendChild(closeBtn);
+
+        // Click to switch
+        tabEl.addEventListener('click', () => switchTab(tab.id));
+
+        // Double-click to rename
+        tabEl.addEventListener('dblclick', (e) => {
+          e.preventDefault();
+          startRenameTab(tab.id);
+        });
+
+        tabBar.insertBefore(tabEl, newTabBtn);
+      });
+
+      // Update + button state
+      newTabBtn.disabled = tabs.length >= MAX_TABS;
+    }
+
+    function updateTabButtons() {
+      // Update toolbar pane buttons for active tab
+      const tab = getActiveTab();
+      const multi = tab && tab.panes.length > 1;
+      document.getElementById('close-pane-btn').style.display = multi ? '' : 'none';
+      document.getElementById('next-pane-btn').style.display = multi ? '' : 'none';
+      document.getElementById('split-btn').style.display = (tab && tab.panes.length >= 2) ? 'none' : '';
+    }
+
     async function splitPane() {
-      if (panes.length >= 2) return;
+      const tab = getActiveTab();
+      if (!tab || tab.panes.length >= 2) return;
       status.textContent = 'Splitting...';
       status.style.display = '';
       try {
-        await createPane();
+        await createPane(tab);
         // Reset flex for even split
-        panes.forEach(p => { p.element.style.flex = '1'; });
+        tab.panes.forEach(p => { p.element.style.flex = '1'; });
         refitAllPanes();
-        updatePaneButtons();
+        updateTabButtons();
         status.style.display = 'none';
       } catch (e) {
         status.textContent = 'Split failed: ' + e.message;
@@ -855,8 +1261,16 @@
     }
 
     function closeActivePane() {
-      if (panes.length <= 1) return;
-      const ap = getActivePane();
+      const tab = getActiveTab();
+      if (!tab) return;
+
+      // If only one pane, close the whole tab
+      if (tab.panes.length <= 1) {
+        closeTab(tab.id);
+        return;
+      }
+
+      const ap = tab.panes.find(p => p.id === tab.activePaneId) || tab.panes[0];
       if (!ap) return;
 
       cleanupPane(ap);
@@ -864,32 +1278,51 @@
       ap.element.remove();
 
       // Remove divider
-      const divider = document.getElementById('pane-divider');
-      if (divider) divider.remove();
-
-      panes = panes.filter(p => p.id !== ap.id);
-
-      // Reset remaining pane to full width
-      if (panes.length === 1) {
-        panes[0].element.style.flex = '1';
+      if (tab.divider) {
+        tab.divider.remove();
+        tab.divider = null;
       }
 
-      focusPane(panes[0].id);
+      tab.panes = tab.panes.filter(p => p.id !== ap.id);
+
+      // Reset remaining pane to full width
+      if (tab.panes.length === 1) {
+        tab.panes[0].element.style.flex = '1';
+      }
+
+      focusPane(tab.panes[0].id);
       refitAllPanes();
-      updatePaneButtons();
+      updateTabButtons();
     }
 
     function cyclePaneFocus(direction) {
-      if (panes.length <= 1) return;
-      const idx = panes.findIndex(p => p.id === activePaneId);
+      const tab = getActiveTab();
+      if (!tab || tab.panes.length <= 1) return;
+      const idx = tab.panes.findIndex(p => p.id === tab.activePaneId);
       const next = direction === 'next'
-        ? (idx + 1) % panes.length
-        : (idx - 1 + panes.length) % panes.length;
-      focusPane(panes[next].id);
+        ? (idx + 1) % tab.panes.length
+        : (idx - 1 + tab.panes.length) % tab.panes.length;
+      focusPane(tab.panes[next].id);
+    }
+
+    function cycleTabFocus(direction) {
+      if (tabs.length <= 1) return;
+      const idx = tabs.findIndex(t => t.id === activeTabId);
+      const next = direction === 'next'
+        ? (idx + 1) % tabs.length
+        : (idx - 1 + tabs.length) % tabs.length;
+      switchTab(tabs[next].id);
+    }
+
+    function jumpToTab(number) {
+      // number is 1-indexed
+      if (number >= 1 && number <= tabs.length) {
+        switchTab(tabs[number - 1].id);
+      }
     }
 
     // ── Divider Drag ───────────────────────────────────────────────
-    function setupDividerDrag(divider) {
+    function setupDividerDrag(divider, tab) {
       let dragging = false;
 
       divider.addEventListener('mousedown', e => {
@@ -901,13 +1334,12 @@
       });
 
       document.addEventListener('mousemove', e => {
-        if (!dragging || panes.length < 2) return;
-        const container = document.getElementById('pane-container');
-        const rect = container.getBoundingClientRect();
+        if (!dragging || tab.panes.length < 2) return;
+        const rect = tab.paneContainer.getBoundingClientRect();
         let pct = ((e.clientX - rect.left) / rect.width) * 100;
         pct = Math.max(15, Math.min(85, pct));
-        panes[0].element.style.flex = `0 0 ${pct}%`;
-        panes[1].element.style.flex = '1 1 0';
+        tab.panes[0].element.style.flex = `0 0 ${pct}%`;
+        tab.panes[1].element.style.flex = '1 1 0';
         refitAllPanes();
       });
 
@@ -923,16 +1355,10 @@
     }
 
     // ── Pane toolbar buttons ────────────────────────────────────────
+    document.getElementById('new-tab-btn').addEventListener('click', () => createTab());
     document.getElementById('split-btn').addEventListener('click', () => splitPane());
     document.getElementById('close-pane-btn').addEventListener('click', () => closeActivePane());
     document.getElementById('next-pane-btn').addEventListener('click', () => cyclePaneFocus('next'));
-
-    function updatePaneButtons() {
-      const multi = panes.length > 1;
-      document.getElementById('close-pane-btn').style.display = multi ? '' : 'none';
-      document.getElementById('next-pane-btn').style.display = multi ? '' : 'none';
-      document.getElementById('split-btn').style.display = panes.length >= 2 ? 'none' : '';
-    }
 
     // ── Toast Notification ──────────────────────────────────────────
     function showToast(message, type = 'info') {
@@ -1042,15 +1468,24 @@
       }
     });
 
+    // ── Version ──────────────────────────────────────────────────────
+    let appVersion = '0.0.0';
+
     // ── Init ───────────────────────────────────────────────────────
     async function init() {
       try {
+        // Fetch version inside async init() to avoid top-level await
+        try {
+          const vResp = await fetch('/api/version');
+          if (vResp.ok) { const vData = await vResp.json(); appVersion = vData.version || appVersion; }
+        } catch(e) { /* fallback */ }
+
         status.textContent = 'Initializing terminal...';
 
         if (typeof Terminal === 'undefined') throw new Error('xterm.js not loaded');
         if (typeof FitAddon === 'undefined') throw new Error('FitAddon not loaded');
 
-        await createPane();
+        await createTab();
 
         status.textContent = 'Connected!';
         setTimeout(() => { status.style.display = 'none'; }, 1000);
