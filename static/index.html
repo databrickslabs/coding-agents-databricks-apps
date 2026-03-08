@@ -467,7 +467,7 @@
       document.getElementById('search-bar').style.background = overlayBg;
       document.getElementById('dictation-preview').style.background = overlayBg;
       // Apply to all panes
-      panes.forEach(p => { p.term.options.theme = preset.theme; });
+      getAllPanes().forEach(p => { p.term.options.theme = preset.theme; });
       if (preset.type === 'dark') {
         lastDarkTheme = name;
         localStorage.setItem('terminal-last-dark', name);
@@ -488,7 +488,7 @@
       currentFontSize = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, size));
       localStorage.setItem('terminal-font-size', currentFontSize);
       updateFontSizeDisplay();
-      panes.forEach(p => { p.term.options.fontSize = currentFontSize; });
+      getAllPanes().forEach(p => { p.term.options.fontSize = currentFontSize; });
       refitAllPanes();
     }
 
@@ -498,14 +498,16 @@
       if (!family) return;
       currentFontFamily = name;
       localStorage.setItem('terminal-font-family', name);
-      panes.forEach(p => { p.term.options.fontFamily = family; });
+      getAllPanes().forEach(p => { p.term.options.fontFamily = family; });
       refitAllPanes();
       document.getElementById('font-family-select').value = name;
     }
 
     // ── Refit all panes ─────────────────────────────────────────────
     function refitAllPanes() {
-      panes.forEach(p => {
+      const tab = getActiveTab();
+      if (!tab) return;
+      tab.panes.forEach(p => {
         p.fitAddon.fit();
         if (p.sessionId) sendResize(p.term.cols, p.term.rows, p.sessionId);
       });
