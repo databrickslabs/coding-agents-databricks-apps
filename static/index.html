@@ -11,19 +11,68 @@
     body { margin: 0; font-family: monospace; transition: background 0.3s, color 0.3s; }
     #status { position: absolute; top: 10px; left: 10px; z-index: 1000; }
 
+    /* Tab bar */
+    #tab-bar {
+      display: flex; align-items: center; height: 32px; width: 100vw;
+      background: rgba(255,255,255,0.04);
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+      overflow-x: auto; overflow-y: hidden;
+      user-select: none; flex-shrink: 0;
+    }
+    .tab {
+      display: flex; align-items: center; gap: 6px;
+      padding: 0 12px; height: 100%; cursor: pointer;
+      font-size: 12px; white-space: nowrap;
+      border-right: 1px solid rgba(255,255,255,0.06);
+      transition: background 0.15s;
+      position: relative;
+    }
+    .tab:hover { background: rgba(255,255,255,0.06); }
+    .tab.active {
+      background: rgba(255,255,255,0.08);
+      border-bottom: 2px solid rgba(100,150,255,0.6);
+    }
+    .tab-label {
+      outline: none; border: none; background: none;
+      color: inherit; font: inherit; padding: 0;
+      min-width: 30px; max-width: 120px;
+      cursor: inherit;
+    }
+    .tab-label:focus {
+      cursor: text;
+      border-bottom: 1px solid rgba(100,150,255,0.5);
+    }
+    .tab-close {
+      opacity: 0; font-size: 10px; padding: 2px 4px;
+      border-radius: 3px; border: none; background: none;
+      color: inherit; cursor: pointer; transition: opacity 0.15s, background 0.15s;
+      line-height: 1;
+    }
+    .tab:hover .tab-close, .tab.active .tab-close { opacity: 0.6; }
+    .tab-close:hover { opacity: 1 !important; background: rgba(255,255,255,0.1); }
+    #new-tab-btn {
+      padding: 0 10px; height: 100%; border: none; background: none;
+      color: inherit; font-size: 16px; cursor: pointer;
+      opacity: 0.5; transition: opacity 0.15s;
+    }
+    #new-tab-btn:hover { opacity: 1; }
+    #new-tab-btn:disabled { opacity: 0.2; cursor: default; }
+
     /* Pane container */
-    #pane-container { display: flex; flex-direction: row; height: 100vh; width: 100vw; }
+    .tab-pane-container { display: flex; flex-direction: row; height: calc(100vh - 33px); width: 100vw; }
+    .tab-pane-container.hidden { display: none; }
     .pane { flex: 1; position: relative; overflow: hidden; min-width: 0; }
     .pane.active { box-shadow: inset 0 0 0 2px rgba(100,150,255,0.35); }
 
     /* Divider */
-    #pane-divider {
+    .pane-divider {
       flex: 0 0 4px; cursor: col-resize;
       background: rgba(128,128,128,0.15);
       transition: background 0.15s;
       z-index: 1;
     }
-    #pane-divider:hover, #pane-divider.dragging {
+    .pane-divider:hover, .pane-divider.dragging {
       background: rgba(100,150,255,0.5);
     }
 
@@ -252,7 +301,10 @@
     </div>
   </div>
 
-  <div id="pane-container"></div>
+  <div id="tab-bar">
+    <button id="new-tab-btn" title="New tab (Ctrl+Shift+T)">+</button>
+  </div>
+  <!-- Tab pane containers are created dynamically by createTab() -->
 
   <script src="/static/lib/xterm.js"></script>
   <script src="/static/lib/addon-fit.js"></script>
