@@ -1100,15 +1100,16 @@
     }
 
     async function splitPane() {
-      if (panes.length >= 2) return;
+      const tab = getActiveTab();
+      if (!tab || tab.panes.length >= 2) return;
       status.textContent = 'Splitting...';
       status.style.display = '';
       try {
-        await createPane();
+        await createPane(tab);
         // Reset flex for even split
-        panes.forEach(p => { p.element.style.flex = '1'; });
+        tab.panes.forEach(p => { p.element.style.flex = '1'; });
         refitAllPanes();
-        updatePaneButtons();
+        updateTabButtons();
         status.style.display = 'none';
       } catch (e) {
         status.textContent = 'Split failed: ' + e.message;
@@ -1117,8 +1118,16 @@
     }
 
     function closeActivePane() {
-      if (panes.length <= 1) return;
-      const ap = getActivePane();
+      const tab = getActiveTab();
+      if (!tab) return;
+
+      // If only one pane, close the whole tab
+      if (tab.panes.length <= 1) {
+        closeTab(tab.id);
+        return;
+      }
+
+      const ap = tab.panes.find(p => p.id === tab.activePaneId) || tab.panes[0];
       if (!ap) return;
 
       cleanupPane(ap);
@@ -1126,28 +1135,47 @@
       ap.element.remove();
 
       // Remove divider
-      const divider = document.getElementById('pane-divider');
-      if (divider) divider.remove();
-
-      panes = panes.filter(p => p.id !== ap.id);
-
-      // Reset remaining pane to full width
-      if (panes.length === 1) {
-        panes[0].element.style.flex = '1';
+      if (tab.divider) {
+        tab.divider.remove();
+        tab.divider = null;
       }
 
-      focusPane(panes[0].id);
+      tab.panes = tab.panes.filter(p => p.id !== ap.id);
+
+      // Reset remaining pane to full width
+      if (tab.panes.length === 1) {
+        tab.panes[0].element.style.flex = '1';
+      }
+
+      focusPane(tab.panes[0].id);
       refitAllPanes();
-      updatePaneButtons();
+      updateTabButtons();
     }
 
     function cyclePaneFocus(direction) {
-      if (panes.length <= 1) return;
-      const idx = panes.findIndex(p => p.id === activePaneId);
+      const tab = getActiveTab();
+      if (!tab || tab.panes.length <= 1) return;
+      const idx = tab.panes.findIndex(p => p.id === tab.activePaneId);
       const next = direction === 'next'
-        ? (idx + 1) % panes.length
-        : (idx - 1 + panes.length) % panes.length;
-      focusPane(panes[next].id);
+        ? (idx + 1) % tab.panes.length
+        : (idx - 1 + tab.panes.length) % tab.panes.length;
+      focusPane(tab.panes[next].id);
+    }
+
+    function cycleTabFocus(direction) {
+      if (tabs.length <= 1) return;
+      const idx = tabs.findIndex(t => t.id === activeTabId);
+      const next = direction === 'next'
+        ? (idx + 1) % tabs.length
+        : (idx - 1 + tabs.length) % tabs.length;
+      switchTab(tabs[next].id);
+    }
+
+    function jumpToTab(number) {
+      // number is 1-indexed
+      if (number >= 1 && number <= tabs.length) {
+        switchTab(tabs[number - 1].id);
+      }
     }
 
     // ── Divider Drag ───────────────────────────────────────────────
