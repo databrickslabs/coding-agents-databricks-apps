@@ -15,7 +15,17 @@ from flask import Flask, send_from_directory, request, jsonify, session
 from werkzeug.utils import secure_filename
 from collections import deque
 
+import json as _json
+
 from utils import ensure_https
+
+# App version (single source of truth: version.json)
+_version_file = os.path.join(os.path.dirname(__file__), 'version.json')
+try:
+    with open(_version_file) as _f:
+        APP_VERSION = _json.load(_f).get('version', '0.0.0')
+except Exception:
+    APP_VERSION = '0.0.0'
 
 # Session timeout configuration
 SESSION_TIMEOUT_SECONDS = 300       # No poll for 5 min = dead session
@@ -401,10 +411,16 @@ def health():
         current_setup_status = setup_state["status"]
     return jsonify({
         "status": "healthy",
+        "version": APP_VERSION,
         "setup_status": current_setup_status,
         "active_sessions": session_count,
         "session_timeout_seconds": SESSION_TIMEOUT_SECONDS
     })
+
+
+@app.route("/api/version")
+def get_version():
+    return jsonify({"version": APP_VERSION})
 
 
 @app.route("/api/session", methods=["POST"])
