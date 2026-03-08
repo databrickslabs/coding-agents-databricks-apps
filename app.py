@@ -46,13 +46,21 @@ sessions_lock = threading.Lock()
 # SIGTERM graceful shutdown: notify clients before gunicorn stops the worker
 shutting_down = False
 
+_start_time = time.time()
+
 def handle_sigterm(signum, frame):
     """Notify clients that app is shutting down, then let gunicorn handle the rest."""
     global shutting_down
+    # Ignore SIGTERMs in the first 10s — likely stale signals from a prior process kill
+    if time.time() - _start_time < 10:
+        logger.info("SIGTERM received during startup — ignoring (likely stale signal)")
+        return
     shutting_down = True
     logger.info("SIGTERM received — setting shutting_down flag for clients")
 
-signal.signal(signal.SIGTERM, handle_sigterm)
+# NOTE: Do not register SIGTERM handler at module level.
+# It is installed in initialize_app() for gunicorn only.
+# For local dev (__main__), we keep SIG_DFL so the process just exits.
 
 # Setup state tracking
 setup_lock = threading.Lock()
@@ -389,6 +397,15 @@ def authorize_request():
     return None
 
 
+@app.after_request
+def set_security_headers(response):
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
+
 @app.route("/")
 def index():
     with setup_lock:
@@ -546,6 +563,42 @@ def get_output():
     return jsonify({"output": output, "exited": exited, "shutting_down": shutting_down, "timeout_warning": timeout_warning})
 
 
+@app.route("/api/output-batch", methods=["POST"])
+def get_output_batch():
+    """Get output from multiple terminal sessions in one request.
+
+    Accepts: {"session_ids": ["id1", "id2", ...]}
+    Returns: {"outputs": {"id1": {"output": "...", "exited": false}, ...}}
+    """
+    data = request.json or {}
+    session_ids = data.get("session_ids")
+
+    if session_ids is None:
+        return jsonify({"error": "session_ids required"}), 400
+
+    outputs = {}
+    now = time.time()
+
+    with sessions_lock:
+        for sid in session_ids:
+            if sid not in sessions:
+                continue
+            session = sessions[sid]
+            session["last_poll_time"] = now
+            buffer = session["output_buffer"]
+            output = "".join(buffer)
+            buffer.clear()
+            exited = session.get("exited", False)
+            timeout_warning = session.pop("timeout_warning", False)
+            outputs[sid] = {
+                "output": output,
+                "exited": exited,
+                "timeout_warning": timeout_warning
+            }
+
+    return jsonify({"outputs": outputs, "shutting_down": shutting_down})
+
+
 @app.route("/api/heartbeat", methods=["POST"])
 def heartbeat():
     """Lightweight keep-alive — resets timeout without draining output buffer."""
@@ -603,9 +656,14 @@ def close_session():
     return jsonify({"status": "ok"})
 
 
-def initialize_app():
+def initialize_app(local_dev=False):
     """One-time init: detect owner, start cleanup thread."""
     global app_owner
+
+    # Install SIGTERM handler only for gunicorn (production).
+    # For local dev, SIG_DFL is fine — the process just exits cleanly.
+    if not local_dev:
+        signal.signal(signal.SIGTERM, handle_sigterm)
 
     # Remove OAuth credentials - force PAT auth only
     os.environ.pop("DATABRICKS_CLIENT_ID", None)
@@ -631,7 +689,8 @@ def initialize_app():
 
 
 if __name__ == "__main__":
-    # Local dev only — production uses gunicorn
-    initialize_app()
+    # Local dev — no SIGTERM handler (SIG_DFL), no shutting_down flag
+    initialize_app(local_dev=True)
+    shutting_down = False  # safety net: ensure clean state before serving
     port = int(os.environ.get("DATABRICKS_APP_PORT", 8000))
     app.run(host="0.0.0.0", port=port, threaded=True)

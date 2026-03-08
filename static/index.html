@@ -1469,14 +1469,16 @@
 
     // ── Version ──────────────────────────────────────────────────────
     let appVersion = '0.0.0';
-    try {
-      const vResp = await fetch('/api/version');
-      if (vResp.ok) { const vData = await vResp.json(); appVersion = vData.version || appVersion; }
-    } catch(e) { /* fallback */ }
 
     // ── Init ───────────────────────────────────────────────────────
     async function init() {
       try {
+        // Fetch version inside async init() to avoid top-level await
+        try {
+          const vResp = await fetch('/api/version');
+          if (vResp.ok) { const vData = await vResp.json(); appVersion = vData.version || appVersion; }
+        } catch(e) { /* fallback */ }
+
         status.textContent = 'Initializing terminal...';
 
         if (typeof Terminal === 'undefined') throw new Error('xterm.js not loaded');
