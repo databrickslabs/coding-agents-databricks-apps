@@ -8,12 +8,13 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Cascadia+Code&family=Fira+Code&family=JetBrains+Mono&family=Source+Code+Pro&display=swap" rel="stylesheet">
   <style>
-    body { margin: 0; font-family: monospace; transition: background 0.3s, color 0.3s; }
+    html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+    body { font-family: monospace; transition: background 0.3s, color 0.3s; }
     #status { position: absolute; top: 10px; left: 10px; z-index: 1000; }
 
     /* Tab bar */
     #tab-bar {
-      display: flex; align-items: center; height: 32px; width: 100vw;
+      display: flex; align-items: center; height: 32px; width: 100%;
       background: rgba(255,255,255,0.04);
       border-bottom: 1px solid rgba(255,255,255,0.08);
       backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
@@ -61,7 +62,7 @@
     #new-tab-btn:disabled { opacity: 0.2; cursor: default; }
 
     /* Pane container */
-    .tab-pane-container { display: flex; flex-direction: row; height: calc(100vh - 33px); width: 100vw; }
+    .tab-pane-container { display: flex; flex-direction: row; height: calc(100% - 33px); width: 100%; }
     .tab-pane-container.hidden { display: none; }
     .pane { flex: 1; position: relative; overflow: hidden; min-width: 0; }
     .pane.active { box-shadow: inset 0 0 0 2px rgba(100,150,255,0.35); }
