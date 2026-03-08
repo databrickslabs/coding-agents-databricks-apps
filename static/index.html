@@ -419,7 +419,7 @@
     // ── Tab & Pane Object Model ───────────────────────────────────
     // Tab: { id, label, panes[], activePaneId, paneContainer, divider }
     // Pane: { id, element, term, fitAddon, searchAddon, sessionId }
-    const MAX_TABS = 5;
+    const MAX_TABS = 10;
     let tabs = [];
     let activeTabId = null;
     let tabIdCounter = 0;
@@ -742,8 +742,8 @@
       if (e.ctrlKey && e.shiftKey && e.code === 'BracketLeft') {
         e.preventDefault(); cycleTabFocus('prev'); return;
       }
-      // Ctrl+Shift+1-5 : jump to tab
-      if (e.ctrlKey && e.shiftKey && e.code >= 'Digit1' && e.code <= 'Digit5') {
+      // Ctrl+Shift+1-9 : jump to tab
+      if (e.ctrlKey && e.shiftKey && e.code >= 'Digit1' && e.code <= 'Digit9') {
         e.preventDefault(); jumpToTab(parseInt(e.code.slice(-1))); return;
       }
 
