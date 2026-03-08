@@ -839,19 +839,20 @@
     }
 
     // ── Pane Management ────────────────────────────────────────────
-    async function createPane() {
+    async function createPane(tab) {
       const id = 'pane-' + (++paneIdCounter);
-      const container = document.getElementById('pane-container');
+      const container = tab.paneContainer;
       const element = document.createElement('div');
       element.className = 'pane';
       element.id = id;
 
       // Add divider before second pane
-      if (panes.length === 1) {
+      if (tab.panes.length === 1) {
         const divider = document.createElement('div');
-        divider.id = 'pane-divider';
+        divider.className = 'pane-divider';
         container.appendChild(divider);
-        setupDividerDrag(divider);
+        tab.divider = divider;
+        setupDividerDrag(divider, tab);
       }
 
       container.appendChild(element);
@@ -868,12 +869,12 @@
       term.loadAddon(new WebLinksAddon.WebLinksAddon());
 
       let searchAddon = null;
-      if (typeof SearchAddon !== 'undefined') {
+      if (typeof SearchAddon \!== 'undefined') {
         searchAddon = new SearchAddon.SearchAddon();
         term.loadAddon(searchAddon);
       }
 
-      if (typeof ImageAddon !== 'undefined' && ImageAddon.ImageAddon) {
+      if (typeof ImageAddon \!== 'undefined' && ImageAddon.ImageAddon) {
         term.loadAddon(new ImageAddon.ImageAddon({
           sixelSupport: true,
           sixelScrolling: true,
@@ -891,7 +892,7 @@
 
       term.write('\x1b[32mConnected. Type "claude" to start coding.\x1b[0m\r\n');
       term.write('\x1b[90mProjects in ~/projects auto-sync to Workspace on git commit.\x1b[0m\r\n');
-      term.write('\x1b[90mCtrl+Shift+D split pane \u2502 Ctrl+Shift+W close pane \u2502 Ctrl+Shift+] switch pane\x1b[0m\r\n\r\n');
+      term.write('\x1b[90mCtrl+Shift+T new tab \u2502 Alt+Shift+D split pane \u2502 Alt+Shift+W close pane\x1b[0m\r\n\r\n');
 
       const pane = { id, element, term, fitAddon, searchAddon, sessionId: sid };
       term.onData(data => sendInput(data, pane.sessionId));
@@ -900,7 +901,7 @@
       // Click to focus
       element.addEventListener('mousedown', () => focusPane(id));
 
-      panes.push(pane);
+      tab.panes.push(pane);
       focusPane(id);
 
       return pane;
