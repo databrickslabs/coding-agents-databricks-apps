@@ -11,13 +11,9 @@
 
 ## Screenshots
 
-<table>
-  <tr>
-    <td align="center"><img src="docs/screenshots/coda.png" width="320" alt="CODA splash screen"/><br/><sub>Ready to code</sub></td>
-    <td align="center"><img src="docs/screenshots/multi-pane.png" width="320" alt="Multi-tab terminals"/><br/><sub>Multi-tab + theme switcher</sub></td>
-    <td align="center"><img src="docs/screenshots/quickview.png" width="320" alt="Keyboard shortcuts"/><br/><sub>Keyboard shortcuts</sub></td>
-  </tr>
-</table>
+<div align="center">
+  <img src="docs/screenshots/demo.gif" width="900" alt="CODA demo — splash screen, multi-tab terminals, keyboard shortcuts"/>
+</div>
 
 ---
 
