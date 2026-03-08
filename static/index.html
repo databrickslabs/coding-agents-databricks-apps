@@ -799,7 +799,7 @@
 
     pollWorker.onmessage = function(event) {
       const msg = event.data;
-      const pane = panes.find(p => p.id === msg.paneId);
+      const pane = getAllPanes().find(p => p.id === msg.paneId);
       if (!pane) return;
 
       switch (msg.type) {
@@ -840,7 +840,7 @@
 
     // sendBeacon heartbeat on pagehide as safety net before Worker dies
     window.addEventListener('pagehide', () => {
-      panes.forEach(p => {
+      getAllPanes().forEach(p => {
         if (p.sessionId) {
           navigator.sendBeacon(
             '/api/heartbeat',
@@ -859,7 +859,7 @@
     }
 
     function cleanupAllPanes() {
-      panes.forEach(p => cleanupPane(p));
+      getAllPanes().forEach(p => cleanupPane(p));
     }
 
     // ── Pane Management ────────────────────────────────────────────
@@ -1236,16 +1236,10 @@
     }
 
     // ── Pane toolbar buttons ────────────────────────────────────────
+    document.getElementById('new-tab-btn').addEventListener('click', () => createTab());
     document.getElementById('split-btn').addEventListener('click', () => splitPane());
     document.getElementById('close-pane-btn').addEventListener('click', () => closeActivePane());
     document.getElementById('next-pane-btn').addEventListener('click', () => cyclePaneFocus('next'));
-
-    function updatePaneButtons() {
-      const multi = panes.length > 1;
-      document.getElementById('close-pane-btn').style.display = multi ? '' : 'none';
-      document.getElementById('next-pane-btn').style.display = multi ? '' : 'none';
-      document.getElementById('split-btn').style.display = panes.length >= 2 ? 'none' : '';
-    }
 
     // ── Toast Notification ──────────────────────────────────────────
     function showToast(message, type = 'info') {
