@@ -26,7 +26,8 @@ const HEARTBEAT_INTERVAL_BG = 30000; // ms — background heartbeat
 const RETRY_BASE_MS = 500;
 const RETRY_MULTIPLIER = 2;
 const RETRY_MAX_DELAY_MS = 10000;
-const RETRY_MAX_ATTEMPTS = 5;
+const RETRY_MAX_ATTEMPTS = 8;
+const SILENT_RETRY_THRESHOLD = 5;  // Don't show banner until this many consecutive failures
 
 // ── Per-pane state ────────────────────────────────────────────────────────
 const panes = new Map();
@@ -163,22 +164,32 @@ function handleRetry(err) {
     return;
   }
 
-  for (const paneId of panes.keys()) {
-    self.postMessage({
-      type: "connection_status", paneId,
-      status: "reconnecting",
-      attempt: retryCount, maxAttempts: RETRY_MAX_ATTEMPTS,
-    });
-  }
-
-  clearBatchTimer();
-  const delay = retryDelay(retryCount - 1);
-  batchTimerId = setTimeout(() => {
+  // Only notify the UI after SILENT_RETRY_THRESHOLD consecutive failures.
+  // Transient blips (1-2 failures) are retried silently.
+  if (retryCount >= SILENT_RETRY_THRESHOLD) {
+    const visibleAttempt = retryCount - SILENT_RETRY_THRESHOLD + 1;
+    const visibleMax = RETRY_MAX_ATTEMPTS - SILENT_RETRY_THRESHOLD + 1;
     for (const paneId of panes.keys()) {
       self.postMessage({
         type: "connection_status", paneId,
-        status: "connected", attempt: 0, maxAttempts: RETRY_MAX_ATTEMPTS,
+        status: "reconnecting",
+        attempt: visibleAttempt, maxAttempts: visibleMax,
       });
+    }
+  }
+
+  clearBatchTimer();
+  const delay = retryCount < SILENT_RETRY_THRESHOLD
+    ? RETRY_BASE_MS  // Quick silent retry for transient failures
+    : retryDelay(retryCount - SILENT_RETRY_THRESHOLD);
+  batchTimerId = setTimeout(() => {
+    if (retryCount >= SILENT_RETRY_THRESHOLD) {
+      for (const paneId of panes.keys()) {
+        self.postMessage({
+          type: "connection_status", paneId,
+          status: "connected", attempt: 0, maxAttempts: RETRY_MAX_ATTEMPTS,
+        });
+      }
     }
     startBatchTimer();
   }, delay);
