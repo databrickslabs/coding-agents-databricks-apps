@@ -907,6 +907,198 @@
       return pane;
     }
 
+    // ── Tab Management ──────────────────────────────────────────────
+    async function createTab() {
+      if (tabs.length >= MAX_TABS) return null;
+
+      const id = 'tab-' + (++tabIdCounter);
+      const label = 'Shell ' + tabIdCounter;
+
+      // Create per-tab pane container
+      const paneContainer = document.createElement('div');
+      paneContainer.className = 'tab-pane-container';
+      paneContainer.id = id + '-panes';
+      document.body.appendChild(paneContainer);
+
+      const tab = {
+        id,
+        label,
+        panes: [],
+        activePaneId: null,
+        paneContainer,
+        divider: null
+      };
+
+      tabs.push(tab);
+
+      // Render tab in the tab bar
+      renderTabBar();
+
+      // Switch to new tab (hides others)
+      switchTab(id);
+
+      // Create first pane
+      await createPane(tab);
+
+      updateTabButtons();
+      return tab;
+    }
+
+    function switchTab(id) {
+      const prevTab = getActiveTab();
+      activeTabId = id;
+
+      // Toggle pane container visibility
+      tabs.forEach(t => {
+        t.paneContainer.classList.toggle('hidden', t.id !== id);
+      });
+
+      // Update tab bar active state
+      renderTabBar();
+
+      // Refit panes in the newly visible tab and focus
+      const tab = getActiveTab();
+      if (tab && tab.panes.length > 0) {
+        requestAnimationFrame(() => {
+          refitAllPanes();
+          const ap = tab.panes.find(p => p.id === tab.activePaneId) || tab.panes[0];
+          if (ap) ap.term.focus();
+        });
+      }
+    }
+
+    function closeTab(id) {
+      const tab = tabs.find(t => t.id === id);
+      if (!tab) return;
+
+      // Cleanup all panes in this tab
+      tab.panes.forEach(p => {
+        cleanupPane(p);
+        p.term.dispose();
+      });
+
+      // Remove DOM
+      tab.paneContainer.remove();
+
+      // Remove from array
+      tabs = tabs.filter(t => t.id !== id);
+
+      // If we closed the active tab, switch to the last tab
+      if (activeTabId === id) {
+        if (tabs.length > 0) {
+          switchTab(tabs[tabs.length - 1].id);
+        }
+      }
+
+      // If no tabs left, create a new one
+      if (tabs.length === 0) {
+        tabIdCounter = 0;
+        createTab();
+        return;
+      }
+
+      renderTabBar();
+      updateTabButtons();
+    }
+
+    function startRenameTab(id) {
+      const labelEl = document.querySelector(`#tab-bar .tab[data-tab-id="${id}"] .tab-label`);
+      if (!labelEl) return;
+      labelEl.contentEditable = 'true';
+      labelEl.focus();
+
+      // Select all text
+      const range = document.createRange();
+      range.selectNodeContents(labelEl);
+      window.getSelection().removeAllRanges();
+      window.getSelection().addRange(range);
+
+      function finishRename() {
+        labelEl.contentEditable = 'false';
+        const newLabel = labelEl.textContent.trim();
+        const tab = tabs.find(t => t.id === id);
+        if (tab && newLabel) {
+          tab.label = newLabel;
+        } else if (tab) {
+          labelEl.textContent = tab.label; // revert empty
+        }
+        labelEl.removeEventListener('blur', finishRename);
+        labelEl.removeEventListener('keydown', handleKey);
+        // Refocus terminal
+        const ap = getActivePane();
+        if (ap) ap.term.focus();
+      }
+
+      function handleKey(e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          finishRename();
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          const tab = tabs.find(t => t.id === id);
+          if (tab) labelEl.textContent = tab.label;
+          finishRename();
+        }
+      }
+
+      labelEl.addEventListener('blur', finishRename);
+      labelEl.addEventListener('keydown', handleKey);
+    }
+
+    function renderTabBar() {
+      const tabBar = document.getElementById('tab-bar');
+      const newTabBtn = document.getElementById('new-tab-btn');
+
+      // Remove old tab elements (keep the + button)
+      tabBar.querySelectorAll('.tab').forEach(el => el.remove());
+
+      // Insert tabs before the + button
+      tabs.forEach((tab, index) => {
+        const tabEl = document.createElement('div');
+        tabEl.className = 'tab' + (tab.id === activeTabId ? ' active' : '');
+        tabEl.dataset.tabId = tab.id;
+
+        const label = document.createElement('span');
+        label.className = 'tab-label';
+        label.textContent = tab.label;
+        tabEl.appendChild(label);
+
+        const closeBtn = document.createElement('button');
+        closeBtn.className = 'tab-close';
+        closeBtn.textContent = '\u00D7';
+        closeBtn.title = 'Close tab';
+        closeBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          closeTab(tab.id);
+        });
+        tabEl.appendChild(closeBtn);
+
+        // Click to switch
+        tabEl.addEventListener('click', () => switchTab(tab.id));
+
+        // Double-click to rename
+        tabEl.addEventListener('dblclick', (e) => {
+          e.preventDefault();
+          startRenameTab(tab.id);
+        });
+
+        tabBar.insertBefore(tabEl, newTabBtn);
+      });
+
+      // Update + button state
+      newTabBtn.disabled = tabs.length >= MAX_TABS;
+    }
+
+    function updateTabButtons() {
+      // Update toolbar pane buttons for active tab
+      const tab = getActiveTab();
+      const multi = tab && tab.panes.length > 1;
+      document.getElementById('close-pane-btn').style.display = multi ? '' : 'none';
+      document.getElementById('next-pane-btn').style.display = multi ? '' : 'none';
+      document.getElementById('split-btn').style.display = (tab && tab.panes.length >= 2) ? 'none' : '';
+    }
+
     async function splitPane() {
       if (panes.length >= 2) return;
       status.textContent = 'Splitting...';
