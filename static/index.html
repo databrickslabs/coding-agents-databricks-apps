@@ -893,12 +893,12 @@
       term.loadAddon(new WebLinksAddon.WebLinksAddon());
 
       let searchAddon = null;
-      if (typeof SearchAddon \!== 'undefined') {
+      if (typeof SearchAddon !== 'undefined') {
         searchAddon = new SearchAddon.SearchAddon();
         term.loadAddon(searchAddon);
       }
 
-      if (typeof ImageAddon \!== 'undefined' && ImageAddon.ImageAddon) {
+      if (typeof ImageAddon !== 'undefined' && ImageAddon.ImageAddon) {
         term.loadAddon(new ImageAddon.ImageAddon({
           sixelSupport: true,
           sixelScrolling: true,
