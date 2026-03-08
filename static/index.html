@@ -167,6 +167,44 @@
       animation: pulse 1s infinite; flex-shrink: 0;
     }
 
+    /* Shortcuts help modal */
+    #shortcuts-overlay {
+      display: none; position: fixed; inset: 0; z-index: 2000;
+      background: rgba(0,0,0,0.5); backdrop-filter: blur(4px);
+      align-items: center; justify-content: center;
+    }
+    #shortcuts-overlay.visible { display: flex; }
+    #shortcuts-modal {
+      width: min(90vw, 460px); max-height: 80vh; overflow-y: auto;
+      border-radius: 14px; padding: 24px;
+      border: 1px solid rgba(255,255,255,0.1);
+      backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+      box-shadow: 0 16px 48px rgba(0,0,0,0.4);
+    }
+    #shortcuts-modal h2 {
+      margin: 0 0 16px; font-size: 16px; font-weight: 600;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    #shortcuts-modal h2 button {
+      background: none; border: none; color: inherit; cursor: pointer;
+      font-size: 18px; opacity: 0.5; padding: 2px 6px; border-radius: 4px;
+    }
+    #shortcuts-modal h2 button:hover { opacity: 1; background: rgba(255,255,255,0.1); }
+    #shortcuts-modal h3 {
+      margin: 14px 0 6px; font-size: 11px; text-transform: uppercase;
+      letter-spacing: 1.5px; opacity: 0.4; font-weight: 600;
+    }
+    #shortcuts-modal h3:first-of-type { margin-top: 0; }
+    #shortcuts-modal .shortcut-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 5px 0; font-size: 13px;
+    }
+    #shortcuts-modal .shortcut-row span:last-child {
+      font-family: monospace; font-size: 11px; opacity: 0.6;
+      background: rgba(255,255,255,0.06); padding: 2px 8px;
+      border-radius: 4px; border: 1px solid rgba(255,255,255,0.08);
+    }
+
     /* Search bar */
     #search-bar {
       display: none; position: fixed; top: 10px; right: 40px; z-index: 1001;
@@ -274,6 +312,7 @@
         <button id="split-btn" title="Split pane (Alt+Shift+D)">&#x229E;</button>
         <button id="close-pane-btn" title="Close pane (Alt+Shift+W)" style="display:none;">&#x2715;</button>
         <button id="next-pane-btn" title="Next pane (Alt+Shift+])" style="display:none;">&#x21C6;</button>
+        <button id="shortcuts-btn" title="Keyboard shortcuts (Ctrl+/)">?</button>
       </div>
     </div>
   </div>
@@ -299,6 +338,31 @@
       <button id="dictation-send" class="send-btn">Send &#x23CE;</button>
       <button id="dictation-cancel">Cancel</button>
       <span class="hint">Enter to send &middot; Esc to cancel</span>
+    </div>
+  </div>
+
+  <!-- Keyboard shortcuts modal -->
+  <div id="shortcuts-overlay">
+    <div id="shortcuts-modal">
+      <h2>Keyboard Shortcuts <button id="shortcuts-close" title="Close">&times;</button></h2>
+      <h3>Tabs</h3>
+      <div class="shortcut-row"><span>New tab</span><span>Ctrl+Shift+T</span></div>
+      <div class="shortcut-row"><span>Close tab</span><span>Ctrl+Shift+W</span></div>
+      <div class="shortcut-row"><span>Next tab</span><span>Ctrl+Shift+]</span></div>
+      <div class="shortcut-row"><span>Previous tab</span><span>Ctrl+Shift+[</span></div>
+      <div class="shortcut-row"><span>Jump to tab 1-9</span><span>Ctrl+Shift+1-9</span></div>
+      <h3>Panes</h3>
+      <div class="shortcut-row"><span>Split pane</span><span>Alt+Shift+D</span></div>
+      <div class="shortcut-row"><span>Close pane</span><span>Alt+Shift+W</span></div>
+      <div class="shortcut-row"><span>Next pane</span><span>Alt+Shift+]</span></div>
+      <div class="shortcut-row"><span>Previous pane</span><span>Alt+Shift+[</span></div>
+      <h3>General</h3>
+      <div class="shortcut-row"><span>Search</span><span>Ctrl+Shift+F</span></div>
+      <div class="shortcut-row"><span>Voice dictation</span><span>Alt+V</span></div>
+      <div class="shortcut-row"><span>Increase font</span><span>Ctrl+=</span></div>
+      <div class="shortcut-row"><span>Decrease font</span><span>Ctrl+-</span></div>
+      <div class="shortcut-row"><span>Reset font</span><span>Ctrl+0</span></div>
+      <div class="shortcut-row"><span>This help</span><span>Ctrl+/</span></div>
     </div>
   </div>
 
@@ -602,6 +666,30 @@
       if (e.key === 'Escape') { e.preventDefault(); toggleSearch(); }
     });
 
+    // ── Shortcuts Help Modal ────────────────────────────────────────
+    const shortcutsOverlay = document.getElementById('shortcuts-overlay');
+    const shortcutsModal = document.getElementById('shortcuts-modal');
+
+    function toggleShortcutsHelp() {
+      const visible = shortcutsOverlay.classList.toggle('visible');
+      if (!visible) {
+        const ap = getActivePane();
+        if (ap) ap.term.focus();
+      }
+      // Theme-aware background
+      const preset = themes[currentThemeName];
+      if (preset) {
+        shortcutsModal.style.background = preset.type === 'dark'
+          ? 'rgba(30,30,30,0.95)' : 'rgba(245,245,245,0.95)';
+      }
+    }
+
+    document.getElementById('shortcuts-btn').addEventListener('click', toggleShortcutsHelp);
+    document.getElementById('shortcuts-close').addEventListener('click', toggleShortcutsHelp);
+    shortcutsOverlay.addEventListener('click', (e) => {
+      if (e.target === shortcutsOverlay) toggleShortcutsHelp();
+    });
+
     // ── Voice Dictation ────────────────────────────────────────────
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     let recognition = null;
@@ -714,6 +802,14 @@
       // Ctrl+0 : reset font
       if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key === '0') {
         e.preventDefault(); setFontSize(DEFAULT_FONT_SIZE); return;
+      }
+      // Ctrl+/ : toggle shortcuts help
+      if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key === '/') {
+        e.preventDefault(); toggleShortcutsHelp(); return;
+      }
+      // Escape : close shortcuts help if open
+      if (e.key === 'Escape' && shortcutsOverlay.classList.contains('visible')) {
+        e.preventDefault(); e.stopPropagation(); toggleShortcutsHelp(); return;
       }
       // Ctrl+Shift+F : toggle search
       if (e.ctrlKey && e.shiftKey && e.key === 'F') {
