@@ -1,0 +1,12 @@
+[project]
+name = "coda"
+version = "0.1.0"
+description = "CoWorking Developer Agents — browser-based terminal for Databricks"
+requires-python = ">=3.10"
+dependencies = [
+    "flask>=2.0",
+    "claude-agent-sdk",
+    "databricks-sdk>=0.20.0",
+    "mlflow[genai]>=3.4",
+    "opentelemetry-exporter-otlp-proto-grpc",
+]

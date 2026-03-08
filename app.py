@@ -15,15 +15,15 @@ from flask import Flask, send_from_directory, request, jsonify, session
 from werkzeug.utils import secure_filename
 from collections import deque
 
-import json as _json
+import tomllib
 
 from utils import ensure_https
 
-# App version (single source of truth: version.json)
-_version_file = os.path.join(os.path.dirname(__file__), 'version.json')
+# App version (single source of truth: pyproject.toml)
+_pyproject_file = os.path.join(os.path.dirname(__file__), 'pyproject.toml')
 try:
-    with open(_version_file) as _f:
-        APP_VERSION = _json.load(_f).get('version', '0.0.0')
+    with open(_pyproject_file, 'rb') as _f:
+        APP_VERSION = tomllib.load(_f)['project']['version']
 except Exception:
     APP_VERSION = '0.0.0'
 
