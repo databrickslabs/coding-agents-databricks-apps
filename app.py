@@ -63,6 +63,11 @@ def handle_sigterm(signum, frame):
         return
     shutting_down = True
     logger.info("SIGTERM received — setting shutting_down flag for clients")
+    # Notify WS clients immediately (HTTP poll clients will see shutting_down on next poll)
+    try:
+        socketio.emit('shutting_down', {})
+    except Exception:
+        pass
 
 # NOTE: Do not register SIGTERM handler at module level.
 # It is installed in initialize_app() for gunicorn only.
@@ -407,6 +412,18 @@ def handle_terminal_resize(data):
         fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
     except OSError as e:
         logger.warning(f"WebSocket resize error for {session_id}: {e}")
+
+
+@socketio.on('heartbeat')
+def handle_ws_heartbeat(data):
+    """Periodic keepalive from WS client — prevents idle session reaping (AC-17)."""
+    session_ids = data.get('session_ids', [])
+    now = time.time()
+    for sid in session_ids:
+        session = _get_session(sid)
+        if session:
+            with session["lock"]:
+                session["last_poll_time"] = now
 
 
 @socketio.on('disconnect')

@@ -880,6 +880,8 @@
     // ── WebSocket Connection (AC-10, AC-11, AC-14) ────────────────
     let socket = null;
     let wsConnected = false;
+    let wsHeartbeatTimer = null;
+    const WS_HEARTBEAT_INTERVAL = 30000; // 30s — well within 5-min session timeout
 
     function initWebSocket() {
       // Only init once; skip if Socket.IO client not loaded
@@ -900,11 +902,19 @@
             pollWorker.postMessage({ type: 'stop_poll', paneId: p.id });
           }
         });
+        // Start WS heartbeat — keeps idle sessions alive (replaces poll-worker keepalive)
+        if (wsHeartbeatTimer) clearInterval(wsHeartbeatTimer);
+        wsHeartbeatTimer = setInterval(() => {
+          const sids = getAllPanes().map(p => p.sessionId).filter(Boolean);
+          if (sids.length > 0) socket.emit('heartbeat', { session_ids: sids });
+        }, WS_HEARTBEAT_INTERVAL);
       });
 
       socket.on('disconnect', (reason) => {
         console.log('[ws] Disconnected:', reason);
         wsConnected = false;
+        // Stop WS heartbeat — poll-worker takes over keepalive
+        if (wsHeartbeatTimer) { clearInterval(wsHeartbeatTimer); wsHeartbeatTimer = null; }
         // Fall back to HTTP polling for all active panes (AC-14)
         getAllPanes().forEach(p => {
           if (p.sessionId) {
@@ -948,6 +958,13 @@
           pane.term.write('\r\n\x1b[33mSession closed by server.\x1b[0m\r\n');
           cleanupPane(pane);
         }
+      });
+
+      // Server shutting down (SIGTERM) — show message before WS drops
+      socket.on('shutting_down', () => {
+        getAllPanes().forEach(p => {
+          p.term.write('\r\n\x1b[33m\u26A0 App is restarting. Please reconnect shortly.\x1b[0m\r\n');
+        });
       });
     }
 
@@ -1021,6 +1038,12 @@
     // Switch worker to background/foreground on visibility change
     document.addEventListener('visibilitychange', () => {
       pollWorker.postMessage({ type: 'visibility_change', hidden: document.hidden });
+      // Immediate WS heartbeat on tab hide/show — prevents reaping during background
+      // (setInterval is throttled by browsers in background tabs, this ensures a fresh timestamp)
+      if (wsConnected && socket) {
+        const sids = getAllPanes().map(p => p.sessionId).filter(Boolean);
+        if (sids.length > 0) socket.emit('heartbeat', { session_ids: sids });
+      }
     });
 
     // sendBeacon heartbeat on pagehide as safety net before Worker dies
