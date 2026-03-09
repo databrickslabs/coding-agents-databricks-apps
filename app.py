@@ -11,7 +11,9 @@ import signal
 import time
 import copy
 import logging
+from concurrent.futures import ThreadPoolExecutor, wait
 from flask import Flask, send_from_directory, request, jsonify, session
+from flask_socketio import SocketIO, emit, join_room, leave_room, disconnect
 from werkzeug.utils import secure_filename
 from collections import deque
 
@@ -39,7 +41,11 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__, static_folder='static', static_url_path='/static')
 app.secret_key = os.urandom(24)
 
-# Store sessions: {session_id: {"master_fd": fd, "pid": pid, "output_buffer": deque}}
+# WebSocket support via Flask-SocketIO (simple-websocket transport, threading mode)
+socketio = SocketIO(app, async_mode='threading', cors_allowed_origins=[], logger=False, engineio_logger=False)
+
+# Store sessions: {session_id: {"master_fd": fd, "pid": pid, "output_buffer": deque, "lock": Lock, ...}}
+# sessions_lock guards dict-level ops (add/remove/iterate); each session["lock"] guards per-session state
 sessions = {}
 sessions_lock = threading.Lock()
 
@@ -228,6 +234,7 @@ def run_setup():
         setup_state["status"] = "running"
         setup_state["started_at"] = time.time()
 
+    # --- Sequential prerequisites (git identity + editor) ---
     # Git config — done directly in Python, not as a subprocess
     _update_step("git", status="running", started_at=time.time())
     try:
@@ -238,12 +245,23 @@ def run_setup():
 
     _run_step("micro", ["bash", "-c",
         "mkdir -p ~/.local/bin && bash install_micro.sh && mv micro ~/.local/bin/ 2>/dev/null || true"])
-    _run_step("claude", ["python", "setup_claude.py"])
-    _run_step("codex", ["python", "setup_codex.py"])
-    _run_step("opencode", ["python", "setup_opencode.py"])
-    _run_step("gemini", ["python", "setup_gemini.py"])
-    _run_step("databricks", ["python", "setup_databricks.py"])
-    _run_step("mlflow", ["python", "setup_mlflow.py"])
+
+    # --- Parallel agent setup (all independent of each other) ---
+    parallel_steps = [
+        ("claude",     ["python", "setup_claude.py"]),
+        ("codex",      ["python", "setup_codex.py"]),
+        ("opencode",   ["python", "setup_opencode.py"]),
+        ("gemini",     ["python", "setup_gemini.py"]),
+        ("databricks", ["python", "setup_databricks.py"]),
+        ("mlflow",     ["python", "setup_mlflow.py"]),
+    ]
+
+    with ThreadPoolExecutor(max_workers=len(parallel_steps)) as executor:
+        futures = [
+            executor.submit(_run_step, step_id, command)
+            for step_id, command in parallel_steps
+        ]
+        wait(futures)
 
     with setup_lock:
         any_error = any(s["status"] == "error" for s in setup_state["steps"])
@@ -293,10 +311,123 @@ def check_authorization():
     return True, None
 
 
-def read_pty_output(session_id, fd):
-    """Background thread to read PTY output into buffer."""
+def _check_ws_authorization():
+    """Check authorization for WebSocket connections using the same logic as HTTP."""
+    if not app_owner:
+        return True
+    # Socket.IO passes HTTP headers from the initial handshake via request context
+    current_user = request.headers.get("X-Forwarded-Email") or \
+                   request.headers.get("X-Forwarded-User") or \
+                   request.headers.get("X-Databricks-User-Email")
+    if not current_user:
+        return True
+    if current_user != app_owner:
+        logger.warning(f"WebSocket unauthorized: {current_user} (owner: {app_owner})")
+        return False
+    return True
+
+
+# ── WebSocket Event Handlers ──────────────────────────────────────────────
+
+@socketio.on('connect')
+def handle_ws_connect():
+    """Authenticate WebSocket connections (AC-3)."""
+    if not _check_ws_authorization():
+        disconnect()
+        return False
+    logger.info("WebSocket client connected")
+
+
+@socketio.on('join_session')
+def handle_join_session(data):
+    """Client joins a session room to receive output (AC-4)."""
+    session_id = data.get('session_id')
+    if not session_id:
+        return {'status': 'error', 'message': 'session_id required'}
+
+    session = _get_session(session_id)
+    if not session:
+        return {'status': 'error', 'message': 'Session not found'}
+
+    with session["lock"]:
+        session["last_poll_time"] = time.time()
+        session["output_buffer"].clear()  # Prevent duplicate output on WS↔HTTP switch
+
+    join_room(session_id)
+    logger.info(f"WebSocket client joined session room {session_id}")
+    return {'status': 'ok'}
+
+
+@socketio.on('leave_session')
+def handle_leave_session(data):
+    """Client leaves a session room (AC-5)."""
+    session_id = data.get('session_id')
+    if session_id:
+        leave_room(session_id)
+        logger.info(f"WebSocket client left session room {session_id}")
+
+
+@socketio.on('terminal_input')
+def handle_terminal_input(data):
+    """Receive keystrokes from client, write to PTY (AC-6)."""
+    session_id = data.get('session_id')
+    input_data = data.get('input', '')
+
+    session = _get_session(session_id)
+    if not session:
+        return
+
+    with session["lock"]:
+        session["last_poll_time"] = time.time()
+    fd = session["master_fd"]
+
+    try:
+        os.write(fd, input_data.encode())
+    except OSError as e:
+        logger.warning(f"WebSocket input write error for {session_id}: {e}")
+
+
+@socketio.on('terminal_resize')
+def handle_terminal_resize(data):
+    """Receive resize events from client (AC-7)."""
+    session_id = data.get('session_id')
+    cols = data.get('cols', 80)
+    rows = data.get('rows', 24)
+
+    session = _get_session(session_id)
+    if not session:
+        return
+
+    with session["lock"]:
+        session["last_poll_time"] = time.time()
+    fd = session["master_fd"]
+
+    try:
+        winsize = struct.pack("HHHH", rows, cols, 0, 0)
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
+    except OSError as e:
+        logger.warning(f"WebSocket resize error for {session_id}: {e}")
+
+
+@socketio.on('disconnect')
+def handle_ws_disconnect():
+    """Log WebSocket disconnections. Do NOT auto-close PTY — client may reconnect."""
+    logger.info("WebSocket client disconnected")
+
+
+def _get_session(session_id):
+    """Get a session dict reference under the global lock. Returns None if not found."""
     with sessions_lock:
-        pid = sessions[session_id]["pid"]
+        return sessions.get(session_id)
+
+
+def read_pty_output(session_id, fd):
+    """Background thread to read PTY output into buffer and push via WebSocket."""
+    session = _get_session(session_id)
+    if not session:
+        return
+    pid = session["pid"]
+    session_lock = session["lock"]
 
     while True:
         with sessions_lock:
@@ -309,9 +440,18 @@ def read_pty_output(session_id, fd):
                 if not output:
                     # EOF — process exited
                     break
-                with sessions_lock:
-                    if session_id in sessions:
-                        sessions[session_id]["output_buffer"].append(output.decode(errors="replace"))
+                decoded = output.decode(errors="replace")
+                with session_lock:
+                    # Buffer for HTTP polling fallback (AC-15)
+                    session["output_buffer"].append(decoded)
+                    session["last_poll_time"] = time.time()  # Keep session alive during WS output
+                # Push via WebSocket to the session room (AC-8)
+                try:
+                    socketio.emit('terminal_output',
+                                  {'session_id': session_id, 'output': decoded},
+                                  room=session_id)
+                except Exception:
+                    pass  # No WebSocket clients — HTTP polling handles it
             else:
                 # select timed out — check if process is still alive
                 try:
@@ -325,16 +465,27 @@ def read_pty_output(session_id, fd):
         except OSError:
             break
 
-    # Process exited or fd closed — mark session as exited for the poll endpoint
-    with sessions_lock:
-        if session_id in sessions:
-            sessions[session_id]["exited"] = True
-            logger.info(f"Session {session_id} process exited")
+    # Process exited or fd closed — notify WebSocket clients (AC-9) and mark for HTTP poll
+    try:
+        socketio.emit('session_exited', {'session_id': session_id}, room=session_id)
+    except Exception:
+        pass
+
+    with session_lock:
+        session["exited"] = True
+        logger.info(f"Session {session_id} process exited")
 
 
 def terminate_session(session_id, pid, master_fd):
     """Gracefully terminate a session: SIGHUP -> wait -> SIGKILL -> cleanup."""
     logger.info(f"Terminating stale session {session_id} (pid={pid})")
+
+    # Notify WebSocket clients that the session is closed
+    try:
+        socketio.emit('session_closed', {'session_id': session_id}, room=session_id)
+    except Exception:
+        pass
+
     try:
         os.kill(pid, signal.SIGHUP)
         time.sleep(GRACEFUL_SHUTDOWN_WAIT)
@@ -383,8 +534,8 @@ def cleanup_stale_sessions():
 @app.before_request
 def authorize_request():
     """Check authorization before processing any request."""
-    # Skip auth for health check and setup status
-    if request.path in ("/health", "/api/setup-status"):
+    # Skip auth for health check, setup status, and Socket.IO (has own auth via connect event)
+    if request.path in ("/health", "/api/setup-status") or request.path.startswith("/socket.io"):
         return None
 
     authorized, user = check_authorization()
@@ -479,6 +630,7 @@ def create_session():
                 "master_fd": master_fd,
                 "pid": pid,
                 "output_buffer": deque(maxlen=1000),
+                "lock": threading.Lock(),
                 "last_poll_time": time.time(),
                 "created_at": time.time()
             }
@@ -499,11 +651,11 @@ def send_input():
     session_id = data.get("session_id")
     input_data = data.get("input", "")
 
-    with sessions_lock:
-        if session_id not in sessions:
-            return jsonify({"error": "Session not found"}), 404
+    session = _get_session(session_id)
+    if not session:
+        return jsonify({"error": "Session not found"}), 404
 
-        fd = sessions[session_id]["master_fd"]
+    fd = session["master_fd"]
 
     try:
         os.write(fd, input_data.encode())
@@ -548,17 +700,19 @@ def get_output():
     data = request.json
     session_id = data.get("session_id")
 
-    with sessions_lock:
-        if session_id not in sessions:
-            return jsonify({"error": "Session not found"}), 404
+    session = _get_session(session_id)
+    if not session:
+        return jsonify({"error": "Session not found"}), 404
 
-        session = sessions[session_id]
+    with session["lock"]:
         session["last_poll_time"] = time.time()
-        buffer = session["output_buffer"]
-        output = "".join(buffer)
-        buffer.clear()
+        # Atomic buffer swap: replace buffer, then join outside the lock
+        old_buffer = session["output_buffer"]
+        session["output_buffer"] = deque(maxlen=1000)
         exited = session.get("exited", False)
         timeout_warning = session.pop("timeout_warning", False)
+
+    output = "".join(old_buffer)
 
     return jsonify({"output": output, "exited": exited, "shutting_down": shutting_down, "timeout_warning": timeout_warning})
 
@@ -604,10 +758,12 @@ def heartbeat():
     """Lightweight keep-alive — resets timeout without draining output buffer."""
     data = request.json
     session_id = data.get("session_id")
-    with sessions_lock:
-        if session_id not in sessions:
-            return jsonify({"error": "Session not found"}), 404
-        session = sessions[session_id]
+
+    session = _get_session(session_id)
+    if not session:
+        return jsonify({"error": "Session not found"}), 404
+
+    with session["lock"]:
         session["last_poll_time"] = time.time()
         timeout_warning = session.pop("timeout_warning", False)
     return jsonify({"status": "ok", "timeout_warning": timeout_warning})
@@ -621,10 +777,11 @@ def resize_terminal():
     cols = data.get("cols", 80)
     rows = data.get("rows", 24)
 
-    with sessions_lock:
-        if session_id not in sessions:
-            return jsonify({"error": "Session not found"}), 404
-        fd = sessions[session_id]["master_fd"]
+    session = _get_session(session_id)
+    if not session:
+        return jsonify({"error": "Session not found"}), 404
+
+    fd = session["master_fd"]
 
     try:
         # Set terminal size using TIOCSWINSZ
@@ -644,12 +801,12 @@ def close_session():
     if not session_id:
         return jsonify({"error": "session_id required"}), 400
 
-    with sessions_lock:
-        session = sessions.get(session_id)
-        if not session:
-            return jsonify({"status": "ok", "detail": "session not found"})
-        pid = session["pid"]
-        master_fd = session["master_fd"]
+    session = _get_session(session_id)
+    if not session:
+        return jsonify({"status": "ok", "detail": "session not found"})
+
+    pid = session["pid"]
+    master_fd = session["master_fd"]
 
     terminate_session(session_id, pid, master_fd)
     logger.info(f"Session {session_id} closed by client")
@@ -693,4 +850,4 @@ if __name__ == "__main__":
     initialize_app(local_dev=True)
     shutting_down = False  # safety net: ensure clean state before serving
     port = int(os.environ.get("DATABRICKS_APP_PORT", 8000))
-    app.run(host="0.0.0.0", port=port, threaded=True)
+    socketio.run(app, host="0.0.0.0", port=port, allow_unsafe_werkzeug=True)
