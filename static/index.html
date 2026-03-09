@@ -894,7 +894,7 @@
         console.log('[ws] Connected');
         wsConnected = true;
         // Re-join rooms for all active panes and stop their HTTP polling (AC-16)
-        panes.forEach(p => {
+        getAllPanes().forEach(p => {
           if (p.sessionId) {
             socket.emit('join_session', { session_id: p.sessionId });
             pollWorker.postMessage({ type: 'stop_poll', paneId: p.id });
@@ -906,7 +906,7 @@
         console.log('[ws] Disconnected:', reason);
         wsConnected = false;
         // Fall back to HTTP polling for all active panes (AC-14)
-        panes.forEach(p => {
+        getAllPanes().forEach(p => {
           if (p.sessionId) {
             pollWorker.postMessage({ type: 'start_poll', paneId: p.id, sessionId: p.sessionId });
           }
@@ -917,7 +917,7 @@
         console.log('[ws] Connection error:', err.message);
         wsConnected = false;
         // Ensure HTTP polling is running as fallback (AC-14)
-        panes.forEach(p => {
+        getAllPanes().forEach(p => {
           if (p.sessionId) {
             pollWorker.postMessage({ type: 'start_poll', paneId: p.id, sessionId: p.sessionId });
           }
@@ -926,7 +926,7 @@
 
       // Receive terminal output pushed from server (AC-8)
       socket.on('terminal_output', (data) => {
-        const pane = panes.find(p => p.sessionId === data.session_id);
+        const pane = getAllPanes().find(p => p.sessionId === data.session_id);
         if (pane && data.output) {
           pane.term.write(data.output);
         }
@@ -934,7 +934,7 @@
 
       // Receive session exited notification (AC-9)
       socket.on('session_exited', (data) => {
-        const pane = panes.find(p => p.sessionId === data.session_id);
+        const pane = getAllPanes().find(p => p.sessionId === data.session_id);
         if (pane) {
           pane.term.write('\r\n\x1b[33mShell process exited.\x1b[0m\r\n');
           cleanupPane(pane);
@@ -943,7 +943,7 @@
 
       // Receive session closed notification (server-side cleanup)
       socket.on('session_closed', (data) => {
-        const pane = panes.find(p => p.sessionId === data.session_id);
+        const pane = getAllPanes().find(p => p.sessionId === data.session_id);
         if (pane) {
           pane.term.write('\r\n\x1b[33mSession closed by server.\x1b[0m\r\n');
           cleanupPane(pane);
