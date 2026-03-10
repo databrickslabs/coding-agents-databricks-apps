@@ -1065,7 +1065,8 @@
         if (wsConnected && socket) {
           socket.emit('leave_session', { session_id: pane.sessionId });
         }
-        navigator.sendBeacon('/api/session/close', JSON.stringify({ session_id: pane.sessionId }));
+        navigator.sendBeacon('/api/session/close',
+          new Blob([JSON.stringify({ session_id: pane.sessionId })], { type: 'application/json' }));
         pane.sessionId = null;
       }
     }
