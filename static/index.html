@@ -377,6 +377,7 @@
   <script src="/static/lib/addon-web-links.js"></script>
   <script src="/static/lib/addon-search.js"></script>
   <script src="/static/lib/addon-image.js"></script>
+  <script src="/static/lib/socket.io.min.js"></script>
   <script>
     // ── Theme Presets ──────────────────────────────────────────────
     const themes = {
@@ -876,25 +877,126 @@
       return data.session_id;
     }
 
+    // ── WebSocket Connection (AC-10, AC-11, AC-14) ────────────────
+    let socket = null;
+    let wsConnected = false;
+    let wsHeartbeatTimer = null;
+    const WS_HEARTBEAT_INTERVAL = 30000; // 30s — well within 5-min session timeout
+
+    function initWebSocket() {
+      // Only init once; skip if Socket.IO client not loaded
+      if (socket || typeof io === 'undefined') {
+        console.log('[ws] Socket.IO client not available, using HTTP polling');
+        return;
+      }
+
+      socket = io({ transports: ['websocket', 'polling'] });
+
+      socket.on('connect', () => {
+        console.log('[ws] Connected');
+        wsConnected = true;
+        // Re-join rooms for all active panes and stop their HTTP polling (AC-16)
+        getAllPanes().forEach(p => {
+          if (p.sessionId) {
+            socket.emit('join_session', { session_id: p.sessionId });
+            pollWorker.postMessage({ type: 'stop_poll', paneId: p.id });
+          }
+        });
+        // Start WS heartbeat — keeps idle sessions alive (replaces poll-worker keepalive)
+        if (wsHeartbeatTimer) clearInterval(wsHeartbeatTimer);
+        wsHeartbeatTimer = setInterval(() => {
+          const sids = getAllPanes().map(p => p.sessionId).filter(Boolean);
+          if (sids.length > 0) socket.emit('heartbeat', { session_ids: sids });
+        }, WS_HEARTBEAT_INTERVAL);
+      });
+
+      socket.on('disconnect', (reason) => {
+        console.log('[ws] Disconnected:', reason);
+        wsConnected = false;
+        // Stop WS heartbeat — poll-worker takes over keepalive
+        if (wsHeartbeatTimer) { clearInterval(wsHeartbeatTimer); wsHeartbeatTimer = null; }
+        // Fall back to HTTP polling for all active panes (AC-14)
+        getAllPanes().forEach(p => {
+          if (p.sessionId) {
+            pollWorker.postMessage({ type: 'start_poll', paneId: p.id, sessionId: p.sessionId });
+          }
+        });
+      });
+
+      socket.on('connect_error', (err) => {
+        console.log('[ws] Connection error:', err.message);
+        wsConnected = false;
+        // Ensure HTTP polling is running as fallback (AC-14)
+        getAllPanes().forEach(p => {
+          if (p.sessionId) {
+            pollWorker.postMessage({ type: 'start_poll', paneId: p.id, sessionId: p.sessionId });
+          }
+        });
+      });
+
+      // Receive terminal output pushed from server (AC-8)
+      socket.on('terminal_output', (data) => {
+        const pane = getAllPanes().find(p => p.sessionId === data.session_id);
+        if (pane && data.output) {
+          pane.term.write(data.output);
+        }
+      });
+
+      // Receive session exited notification (AC-9)
+      socket.on('session_exited', (data) => {
+        const pane = getAllPanes().find(p => p.sessionId === data.session_id);
+        if (pane) {
+          pane.term.write('\r\n\x1b[33mShell process exited.\x1b[0m\r\n');
+          cleanupPane(pane);
+        }
+      });
+
+      // Receive session closed notification (server-side cleanup)
+      socket.on('session_closed', (data) => {
+        const pane = getAllPanes().find(p => p.sessionId === data.session_id);
+        if (pane) {
+          pane.term.write('\r\n\x1b[33mSession closed by server.\x1b[0m\r\n');
+          cleanupPane(pane);
+        }
+      });
+
+      // Server shutting down (SIGTERM) — show message before WS drops
+      socket.on('shutting_down', () => {
+        getAllPanes().forEach(p => {
+          p.term.write('\r\n\x1b[33m\u26A0 App is restarting. Please reconnect shortly.\x1b[0m\r\n');
+        });
+      });
+    }
+
+    // Send input via WebSocket if connected, else HTTP fallback (AC-12)
     async function sendInput(input, sid) {
       if (!sid) return;
-      await fetch('/api/input', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sid, input: input })
-      });
+      if (wsConnected && socket) {
+        socket.emit('terminal_input', { session_id: sid, input: input });
+      } else {
+        await fetch('/api/input', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: sid, input: input })
+        });
+      }
     }
 
+    // Send resize via WebSocket if connected, else HTTP fallback (AC-13)
     async function sendResize(cols, rows, sid) {
       if (!sid) return;
-      await fetch('/api/resize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sid, cols: cols, rows: rows })
-      });
+      if (wsConnected && socket) {
+        socket.emit('terminal_resize', { session_id: sid, cols: cols, rows: rows });
+      } else {
+        await fetch('/api/resize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: sid, cols: cols, rows: rows })
+        });
+      }
     }
 
-    // ── Web Worker for polling ──────────────────────────────────────
+    // ── Web Worker for polling (HTTP fallback) ──────────────────────
     const pollWorker = new Worker('/static/poll-worker.js');
 
     pollWorker.onmessage = function(event) {
@@ -906,16 +1008,16 @@
         case 'output': {
           const data = msg.data;
           if (data.timeout_warning) {
-            pane.term.write('\r\n\x1b[33m⚠ Session idle — will terminate soon if no activity.\x1b[0m\r\n');
+            pane.term.write('\r\n\x1b[33m\u26A0 Session idle \u2014 will terminate soon if no activity.\x1b[0m\r\n');
           }
           if (data.output) pane.term.write(data.output);
           break;
         }
         case 'session_ended':
           if (msg.reason === 'auth_expired') {
-            pane.term.write('\r\n\x1b[33m⚠ Authentication expired. Please refresh the page to re-authenticate.\x1b[0m\r\n');
+            pane.term.write('\r\n\x1b[33m\u26A0 Authentication expired. Please refresh the page to re-authenticate.\x1b[0m\r\n');
           } else if (msg.reason === 'shutting_down') {
-            pane.term.write('\r\n\x1b[33m⚠ App is restarting. Please reconnect shortly.\x1b[0m\r\n');
+            pane.term.write('\r\n\x1b[33m\u26A0 App is restarting. Please reconnect shortly.\x1b[0m\r\n');
           } else {
             pane.term.write('\r\n\x1b[33mShell process exited.\x1b[0m\r\n');
           }
@@ -923,7 +1025,7 @@
           break;
         case 'connection_status':
           if (msg.status === 'reconnecting') {
-            pane.term.write(`\r\n\x1b[33m⚠ Connection lost. Retrying (${msg.attempt}/${msg.maxAttempts})...\x1b[0m\r\n`);
+            pane.term.write(`\r\n\x1b[33m\u26A0 Connection lost. Retrying (${msg.attempt}/${msg.maxAttempts})...\x1b[0m\r\n`);
           }
           break;
         case 'session_dead':
@@ -936,6 +1038,12 @@
     // Switch worker to background/foreground on visibility change
     document.addEventListener('visibilitychange', () => {
       pollWorker.postMessage({ type: 'visibility_change', hidden: document.hidden });
+      // Immediate WS heartbeat on tab hide/show — prevents reaping during background
+      // (setInterval is throttled by browsers in background tabs, this ensures a fresh timestamp)
+      if (wsConnected && socket) {
+        const sids = getAllPanes().map(p => p.sessionId).filter(Boolean);
+        if (sids.length > 0) socket.emit('heartbeat', { session_ids: sids });
+      }
     });
 
     // sendBeacon heartbeat on pagehide as safety net before Worker dies
@@ -953,7 +1061,12 @@
     function cleanupPane(pane) {
       pollWorker.postMessage({ type: 'stop_poll', paneId: pane.id });
       if (pane.sessionId) {
-        navigator.sendBeacon('/api/session/close', JSON.stringify({ session_id: pane.sessionId }));
+        // Leave WebSocket room if connected
+        if (wsConnected && socket) {
+          socket.emit('leave_session', { session_id: pane.sessionId });
+        }
+        navigator.sendBeacon('/api/session/close',
+          new Blob([JSON.stringify({ session_id: pane.sessionId })], { type: 'application/json' }));
         pane.sessionId = null;
       }
     }
@@ -1037,7 +1150,13 @@
 
       const pane = { id, element, term, fitAddon, searchAddon, sessionId: sid };
       term.onData(data => sendInput(data, pane.sessionId));
-      pollWorker.postMessage({ type: 'start_poll', paneId: id, sessionId: sid });
+
+      // Join WebSocket room if connected; otherwise start HTTP polling (AC-11, AC-16)
+      if (wsConnected && socket) {
+        socket.emit('join_session', { session_id: sid });
+      } else {
+        pollWorker.postMessage({ type: 'start_poll', paneId: id, sessionId: sid });
+      }
 
       // Click to focus
       element.addEventListener('mousedown', () => focusPane(id));
@@ -1484,6 +1603,9 @@
 
         if (typeof Terminal === 'undefined') throw new Error('xterm.js not loaded');
         if (typeof FitAddon === 'undefined') throw new Error('FitAddon not loaded');
+
+        // Initialize WebSocket connection (falls back to HTTP polling if unavailable)
+        initWebSocket();
 
         await createTab();
 

@@ -1,4 +1,6 @@
 flask>=2.0
+flask-socketio>=5.3
+simple-websocket>=1.0
 claude-agent-sdk
 databricks-sdk>=0.20.0
 mlflow[genai]>=3.4
