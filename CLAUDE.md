@@ -75,6 +75,10 @@ Before starting any new project or documentation:
 
 3. **Then start working** - your commits will be backed up to Workspace
 
+## Architecture
+
+Real-time terminal I/O over **WebSocket** (Flask-SocketIO) with automatic **HTTP polling fallback** via a Web Worker. Single gunicorn worker (PTY fds are process-local), 16 gthread threads. Per-session locks for WebSocket handlers; parallel agent setup at startup via ThreadPoolExecutor.
+
 ## Quick Start
 
 - Projects sync to Databricks Workspace on git commit
