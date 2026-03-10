@@ -53,6 +53,9 @@ This isn't just a terminal in the cloud. Running coding agents on Databricks giv
 |---|---|
 | 🎨 **8 Themes** | Dracula, Nord, Solarized, Monokai, GitHub Dark, and more |
 | ✂️ **Split Panes** | Run two sessions side by side with a draggable divider |
+| 🌐 **WebSocket I/O** | Real-time terminal output over WebSocket — zero-latency, eliminates polling delay |
+| 🔁 **HTTP Polling Fallback** | Automatic fallback via Web Worker when WebSocket is unavailable |
+| 🚀 **Parallel Setup** | 6 agent setups run in parallel (~5x faster startup) |
 | 🔍 **Search** | Find anything in your terminal history (Ctrl+Shift+F) |
 | 🎤 **Voice Input** | Dictate commands with your mic (Option+V) |
 | 📋 **Image Paste** | Paste or drag-and-drop images into the terminal — saved to `~/uploads/`, path inserted automatically |
@@ -207,16 +210,19 @@ This template repo opens that vision up for every Databricks user — no IDE set
 <summary><strong>🏗️ Architecture</strong></summary>
 
 ```
-┌─────────────────────┐     HTTP      ┌─────────────────────┐
-│   Browser Client    │◄────────────►│   Gunicorn + Flask   │
-│   (xterm.js)        │   Polling     │   (PTY Manager)     │
+┌─────────────────────┐  WebSocket    ┌─────────────────────┐
+│   Browser Client    │◄═══════════►│   Gunicorn + Flask   │
+│   (xterm.js)        │  (primary)    │   + Flask-SocketIO   │
+│                     │───────────►│   (PTY Manager)      │
+│                     │  HTTP Poll    │                     │
+│                     │  (fallback)   │                     │
 └─────────────────────┘               └─────────────────────┘
          │                                     │
          │ on first load                       │ on startup
          ▼                                     ▼
 ┌─────────────────────┐               ┌─────────────────────┐
 │   Loading Screen    │               │   Background Setup  │
-│   (snake game)      │               │   (8 setup steps)   │
+│   (snake game)      │               │   (8 steps, 6 ║)    │
 └─────────────────────┘               └─────────────────────┘
                                                │
                                                ▼
@@ -230,7 +236,7 @@ This template repo opens that vision up for every Databricks user — no IDE set
 
 1. Gunicorn starts, calls `initialize_app()` via `post_worker_init` hook
 2. App immediately serves the loading screen (snake game)
-3. Background thread runs setup: git config, micro editor, Claude CLI, Codex CLI, OpenCode, Gemini CLI, Databricks CLI, MLflow tracing
+3. Background thread runs setup: git config and micro editor run sequentially, then 6 agent setups (Claude, Codex, OpenCode, Gemini, Databricks CLI, MLflow) run in parallel via `ThreadPoolExecutor`
 4. `/api/setup-status` endpoint reports progress to the loading screen
 5. Once complete, the loading screen transitions to the terminal UI
 
@@ -241,12 +247,29 @@ This template repo opens that vision up for every Databricks user — no IDE set
 | `/` | GET | Loading screen (during setup) or terminal UI |
 | `/health` | GET | Health check with session count and setup status |
 | `/api/setup-status` | GET | Setup progress for loading screen |
+| `/api/version` | GET | App version |
 | `/api/session` | POST | Create new terminal session |
 | `/api/input` | POST | Send input to terminal |
-| `/api/output` | POST | Poll for terminal output |
+| `/api/output` | POST | Poll for terminal output (single session) |
+| `/api/output-batch` | POST | Batch poll output for multiple sessions |
+| `/api/heartbeat` | POST | Lightweight keepalive (no buffer drain) |
 | `/api/resize` | POST | Resize terminal dimensions |
 | `/api/upload` | POST | Upload file (clipboard image paste) |
 | `/api/session/close` | POST | Close terminal session |
+
+### WebSocket Events (Socket.IO)
+
+| Event | Direction | Description |
+|-------|-----------|-------------|
+| `join_session` | Client → Server | Join session room for output delivery |
+| `leave_session` | Client → Server | Leave session room |
+| `terminal_input` | Client → Server | Send keystrokes to PTY |
+| `terminal_resize` | Client → Server | Resize terminal |
+| `heartbeat` | Client → Server | Keepalive for idle sessions |
+| `terminal_output` | Server → Client | Push PTY output in real time |
+| `session_exited` | Server → Client | Shell process exited |
+| `session_closed` | Server → Client | Session terminated by server |
+| `shutting_down` | Server → Client | Server restarting (SIGTERM) |
 
 </details>
 
@@ -270,7 +293,7 @@ Single-user app — each user deploys their own instance with their own PAT. Onl
 
 ### Gunicorn
 
-Production uses `workers=1` (PTY state is process-local), `threads=8` (concurrent polling), `gthread` worker class.
+Production uses `workers=1` (PTY state is process-local), `threads=16` (concurrent polling + WebSocket), `gthread` worker class, `timeout=60` (long-lived WebSocket connections).
 
 </details>
 
@@ -291,14 +314,19 @@ coding-agents-in-databricks/
 ├── setup_mlflow.py          # MLflow tracing auto-configuration
 ├── sync_to_workspace.py     # Post-commit hook: sync to Workspace
 ├── install_micro.sh         # Micro editor installer
+├── utils.py                 # Utility functions (ensure_https)
 ├── static/
-│   ├── index.html           # Terminal UI (xterm.js + split panes)
+│   ├── index.html           # Terminal UI (xterm.js + split panes + WebSocket)
 │   ├── loading.html         # Loading screen with snake game
-│   └── lib/                 # xterm.js library files
+│   ├── poll-worker.js       # Web Worker for HTTP polling fallback
+│   └── lib/
+│       ├── xterm.js         # xterm.js terminal emulator
+│       └── socket.io.min.js # Vendored Socket.IO client
 ├── .claude/
 │   └── skills/              # 39 pre-installed skills
 └── docs/
     ├── deployment.md        # Full Databricks Apps deployment guide
+    ├── prd/                 # Product requirement documents
     └── plans/               # Design documentation
 ```
 
@@ -308,4 +336,4 @@ coding-agents-in-databricks/
 
 ## Technologies
 
-Flask · Gunicorn · xterm.js · Python PTY · Databricks SDK · Databricks AI Gateway · MLflow
+Flask · Flask-SocketIO · Socket.IO · Gunicorn · xterm.js · Python PTY · Databricks SDK · Databricks AI Gateway · MLflow
