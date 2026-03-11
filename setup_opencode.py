@@ -1,11 +1,21 @@
 #!/usr/bin/env python
-"""Configure OpenCode CLI with Databricks Model Serving as an OpenAI-compatible provider."""
+"""Configure OpenCode CLI with Databricks Model Serving (via content-filter proxy) local proxy.
+
+Routes requests through a local content-filter proxy proxy (localhost:4000) which sanitizes empty
+text content blocks before forwarding to Databricks AI Gateway. This fixes OpenCode
+issue #5028 where empty content blocks cause "Bad Request" errors.
+See docs/plans/2026-03-11-litellm-empty-content-blocks-design.md for details.
+"""
 import os
 import json
 import subprocess
 from pathlib import Path
 
 from utils import ensure_https
+
+# content-filter proxy local proxy — sanitizes empty content blocks before reaching Databricks
+# (see https://github.com/sst/opencode/issues/5028)
+CONTENT_FILTER_PROXY_URL = "http://127.0.0.1:4000"
 
 # Set HOME if not properly set
 if not os.environ.get("HOME") or os.environ["HOME"] == "/":
@@ -54,6 +64,17 @@ if not opencode_bin.exists():
         print(f"OpenCode CLI installed to {opencode_bin}")
     else:
         print(f"OpenCode install warning: {result.stderr}")
+
+    # Install @ai-sdk/openai for GPT models (Responses API support)
+    result = subprocess.run(
+        ["npm", "install", "-g", f"--prefix={npm_prefix}", "@ai-sdk/openai"],
+        capture_output=True, text=True,
+        env={**os.environ, "HOME": str(home)}
+    )
+    if result.returncode == 0:
+        print("@ai-sdk/openai installed (Responses API support)")
+    else:
+        print(f"@ai-sdk/openai install warning: {result.stderr}")
 else:
     print(f"OpenCode CLI already installed at {opencode_bin}")
 
@@ -64,18 +85,17 @@ opencode_config_dir = home / ".config" / "opencode"
 opencode_config_dir.mkdir(parents=True, exist_ok=True)
 
 if gateway_host:
-    # Gateway mode: separate providers for different API protocols
-    # SDK auto-appends /chat/completions and /responses to baseURL
-    # - Anthropic/Gemini models: baseURL={gateway}/mlflow/v1 → /mlflow/v1/chat/completions
-    # - OpenAI/GPT models: baseURL={gateway}/openai/v1 → /openai/v1/responses
+    # Gateway mode: route through content-filter proxy proxy for content block sanitization
+    # content-filter proxy forwards clean requests to Databricks AI Gateway
+    # OpenAI/GPT models go direct (not affected by the empty content block bug)
     opencode_config = {
         "$schema": "https://opencode.ai/config.json",
         "provider": {
             "databricks": {
                 "npm": "@ai-sdk/openai-compatible",
-                "name": "Databricks AI Gateway (MLflow)",
+                "name": "Databricks AI Gateway (via content-filter proxy)",
                 "options": {
-                    "baseURL": f"{gateway_host}/mlflow/v1",
+                    "baseURL": CONTENT_FILTER_PROXY_URL,
                     "apiKey": "{env:DATABRICKS_TOKEN}"
                 },
                 "models": {
@@ -117,11 +137,12 @@ if gateway_host:
                 }
             },
             "databricks-openai": {
-                "npm": "@ai-sdk/openai-compatible",
+                "npm": "@ai-sdk/openai",
                 "name": "Databricks AI Gateway (OpenAI)",
                 "options": {
                     "baseURL": f"{gateway_host}/openai/v1",
-                    "apiKey": "{env:DATABRICKS_TOKEN}"
+                    "apiKey": "{env:DATABRICKS_TOKEN}",
+                    "compatibility": "compatible"
                 },
                 "models": {
                     "databricks-gpt-5-2-codex": {
@@ -141,18 +162,32 @@ if gateway_host:
                 }
             }
         },
+        "mcp": {
+            "deepwiki": {
+                "type": "remote",
+                "url": "https://mcp.deepwiki.com/mcp",
+                "enabled": True,
+                "oauth": False
+            },
+            "exa": {
+                "type": "remote",
+                "url": "https://mcp.exa.ai/mcp",
+                "enabled": True
+            }
+        },
         "model": f"databricks/{anthropic_model}"
     }
 else:
-    # Fallback: current gateway using DATABRICKS_HOST /serving-endpoints (OpenAI-compatible)
+    # Fallback: route through content-filter proxy proxy for content block sanitization
+    # content-filter proxy forwards clean requests to Databricks serving endpoints
     opencode_config = {
         "$schema": "https://opencode.ai/config.json",
         "provider": {
             "databricks": {
                 "npm": "@ai-sdk/openai-compatible",
-                "name": "Databricks Model Serving",
+                "name": "Databricks Model Serving (via content-filter proxy)",
                 "options": {
-                    "baseURL": f"{host}/serving-endpoints",
+                    "baseURL": CONTENT_FILTER_PROXY_URL,
                     "apiKey": "{env:DATABRICKS_TOKEN}"
                 },
                 "models": {
@@ -192,6 +227,19 @@ else:
                         }
                     },
                 }
+            }
+        },
+        "mcp": {
+            "deepwiki": {
+                "type": "remote",
+                "url": "https://mcp.deepwiki.com/mcp",
+                "enabled": True,
+                "oauth": False
+            },
+            "exa": {
+                "type": "remote",
+                "url": "https://mcp.exa.ai/mcp",
+                "enabled": True
             }
         },
         "model": f"databricks/{anthropic_model}"

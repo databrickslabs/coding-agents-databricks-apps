@@ -83,6 +83,7 @@ setup_state = {
     "steps": [
         {"id": "git",        "label": "Configuring git identity",     "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "micro",      "label": "Installing micro editor",      "status": "pending", "started_at": None, "completed_at": None, "error": None},
+        {"id": "proxy",   "label": "Starting content-filter proxy", "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "claude",     "label": "Configuring Claude CLI",       "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "codex",      "label": "Configuring Codex CLI",        "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "opencode",   "label": "Configuring OpenCode CLI",     "status": "pending", "started_at": None, "completed_at": None, "error": None},
@@ -251,6 +252,11 @@ def run_setup():
     _run_step("micro", ["bash", "-c",
         "mkdir -p ~/.local/bin && bash install_micro.sh && mv micro ~/.local/bin/ 2>/dev/null || true"])
 
+    # --- Content-filter proxy (must be running before OpenCode starts) ---
+    # Sanitizes requests/responses between OpenCode and Databricks
+    # (see OpenCode #5028, docs/plans/2026-03-11-litellm-empty-content-blocks-design.md)
+    _run_step("proxy", ["python", "setup_proxy.py"])
+
     # --- Parallel agent setup (all independent of each other) ---
     parallel_steps = [
         ("claude",     ["python", "setup_claude.py"]),
@@ -296,16 +302,33 @@ def get_request_user():
            request.headers.get("X-Databricks-User-Email")
 
 
+def _is_databricks_apps():
+    """Detect if we're running on Databricks Apps (not local dev)."""
+    return os.environ.get("DATABRICKS_APP_PORT") or os.path.isdir("/app/python/source_code")
+
+
 def check_authorization():
-    """Check if the current user is authorized to access the app."""
-    # If owner not set (local dev or SDK unavailable), allow access
+    """Check if the current user is authorized to access the app.
+
+    Fails CLOSED on Databricks Apps: if we can't determine the owner,
+    deny all access rather than allowing unauthenticated terminal access.
+    Fails open only for local development.
+    Fixes: https://github.com/datasciencemonkey/coding-agents-databricks-apps/issues/57
+    """
+    # Fail closed on Databricks Apps if owner couldn't be resolved
     if not app_owner:
-        return True, None
+        if _is_databricks_apps():
+            logger.error("SECURITY: app_owner not resolved — denying all access (fail-closed)")
+            return False, "unknown"
+        return True, None  # Local dev only
 
     current_user = get_request_user()
 
     # If no user identity in request (local dev), allow access
     if not current_user:
+        if _is_databricks_apps():
+            logger.warning("No user identity in request on Databricks Apps — denying access")
+            return False, "unknown"
         return True, None
 
     # Check if current user is the owner
@@ -571,6 +594,21 @@ def set_security_headers(response):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    # CSP: restrict scripts to self + inline (needed for embedded <script> block),
+    # styles to self + inline, block all other sources. Prevents external script injection.
+    # connect-src allows WebSocket + API calls to self.
+    # Fixes: https://github.com/datasciencemonkey/coding-agents-databricks-apps/issues/58
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'none'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "font-src 'self'; "
+        "connect-src 'self' ws: wss:; "
+        "frame-ancestors 'none'; "
+        "base-uri 'self'; "
+        "form-action 'self'"
+    )
     return response
 
 
