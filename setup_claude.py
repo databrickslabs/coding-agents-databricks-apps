@@ -1,5 +1,6 @@
 import os
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -86,7 +87,23 @@ if not claude_bin.exists():
 else:
     print(f"Claude Code CLI already installed at {claude_bin}")
 
-# 4. Create projects directory
+# 4. Copy subagent definitions to ~/.claude/agents/
+# These enable TDD workflow: prd-writer → test-generator → implementer → build-feature
+agents_src = Path(__file__).parent / "agents"
+agents_dst = claude_dir / "agents"
+agents_dst.mkdir(exist_ok=True)
+
+if agents_src.exists():
+    copied = []
+    for agent_file in agents_src.glob("*.md"):
+        shutil.copy2(str(agent_file), str(agents_dst / agent_file.name))
+        copied.append(agent_file.name)
+    if copied:
+        print(f"Subagents installed: {', '.join(copied)}")
+else:
+    print("No agents directory found, skipping subagent setup")
+
+# 5. Create projects directory
 projects_dir = home / "projects"
 projects_dir.mkdir(exist_ok=True)
 print(f"Projects directory: {projects_dir}")
