@@ -893,21 +893,52 @@
       socket = io({ transports: ['websocket', 'polling'] });
 
       socket.on('connect', () => {
-        console.log('[ws] Connected');
-        wsConnected = true;
-        // Re-join rooms for all active panes and stop their HTTP polling (AC-16)
+        // Check actual transport — Socket.IO reports connected=true even on long-polling
+        // through Databricks proxy. Only stop poll-worker for true WebSocket.
+        const transport = socket.io.engine.transport.name;
+        const isTrueWS = transport === 'websocket';
+        console.log(`[ws] Connected (transport: ${transport}, trueWS: ${isTrueWS})`);
+
+        // Always join rooms regardless of transport
         getAllPanes().forEach(p => {
           if (p.sessionId) {
             socket.emit('join_session', { session_id: p.sessionId });
-            pollWorker.postMessage({ type: 'stop_poll', paneId: p.id });
           }
         });
-        // Start WS heartbeat — keeps idle sessions alive (replaces poll-worker keepalive)
-        if (wsHeartbeatTimer) clearInterval(wsHeartbeatTimer);
-        wsHeartbeatTimer = setInterval(() => {
-          const sids = getAllPanes().map(p => p.sessionId).filter(Boolean);
-          if (sids.length > 0) socket.emit('heartbeat', { session_ids: sids });
-        }, WS_HEARTBEAT_INTERVAL);
+
+        if (isTrueWS) {
+          wsConnected = true;
+          // Only stop poll-worker when we have a real WebSocket
+          getAllPanes().forEach(p => {
+            if (p.id) pollWorker.postMessage({ type: 'stop_poll', paneId: p.id });
+          });
+          // Start WS heartbeat — keeps idle sessions alive (replaces poll-worker keepalive)
+          if (wsHeartbeatTimer) clearInterval(wsHeartbeatTimer);
+          wsHeartbeatTimer = setInterval(() => {
+            const sids = getAllPanes().map(p => p.sessionId).filter(Boolean);
+            if (sids.length > 0) socket.emit('heartbeat', { session_ids: sids });
+          }, WS_HEARTBEAT_INTERVAL);
+        } else {
+          console.log('[ws] Connected via polling — keeping poll-worker active');
+          // Don't set wsConnected — poll-worker stays active as primary transport
+        }
+
+        // Listen for late upgrade from polling → websocket
+        socket.io.engine.on('upgrade', (transport) => {
+          console.log(`[ws] Transport upgraded to: ${transport.name}`);
+          if (transport.name === 'websocket') {
+            wsConnected = true;
+            getAllPanes().forEach(p => {
+              if (p.id) pollWorker.postMessage({ type: 'stop_poll', paneId: p.id });
+            });
+            if (!wsHeartbeatTimer) {
+              wsHeartbeatTimer = setInterval(() => {
+                const sids = getAllPanes().map(p => p.sessionId).filter(Boolean);
+                if (sids.length > 0) socket.emit('heartbeat', { session_ids: sids });
+              }, WS_HEARTBEAT_INTERVAL);
+            }
+          }
+        });
       });
 
       socket.on('disconnect', (reason) => {
