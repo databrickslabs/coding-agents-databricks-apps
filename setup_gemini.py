@@ -60,7 +60,7 @@ if not gemini_bin.exists():
     # Use --prefix ~/.local so npm installs directly into ~/.local/bin (avoids EACCES on /usr/local)
     npm_prefix = str(home / ".local")
     gemini_version = get_npm_version("@google/gemini-cli")
-    gemini_pkg = f"@google/gemini-cli@{gemini_version}" if gemini_version else "@google/gemini-cli@nightly"
+    gemini_pkg = f"@google/gemini-cli@{gemini_version}" if gemini_version else "@google/gemini-cli@latest"
     print(f"Installing {gemini_pkg}...")
     result = subprocess.run(
         ["npm", "install", "-g", f"--prefix={npm_prefix}", gemini_pkg],
