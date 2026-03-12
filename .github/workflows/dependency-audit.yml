@@ -1,0 +1,45 @@
+name: Dependency Audit
+
+on:
+  pull_request:
+    paths:
+      - "requirements.txt"
+      - "requirements.lock"
+  push:
+    branches: [main]
+    paths:
+      - "requirements.txt"
+      - "requirements.lock"
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Audit pinned dependencies
+        run: |
+          if [ -f requirements.lock ]; then
+            echo "Auditing requirements.lock (pinned)..."
+            pip-audit -r requirements.lock --desc on
+          else
+            echo "::warning::No requirements.lock found — auditing requirements.txt (unpinned)"
+            pip-audit -r requirements.txt --desc on
+          fi
+
+      - name: Check lockfile is up to date
+        run: |
+          pip install uv
+          uv pip compile requirements.txt -o /tmp/requirements.lock.check
+          if ! diff -q requirements.lock /tmp/requirements.lock.check > /dev/null 2>&1; then
+            echo "::warning::requirements.lock is out of date. Run: uv pip compile requirements.txt -o requirements.lock"
+          fi

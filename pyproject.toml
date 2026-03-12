@@ -1,6 +1,6 @@
 [project]
 name = "coda"
-version = "0.16.1"
+version = "0.16.2"
 description = "CoDA - Coding Agents on Databricks Apps"
 requires-python = ">=3.10"
 dependencies = [
