@@ -11,7 +11,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from utils import ensure_https
+from utils import ensure_https, get_npm_version
 
 # content-filter proxy local proxy — sanitizes empty content blocks before reaching Databricks
 # (see https://github.com/sst/opencode/issues/5028)
@@ -52,11 +52,15 @@ local_bin.mkdir(parents=True, exist_ok=True)
 opencode_bin = local_bin / "opencode"
 
 if not opencode_bin.exists():
-    print("Installing OpenCode CLI...")
     # Use --prefix ~/.local so npm installs directly into ~/.local/bin (avoids EACCES on /usr/local)
     npm_prefix = str(home / ".local")
+
+    # Resolve exact versions to avoid mutable @latest tags (supply chain hardening)
+    oc_version = get_npm_version("opencode-ai")
+    oc_pkg = f"opencode-ai@{oc_version}" if oc_version else "opencode-ai@latest"
+    print(f"Installing {oc_pkg}...")
     result = subprocess.run(
-        ["npm", "install", "-g", f"--prefix={npm_prefix}", "opencode-ai@latest"],
+        ["npm", "install", "-g", f"--prefix={npm_prefix}", oc_pkg],
         capture_output=True, text=True,
         env={**os.environ, "HOME": str(home)}
     )
@@ -66,13 +70,16 @@ if not opencode_bin.exists():
         print(f"OpenCode install warning: {result.stderr}")
 
     # Install @ai-sdk/openai for GPT models (Responses API support)
+    sdk_version = get_npm_version("@ai-sdk/openai")
+    sdk_pkg = f"@ai-sdk/openai@{sdk_version}" if sdk_version else "@ai-sdk/openai"
+    print(f"Installing {sdk_pkg}...")
     result = subprocess.run(
-        ["npm", "install", "-g", f"--prefix={npm_prefix}", "@ai-sdk/openai"],
+        ["npm", "install", "-g", f"--prefix={npm_prefix}", sdk_pkg],
         capture_output=True, text=True,
         env={**os.environ, "HOME": str(home)}
     )
     if result.returncode == 0:
-        print("@ai-sdk/openai installed (Responses API support)")
+        print(f"@ai-sdk/openai@{sdk_version or 'latest'} installed (Responses API support)")
     else:
         print(f"@ai-sdk/openai install warning: {result.stderr}")
 else:

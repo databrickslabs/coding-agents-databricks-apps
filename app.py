@@ -340,15 +340,28 @@ def check_authorization():
 
 
 def _check_ws_authorization():
-    """Check authorization for WebSocket connections using the same logic as HTTP."""
+    """Check authorization for WebSocket connections — mirrors HTTP check_authorization().
+
+    Fails CLOSED on Databricks Apps: if app_owner is unresolved or no user identity
+    in headers, deny WebSocket access. Matches the HTTP handler's behavior exactly.
+    """
     if not app_owner:
-        return True
+        if _is_databricks_apps():
+            logger.error("SECURITY: app_owner not resolved — denying WebSocket (fail-closed)")
+            return False
+        return True  # Local dev only
+
     # Socket.IO passes HTTP headers from the initial handshake via request context
     current_user = request.headers.get("X-Forwarded-Email") or \
                    request.headers.get("X-Forwarded-User") or \
                    request.headers.get("X-Databricks-User-Email")
+
     if not current_user:
-        return True
+        if _is_databricks_apps():
+            logger.warning("No user identity in WebSocket request on Databricks Apps — denying")
+            return False
+        return True  # Local dev only
+
     if current_user != app_owner:
         logger.warning(f"WebSocket unauthorized: {current_user} (owner: {app_owner})")
         return False
@@ -600,10 +613,10 @@ def set_security_headers(response):
     # Fixes: https://github.com/datasciencemonkey/coding-agents-databricks-apps/issues/58
     response.headers["Content-Security-Policy"] = (
         "default-src 'none'; "
-        "script-src 'self' 'unsafe-inline'; "
-        "style-src 'self' 'unsafe-inline'; "
+        "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
         "img-src 'self' data:; "
-        "font-src 'self'; "
+        "font-src 'self' https://fonts.gstatic.com; "
         "connect-src 'self' ws: wss:; "
         "frame-ancestors 'none'; "
         "base-uri 'self'; "

@@ -1,7 +1,27 @@
 """Shared utilities for Databricks App setup scripts."""
 
 import re
+import subprocess
 from pathlib import Path
+
+
+def get_npm_version(package_name):
+    """Resolve the latest stable version of an npm package.
+
+    Uses ``npm view`` to query the registry, returning an exact version string
+    (e.g. "1.2.24") that can be appended to the package spec for pinned installs.
+    Returns None if the lookup fails (network issue, package not found).
+    """
+    try:
+        result = subprocess.run(
+            ["npm", "view", package_name, "version"],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    return None
 
 
 def adapt_instructions_file(

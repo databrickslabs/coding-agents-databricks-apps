@@ -12,7 +12,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from utils import adapt_instructions_file, ensure_https
+from utils import adapt_instructions_file, ensure_https, get_npm_version
 
 # Set HOME if not properly set
 if not os.environ.get("HOME") or os.environ["HOME"] == "/":
@@ -53,11 +53,13 @@ local_bin.mkdir(parents=True, exist_ok=True)
 codex_bin = local_bin / "codex"
 
 if not codex_bin.exists():
-    print("Installing Codex CLI...")
     # Use --prefix ~/.local so npm installs directly into ~/.local/bin
     npm_prefix = str(home / ".local")
+    codex_version = get_npm_version("@openai/codex")
+    codex_pkg = f"@openai/codex@{codex_version}" if codex_version else "@openai/codex"
+    print(f"Installing {codex_pkg}...")
     result = subprocess.run(
-        ["npm", "install", "-g", f"--prefix={npm_prefix}", "@openai/codex"],
+        ["npm", "install", "-g", f"--prefix={npm_prefix}", codex_pkg],
         capture_output=True,
         text=True,
         env={**os.environ, "HOME": str(home)},
