@@ -20,9 +20,9 @@ The easier your PR is to review, the faster it gets merged. Help us help you. �
 
 2. **Keep changes focused** — One logical change per PR. Avoid mixing refactors, formatting changes, or unrelated fixes into the same PR.
 
-3. **Write a test plan** — Ensure your changes pass existing tests before submitting. If your contribution can't be validated with unit tests, include screenshots or a video demonstrating the functionality in your PR description.
+3. **Write a test plan** — If your contribution can't be validated with unit tests, include screenshots or a video demonstrating the functionality in your PR description.
 
-4. **Deploy & verify on Dogfood** — Deploy your app on Dogfood and confirm it works as expected before opening a PR.
+4. **Deploy & verify on your workspace** — Deploy your app on your workspace (use Dogfood if you're a Brickster) and confirm it works as expected before opening a PR.
 
 5. **Open a pull request** — Write a clear description covering:
    - **What** changed and **why**
