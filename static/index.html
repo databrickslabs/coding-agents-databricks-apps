@@ -357,6 +357,10 @@
       <div class="shortcut-row"><span>Close pane</span><span>Alt+Shift+W</span></div>
       <div class="shortcut-row"><span>Next pane</span><span>Alt+Shift+]</span></div>
       <div class="shortcut-row"><span>Previous pane</span><span>Alt+Shift+[</span></div>
+      <h3>Clipboard</h3>
+      <div class="shortcut-row"><span>Copy</span><span id="sc-copy">Ctrl+C</span></div>
+      <div class="shortcut-row"><span>Paste</span><span id="sc-paste">Ctrl+V</span></div>
+      <div class="shortcut-row"><span>Paste image</span><span>Paste from clipboard</span></div>
       <h3>General</h3>
       <div class="shortcut-row"><span>Search</span><span>Ctrl+Shift+F</span></div>
       <div class="shortcut-row"><span>Voice dictation</span><span>Alt+V</span></div>
@@ -379,6 +383,14 @@
   <script src="/static/lib/addon-image.js"></script>
   <script src="/static/lib/socket.io.min.js"></script>
   <script>
+    // ── Platform-aware shortcut labels ──────────────────────────────
+    if (/Mac|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+      const scCopy = document.getElementById('sc-copy');
+      const scPaste = document.getElementById('sc-paste');
+      if (scCopy) scCopy.textContent = 'Cmd+C';
+      if (scPaste) scPaste.textContent = 'Cmd+V';
+    }
+
     // ── Theme Presets ──────────────────────────────────────────────
     const themes = {
       'Dark': {
@@ -1129,7 +1141,9 @@
         cursorBlink: true,
         fontSize: currentFontSize,
         fontFamily: fontFamilies[currentFontFamily] || 'monospace',
-        theme: themes[currentThemeName].theme
+        theme: themes[currentThemeName].theme,
+        scrollback: 10000,
+        scrollOnUserInput: true
       });
 
       const fitAddon = new FitAddon.FitAddon();
@@ -1154,6 +1168,23 @@
 
       term.open(element);
       fitAddon.fit();
+
+      // On non-Mac platforms, let browser handle Ctrl+C (copy) and Ctrl+V (paste)
+      // so standard OS shortcuts work. On Mac, Cmd+C/Cmd+V already work natively.
+      const isMac = /Mac|iPhone|iPad|iPod/i.test(navigator.userAgent);
+      if (!isMac) {
+        term.attachCustomKeyEventHandler((e) => {
+          if (e.type !== 'keydown') return true;
+          const ctrlOnly = e.ctrlKey && !e.altKey && !e.metaKey;
+          // Ctrl+V → let browser fire paste event
+          if (ctrlOnly && !e.shiftKey && e.code === 'KeyV') return false;
+          // Ctrl+C → copy selected text (if any), otherwise send SIGINT
+          if (ctrlOnly && !e.shiftKey && e.code === 'KeyC' && term.hasSelection()) return false;
+          // Ctrl+Shift+C/V → alternate copy/paste
+          if (ctrlOnly && e.shiftKey && (e.code === 'KeyC' || e.code === 'KeyV')) return false;
+          return true;
+        });
+      }
 
       const sid = await createSession();
       await sendResize(term.cols, term.rows, sid);
@@ -1552,6 +1583,7 @@
           if (!blob) { console.log('[paste] Could not get file from item'); continue; }
 
           console.log('[paste] Uploading image:', blob.type, blob.size, 'bytes');
+          showToast('Uploading image...');
           const ext = item.type.split('/')[1] || 'png';
           const formData = new FormData();
           formData.append('file', blob, `clipboard-${Date.now()}.${ext}`);
@@ -1643,7 +1675,11 @@
         status.textContent = 'Connected!';
         setTimeout(() => { status.style.display = 'none'; }, 1000);
 
-        window.addEventListener('resize', () => refitAllPanes());
+        let resizeTimer;
+        window.addEventListener('resize', () => {
+          clearTimeout(resizeTimer);
+          resizeTimer = setTimeout(() => refitAllPanes(), 150);
+        });
         window.addEventListener('beforeunload', () => cleanupAllPanes());
 
       } catch (e) {

@@ -21,6 +21,13 @@ import tomllib
 
 from utils import ensure_https
 
+# Sanitize DATABRICKS_TOKEN early — the platform sometimes injects trailing
+# newlines / whitespace which causes auth failures.  Cleaning it here prevents
+# the agent from "fixing" it in the terminal and leaking the raw token.
+_raw_token = os.environ.get("DATABRICKS_TOKEN", "")
+if _raw_token != _raw_token.strip():
+    os.environ["DATABRICKS_TOKEN"] = _raw_token.strip()
+
 # App version (single source of truth: pyproject.toml)
 _pyproject_file = os.path.join(os.path.dirname(__file__), 'pyproject.toml')
 try:
@@ -84,6 +91,8 @@ setup_state = {
     "steps": [
         {"id": "git",        "label": "Configuring git identity",     "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "micro",      "label": "Installing micro editor",      "status": "pending", "started_at": None, "completed_at": None, "error": None},
+        {"id": "gh",         "label": "Installing GitHub CLI",        "status": "pending", "started_at": None, "completed_at": None, "error": None},
+        {"id": "dbcli",     "label": "Upgrading Databricks CLI",     "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "proxy",   "label": "Starting content-filter proxy", "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "claude",     "label": "Configuring Claude CLI",       "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "codex",      "label": "Configuring Codex CLI",        "status": "pending", "started_at": None, "completed_at": None, "error": None},
@@ -118,6 +127,11 @@ def _run_step(step_id, command):
         env = os.environ.copy()
         if not env.get("HOME") or env["HOME"] == "/":
             env["HOME"] = "/app/python/source_code"
+        home = env.get("HOME", "/app/python/source_code")
+        # Ensure uv and other tools in ~/.local/bin are on PATH
+        local_bin = os.path.join(home, ".local", "bin")
+        if local_bin not in env.get("PATH", ""):
+            env["PATH"] = f"{local_bin}:{env.get('PATH', '')}"
         env.pop("DATABRICKS_CLIENT_ID", None)
         env.pop("DATABRICKS_CLIENT_SECRET", None)
 
@@ -199,14 +213,14 @@ def _setup_git_config():
         f.write('\n')
         f.write('echo "[post-commit] $(date +%H:%M:%S) syncing $REPO_ROOT" >> "$SYNC_LOG"\n')
         f.write('\n')
-        f.write('# Use venv python directly (avoids fragile source activate)\n')
-        f.write('VENV_PYTHON="/app/python/source_code/.venv/bin/python"\n')
-        f.write('SYNC_SCRIPT="/app/python/source_code/sync_to_workspace.py"\n')
+        f.write('# Use uv run so sync script gets the correct Python + deps\n')
+        f.write('APP_DIR="/app/python/source_code"\n')
+        f.write('SYNC_SCRIPT="$APP_DIR/sync_to_workspace.py"\n')
         f.write('\n')
-        f.write('if [ -x "$VENV_PYTHON" ] && [ -f "$SYNC_SCRIPT" ]; then\n')
-        f.write('    nohup "$VENV_PYTHON" "$SYNC_SCRIPT" "$REPO_ROOT" >> "$SYNC_LOG" 2>&1 & disown\n')
+        f.write('if [ -f "$SYNC_SCRIPT" ]; then\n')
+        f.write('    nohup uv run --project "$APP_DIR" python "$SYNC_SCRIPT" "$REPO_ROOT" >> "$SYNC_LOG" 2>&1 & disown\n')
         f.write('else\n')
-        f.write('    echo "[post-commit] $(date +%H:%M:%S) SKIP: venv=$VENV_PYTHON script=$SYNC_SCRIPT" >> "$SYNC_LOG"\n')
+        f.write('    echo "[post-commit] $(date +%H:%M:%S) SKIP: sync script not found" >> "$SYNC_LOG"\n')
         f.write('fi\n')
     os.chmod(post_commit, 0o755)
     logger.info(f"Post-commit hook written to {post_commit}")
@@ -253,19 +267,24 @@ def run_setup():
     _run_step("micro", ["bash", "-c",
         "mkdir -p ~/.local/bin && bash install_micro.sh && mv micro ~/.local/bin/ 2>/dev/null || true"])
 
+    _run_step("gh", ["bash", "install_gh.sh"])
+
+    # --- Upgrade Databricks CLI (runtime image ships an older version) ---
+    _run_step("dbcli", ["bash", "install_databricks_cli.sh"])
+
     # --- Content-filter proxy (must be running before OpenCode starts) ---
     # Sanitizes requests/responses between OpenCode and Databricks
     # (see OpenCode #5028, docs/plans/2026-03-11-litellm-empty-content-blocks-design.md)
-    _run_step("proxy", ["python", "setup_proxy.py"])
+    _run_step("proxy", ["uv", "run", "python", "setup_proxy.py"])
 
     # --- Parallel agent setup (all independent of each other) ---
     parallel_steps = [
-        ("claude",     ["python", "setup_claude.py"]),
-        ("codex",      ["python", "setup_codex.py"]),
-        ("opencode",   ["python", "setup_opencode.py"]),
-        ("gemini",     ["python", "setup_gemini.py"]),
-        ("databricks", ["python", "setup_databricks.py"]),
-        ("mlflow",     ["python", "setup_mlflow.py"]),
+        ("claude",     ["uv", "run", "python", "setup_claude.py"]),
+        ("codex",      ["uv", "run", "python", "setup_codex.py"]),
+        ("opencode",   ["uv", "run", "python", "setup_opencode.py"]),
+        ("gemini",     ["uv", "run", "python", "setup_gemini.py"]),
+        ("databricks", ["uv", "run", "python", "setup_databricks.py"]),
+        ("mlflow",     ["uv", "run", "python", "setup_mlflow.py"]),
     ]
 
     with ThreadPoolExecutor(max_workers=len(parallel_steps)) as executor:
@@ -488,7 +507,7 @@ def read_pty_output(session_id, fd):
             if session_id not in sessions:
                 break
         try:
-            readable, _, errors = select.select([fd], [], [fd], 0.5)
+            readable, _, errors = select.select([fd], [], [fd], 0.05)
             if readable or errors:
                 output = os.read(fd, 4096)
                 if not output:
@@ -570,7 +589,10 @@ def cleanup_stale_sessions():
         warning_threshold = SESSION_TIMEOUT_SECONDS * 0.8
 
         with sessions_lock:
-            for session_id, session in sessions.items():
+            session_snapshot = list(sessions.items())
+
+        for session_id, session in session_snapshot:
+            with session["lock"]:
                 idle = now - session["last_poll_time"]
                 if idle > SESSION_TIMEOUT_SECONDS:
                     stale_sessions.append((session_id, session["pid"], session["master_fd"]))
@@ -803,22 +825,31 @@ def get_output_batch():
     outputs = {}
     now = time.time()
 
+    # Step 1: Resolve session refs under global lock (fast dict lookups only)
+    resolved = {}
     with sessions_lock:
         for sid in session_ids:
-            if sid not in sessions:
-                continue
-            session = sessions[sid]
+            if sid in sessions:
+                resolved[sid] = sessions[sid]
+
+    # Step 2: Swap buffers under per-session locks (same pattern as get_output)
+    swapped = {}
+    for sid, session in resolved.items():
+        with session["lock"]:
             session["last_poll_time"] = now
-            buffer = session["output_buffer"]
-            output = "".join(buffer)
-            buffer.clear()
+            old_buffer = session["output_buffer"]
+            session["output_buffer"] = deque(maxlen=1000)
             exited = session.get("exited", False)
             timeout_warning = session.pop("timeout_warning", False)
-            outputs[sid] = {
-                "output": output,
-                "exited": exited,
-                "timeout_warning": timeout_warning
-            }
+        swapped[sid] = (old_buffer, exited, timeout_warning)
+
+    # Step 3: Join strings outside all locks
+    for sid, (old_buffer, exited, timeout_warning) in swapped.items():
+        outputs[sid] = {
+            "output": "".join(old_buffer),
+            "exited": exited,
+            "timeout_warning": timeout_warning,
+        }
 
     return jsonify({"outputs": outputs, "shutting_down": shutting_down})
 

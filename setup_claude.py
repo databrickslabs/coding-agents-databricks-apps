@@ -48,18 +48,29 @@ settings_path = claude_dir / "settings.json"
 settings_path.write_text(json.dumps(settings, indent=2))
 
 # 2. Write ~/.claude.json with onboarding skip AND MCP servers
+mcp_servers = {
+    "deepwiki": {
+        "type": "http",
+        "url": "https://mcp.deepwiki.com/mcp"
+    },
+    "exa": {
+        "type": "http",
+        "url": "https://mcp.exa.ai/mcp"
+    }
+}
+
+# Auto-configure team-memory MCP if URL is provided
+team_memory_url = os.environ.get("TEAM_MEMORY_MCP_URL", "").strip().rstrip("/")
+if team_memory_url:
+    mcp_servers["team-memory"] = {
+        "type": "http",
+        "url": f"{team_memory_url}/mcp"
+    }
+    print(f"Team memory MCP configured: {team_memory_url}/mcp")
+
 claude_json = {
     "hasCompletedOnboarding": True,
-    "mcpServers": {
-        "deepwiki": {
-            "type": "http",
-            "url": "https://mcp.deepwiki.com/mcp"
-        },
-        "exa": {
-            "type": "http",
-            "url": "https://mcp.exa.ai/mcp"
-        }
-    }
+    "mcpServers": mcp_servers
 }
 
 claude_json_path = home / ".claude.json"
@@ -72,20 +83,17 @@ print(f"Onboarding skipped + MCPs configured: {claude_json_path}")
 local_bin = home / ".local" / "bin"
 claude_bin = local_bin / "claude"
 
-if not claude_bin.exists():
-    print("Installing Claude Code CLI...")
-    result = subprocess.run(
-        ["bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash"],
-        env={**os.environ, "HOME": str(home)},
-        capture_output=True,
-        text=True
-    )
-    if result.returncode == 0:
-        print("Claude Code CLI installed successfully")
-    else:
-        print(f"CLI install warning: {result.stderr}")
+print("Installing/upgrading Claude Code CLI...")
+result = subprocess.run(
+    ["bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash"],
+    env={**os.environ, "HOME": str(home)},
+    capture_output=True,
+    text=True
+)
+if result.returncode == 0:
+    print("Claude Code CLI installed successfully")
 else:
-    print(f"Claude Code CLI already installed at {claude_bin}")
+    print(f"CLI install warning: {result.stderr}")
 
 # 4. Copy subagent definitions to ~/.claude/agents/
 # These enable TDD workflow: prd-writer → test-generator → implementer → build-feature
