@@ -881,7 +881,7 @@
     let socket = null;
     let wsConnected = false;
     let wsHeartbeatTimer = null;
-    const WS_HEARTBEAT_INTERVAL = 30000; // 30s — well within 5-min session timeout
+    const WS_HEARTBEAT_INTERVAL = 30000; // 30s — well within 24-hour session timeout
 
     function initWebSocket() {
       // Only init once; skip if Socket.IO client not loaded
