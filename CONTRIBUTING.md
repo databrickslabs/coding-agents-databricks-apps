@@ -1,4 +1,4 @@
-# Contributing to Claude Code on Databricks
+# Contributing to Coding Agents on Databricks
 
 Thank you for your interest in contributing! We welcome and appreciate contributions from the community.
 
@@ -18,7 +18,7 @@ The easier your PR is to review, the faster it gets merged. Help us help you. �
 
 1. **Fork & branch** — Fork the repository and create a descriptive branch for your work (e.g., `fix/websocket-reconnect` or `feat/session-timeout`).
 
-2. **Keep changes focused** — One logical change per PR. Avoid mixing refactors, formatting changes, or unrelated fixes into the same PR.
+2. **Keep changes focused** — One logical change per PR. Avoid mixing refactors, formatting changes, or unrelated fixes into the same PR. Try to break larger PRs into small commits.
 
 3. **Write a test plan** — If your contribution can't be validated with unit tests, include screenshots or a video demonstrating the functionality in your PR description.
 
