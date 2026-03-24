@@ -1,4 +1,4 @@
-# Contributing to Coding Agents on Databricks
+# Contributing to Coding Agents on Databricks Apps
 
 Thank you for your interest in contributing! We welcome and appreciate contributions from the community.
 
