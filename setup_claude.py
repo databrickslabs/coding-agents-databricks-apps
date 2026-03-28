@@ -16,36 +16,34 @@ home = Path(os.environ["HOME"])
 claude_dir = home / ".claude"
 claude_dir.mkdir(exist_ok=True)
 
-# 1. Write settings.json for Databricks model serving
-# Use DATABRICKS_GATEWAY_HOST if available (new AI Gateway), otherwise fall back to DATABRICKS_HOST
-gateway_host = ensure_https(os.environ.get("DATABRICKS_GATEWAY_HOST", "").rstrip("/"))
-databricks_host = ensure_https(os.environ.get("DATABRICKS_HOST", "").rstrip("/"))
+# 1. Write settings.json for Databricks model serving (requires DATABRICKS_TOKEN)
+token = os.environ.get("DATABRICKS_TOKEN", "").strip()
+if token:
+    # Use DATABRICKS_GATEWAY_HOST if available (new AI Gateway), otherwise fall back to DATABRICKS_HOST
+    gateway_host = ensure_https(os.environ.get("DATABRICKS_GATEWAY_HOST", "").rstrip("/"))
+    databricks_host = ensure_https(os.environ.get("DATABRICKS_HOST", "").rstrip("/"))
 
-gateway_token = os.environ.get("DATABRICKS_TOKEN", "") if gateway_host else ""
-if gateway_host and not gateway_token:
-    print("Warning: DATABRICKS_GATEWAY_HOST set but DATABRICKS_TOKEN missing, falling back to DATABRICKS_HOST")
-    gateway_host = ""
+    if gateway_host:
+        anthropic_base_url = f"{gateway_host}/anthropic"
+        print(f"Using Databricks AI Gateway: {gateway_host}")
+    else:
+        anthropic_base_url = f"{databricks_host}/serving-endpoints/anthropic"
+        print(f"Using Databricks Host: {databricks_host}")
 
-if gateway_host:
-    anthropic_base_url = f"{gateway_host}/anthropic"
-    auth_token = gateway_token
-    print(f"Using Databricks AI Gateway: {gateway_host}")
-else:
-    anthropic_base_url = f"{databricks_host}/serving-endpoints/anthropic"
-    auth_token = os.environ["DATABRICKS_TOKEN"]
-    print(f"Using Databricks Host: {databricks_host}")
-
-settings = {
-    "env": {
-        "ANTHROPIC_MODEL": os.environ.get("ANTHROPIC_MODEL", "databricks-claude-sonnet-4-6"),
-        "ANTHROPIC_BASE_URL": anthropic_base_url,
-        "ANTHROPIC_AUTH_TOKEN": auth_token,
-        "ANTHROPIC_CUSTOM_HEADERS": "x-databricks-use-coding-agent-mode: true"
+    settings = {
+        "env": {
+            "ANTHROPIC_MODEL": os.environ.get("ANTHROPIC_MODEL", "databricks-claude-sonnet-4-6"),
+            "ANTHROPIC_BASE_URL": anthropic_base_url,
+            "ANTHROPIC_AUTH_TOKEN": token,
+            "ANTHROPIC_CUSTOM_HEADERS": "x-databricks-use-coding-agent-mode: true"
+        }
     }
-}
 
-settings_path = claude_dir / "settings.json"
-settings_path.write_text(json.dumps(settings, indent=2))
+    settings_path = claude_dir / "settings.json"
+    settings_path.write_text(json.dumps(settings, indent=2))
+    print(f"Claude configured: {settings_path}")
+else:
+    print("No DATABRICKS_TOKEN — skipping settings.json (will be configured after PAT setup)")
 
 # 2. Write ~/.claude.json with onboarding skip AND MCP servers
 mcp_servers = {
@@ -76,7 +74,6 @@ claude_json = {
 claude_json_path = home / ".claude.json"
 claude_json_path.write_text(json.dumps(claude_json, indent=2))
 
-print(f"Claude configured: {settings_path}")
 print(f"Onboarding skipped + MCPs configured: {claude_json_path}")
 
 # 3. Install Claude Code CLI if not present

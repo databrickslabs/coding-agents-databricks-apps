@@ -27,7 +27,7 @@
 
 🟢 **OpenCode** — Open-source agent with multi-provider support
 
-Every agent starts **pre-wired to your Databricks AI Gateway** — models, auth tokens, and base URLs are all configured at boot. No API keys to manage.
+Every agent installs at boot and connects to your **Databricks AI Gateway** — on first terminal session, paste a short-lived PAT and all CLIs are configured automatically. Token auto-rotates every 10 minutes.
 
 ---
 
@@ -63,7 +63,7 @@ This isn't just a terminal in the cloud. Running coding agents on Databricks giv
 | 🐍 **Loading Screen** | Play snake while setup steps run in parallel |
 | 🔄 **Workspace Sync** | Every `git commit` auto-syncs to `/Workspace/Users/{you}/projects/` |
 | ✏️ **Micro Editor** | Modern terminal editor, pre-installed |
-| ⚙️ **Databricks CLI** | Pre-configured with your PAT, ready to go |
+| ⚙️ **Databricks CLI** | Installed at boot, configured interactively on first session |
 | 📊 **MLflow Tracing** | Every Claude Code session is automatically traced to your Databricks MLflow experiment |
 
 ---
@@ -136,10 +136,10 @@ Tracing is skipped gracefully if `APP_OWNER` is not set (e.g., local dev without
 1. Click [**Use this template**](https://github.com/datasciencemonkey/coding-agents-databricks-apps/generate) to create your own repo
 2. Go to **Databricks → Apps → Create App**
 3. Choose **Custom App** and connect your new repo
-4. Add your PAT as the `DATABRICKS_TOKEN` secret in **App Resources**
-5. Deploy
+4. Deploy
+5. Open the app — paste a short-lived PAT when prompted on first terminal session
 
-That's it. Open the app URL and start coding.
+That's it. No secrets to configure, no pre-deployment setup.
 
 [→ Full deployment guide](docs/deployment.md) — environment variables, gateway config, and advanced options.
 
@@ -280,7 +280,7 @@ This template repo opens that vision up for every Databricks user — no IDE set
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `DATABRICKS_TOKEN` | Yes | Your Personal Access Token (secret) |
+| `DATABRICKS_TOKEN` | No | Optional. If not set, the app prompts for a token on first session. Auto-rotated every 10 minutes |
 | `HOME` | Yes | Set to `/app/python/source_code` in app.yaml |
 | `ANTHROPIC_MODEL` | No | Claude model name (default: `databricks-claude-opus-4-6`) |
 | `CODEX_MODEL` | No | Codex model name (default: `databricks-gpt-5-2`) |
@@ -289,7 +289,7 @@ This template repo opens that vision up for every Databricks user — no IDE set
 
 ### Security Model
 
-Single-user app — each user deploys their own instance with their own PAT. Only the token owner can access the terminal. Everyone else sees 403.
+Single-user app — the owner is resolved via the app's service principal and Apps API (`app.creator`), with no PAT required at deploy time. Authorization checks `X-Forwarded-Email` against `app.creator`. On first terminal session, the user pastes a short-lived PAT interactively. Tokens auto-rotate every 10 minutes (15-minute lifetime), with old tokens proactively revoked. On restart, the user re-pastes (no persistence by design).
 
 ### Gunicorn
 

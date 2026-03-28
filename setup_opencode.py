@@ -27,26 +27,7 @@ host = os.environ.get("DATABRICKS_HOST", "")
 token = os.environ.get("DATABRICKS_TOKEN", "")
 anthropic_model = os.environ.get("ANTHROPIC_MODEL", "databricks-claude-sonnet-4-6")
 
-if not host or not token:
-    print("Warning: DATABRICKS_HOST or DATABRICKS_TOKEN not set, skipping OpenCode config")
-    exit(0)
-
-# Strip trailing slash and ensure https:// prefix
-host = ensure_https(host.rstrip("/"))
-
-# Use DATABRICKS_GATEWAY_HOST if available (new AI Gateway), otherwise fall back to current gateway (DATABRICKS_HOST)
-gateway_host = ensure_https(os.environ.get("DATABRICKS_GATEWAY_HOST", "").rstrip("/"))
-gateway_token = os.environ.get("DATABRICKS_TOKEN", "") if gateway_host else ""
-if gateway_host and not gateway_token:
-    print("Warning: DATABRICKS_GATEWAY_HOST set but DATABRICKS_TOKEN missing, falling back to DATABRICKS_HOST")
-    gateway_host = ""
-
-if gateway_host:
-    print(f"Using Databricks AI Gateway: {gateway_host}")
-else:
-    print(f"Using Databricks Host: {host}")
-
-# 1. Install OpenCode CLI into ~/.local/bin (same approach as Claude Code)
+# 1. Install OpenCode CLI into ~/.local/bin (always, even without token)
 local_bin = home / ".local" / "bin"
 local_bin.mkdir(parents=True, exist_ok=True)
 opencode_bin = local_bin / "opencode"
@@ -85,7 +66,27 @@ if not opencode_bin.exists():
 else:
     print(f"OpenCode CLI already installed at {opencode_bin}")
 
-# 2. Write global opencode.json config
+# 2. Skip auth config if no token (will be configured after PAT setup)
+if not host or not token:
+    print("OpenCode CLI installed — config will be set after PAT setup")
+    exit(0)
+
+# Strip trailing slash and ensure https:// prefix
+host = ensure_https(host.rstrip("/"))
+
+# Use DATABRICKS_GATEWAY_HOST if available (new AI Gateway), otherwise fall back to current gateway (DATABRICKS_HOST)
+gateway_host = ensure_https(os.environ.get("DATABRICKS_GATEWAY_HOST", "").rstrip("/"))
+gateway_token = os.environ.get("DATABRICKS_TOKEN", "") if gateway_host else ""
+if gateway_host and not gateway_token:
+    print("Warning: DATABRICKS_GATEWAY_HOST set but DATABRICKS_TOKEN missing, falling back to DATABRICKS_HOST")
+    gateway_host = ""
+
+if gateway_host:
+    print(f"Using Databricks AI Gateway: {gateway_host}")
+else:
+    print(f"Using Databricks Host: {host}")
+
+# 3. Write global opencode.json config
 # OpenCode looks for config at ~/.config/opencode/opencode.json (global)
 # and ./opencode.json (project-level)
 opencode_config_dir = home / ".config" / "opencode"
@@ -256,7 +257,7 @@ config_path = opencode_config_dir / "opencode.json"
 config_path.write_text(json.dumps(opencode_config, indent=2))
 print(f"OpenCode configured: {config_path}")
 
-# 3. Also create auth credentials for the databricks provider(s)
+# 4. Also create auth credentials for the databricks provider(s)
 # OpenCode stores credentials at ~/.local/share/opencode/auth.json
 opencode_data_dir = home / ".local" / "share" / "opencode"
 opencode_data_dir.mkdir(parents=True, exist_ok=True)

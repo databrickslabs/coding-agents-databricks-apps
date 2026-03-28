@@ -27,6 +27,7 @@ def _create_fake_session(app_module, session_id="test-session-123", **overrides)
         "output_buffer": deque(maxlen=1000),
         "last_poll_time": time.time() - 60,  # 60s ago
         "created_at": time.time(),
+        "lock": __import__("threading").Lock(),
     }
     session.update(overrides)
     with app_module.sessions_lock:

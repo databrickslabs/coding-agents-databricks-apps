@@ -17,7 +17,7 @@ host = os.environ.get("DATABRICKS_HOST")
 token = os.environ.get("DATABRICKS_TOKEN")
 
 if not host or not token:
-    print("Warning: DATABRICKS_HOST or DATABRICKS_TOKEN not set, skipping CLI config")
+    print("Databricks CLI config will be set after PAT setup")
     exit(0)
 
 host = ensure_https(host)

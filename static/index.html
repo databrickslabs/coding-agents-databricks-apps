@@ -1186,6 +1186,125 @@
         });
       }
 
+      // Check if PAT is configured and valid before creating session
+      const patResp = await fetch('/api/pat-status');
+      const patData = await patResp.json();
+
+      if (!patData.valid) {
+        // Show PAT setup prompt in the terminal
+        term.write('\x1b[2J\x1b[H');  // clear screen
+        term.write('\r\n');
+        term.write('\x1b[1;33m  Databricks CLI is not configured.\x1b[0m\r\n');
+        term.write('\r\n');
+        term.write('\x1b[37m  To allow the coding agent to act on your behalf,\x1b[0m\r\n');
+        term.write('\x1b[37m  create a short-lived token and paste it here.\x1b[0m\r\n');
+        term.write('\r\n');
+        const wsHost = patData.workspace_host || '';
+        const tokenUrl = wsHost ? wsHost + '#setting/account/token' : 'your Databricks workspace > User Settings > Access Tokens';
+        term.write('\x1b[90m  1. Open: \x1b[4;36m' + tokenUrl + '\x1b[0m\r\n');
+        term.write('\x1b[90m  2. Create a token (any lifetime \u2014 it will be\x1b[0m\r\n');
+        term.write('\x1b[90m     auto-rotated every 10 minutes)\x1b[0m\r\n');
+        term.write('\x1b[90m  3. Paste it below\x1b[0m\r\n');
+        term.write('\r\n');
+        term.write('\x1b[1;37m  Token: \x1b[0m');
+
+        // Collect token input from the terminal
+        let tokenInput = '';
+        await new Promise((resolve) => {
+          const disposable = term.onData(data => {
+            if (data === '\r' || data === '\n') {
+              // Enter pressed — submit token
+              term.write('\r\n');
+              disposable.dispose();
+              resolve();
+            } else if (data === '\x7f' || data === '\b') {
+              // Backspace
+              if (tokenInput.length > 0) {
+                tokenInput = tokenInput.slice(0, -1);
+                term.write('\b \b');
+              }
+            } else if (data >= ' ') {
+              // Printable character — mask with asterisks
+              tokenInput += data;
+              term.write('*');
+            }
+          });
+        });
+
+        if (!tokenInput.trim()) {
+          term.write('\x1b[1;31m  No token provided. Reload to try again.\x1b[0m\r\n');
+          const pane = { id, element, term, fitAddon, searchAddon, sessionId: null };
+          element.addEventListener('mousedown', () => focusPane(id));
+          tab.panes.push(pane);
+          focusPane(id);
+          return pane;
+        }
+
+        term.write('\x1b[90m  Validating token...\x1b[0m\r\n');
+
+        const configResp = await fetch('/api/configure-pat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: tokenInput.trim() })
+        });
+        const configData = await configResp.json();
+
+        if (configData.error) {
+          term.write('\x1b[1;31m  Error: ' + configData.error + '\x1b[0m\r\n');
+          term.write('\x1b[90m  Reload to try again.\x1b[0m\r\n');
+          const pane = { id, element, term, fitAddon, searchAddon, sessionId: null };
+          element.addEventListener('mousedown', () => focusPane(id));
+          tab.panes.push(pane);
+          focusPane(id);
+          return pane;
+        }
+
+        term.write('\x1b[1;32m  Token configured for ' + configData.user + '\x1b[0m\r\n');
+        term.write('\x1b[90m  Auto-rotation started. This token will be rotated out in 10 minutes.\x1b[0m\r\n');
+        term.write('\r\n');
+
+        // Wait for setup if not already complete
+        const setupCheckResp = await fetch('/api/setup-status');
+        const setupCheckData = await setupCheckResp.json();
+
+        if (setupCheckData.status !== 'complete') {
+            term.write('\x1b[90m  Setting up CLI tools...\x1b[0m\r\n');
+            while (true) {
+                await new Promise(r => setTimeout(r, 2000));
+                const pollResp = await fetch('/api/setup-status');
+                const pollData = await pollResp.json();
+                if (pollData.status === 'complete' || pollData.status === 'error') {
+                    if (pollData.status === 'complete') {
+                        term.write('\x1b[1;32m  Setup complete!\x1b[0m\r\n\r\n');
+                    } else {
+                        term.write('\x1b[1;33m  Setup completed with warnings.\x1b[0m\r\n\r\n');
+                    }
+                    break;
+                }
+            }
+        }
+      } else {
+        // PAT is valid — check if setup is done before creating session
+        const setupResp2 = await fetch('/api/setup-status');
+        const setupData2 = await setupResp2.json();
+        if (setupData2.status !== 'complete' && setupData2.status !== 'error') {
+            term.write('\x1b[90m  Setting up CLI tools...\x1b[0m\r\n');
+            while (true) {
+                await new Promise(r => setTimeout(r, 2000));
+                const pollResp2 = await fetch('/api/setup-status');
+                const pollData2 = await pollResp2.json();
+                if (pollData2.status === 'complete' || pollData2.status === 'error') {
+                    if (pollData2.status === 'complete') {
+                        term.write('\x1b[1;32m  Setup complete!\x1b[0m\r\n\r\n');
+                    } else {
+                        term.write('\x1b[1;33m  Setup completed with warnings.\x1b[0m\r\n\r\n');
+                    }
+                    break;
+                }
+            }
+        }
+      }
+
       const sid = await createSession();
       await sendResize(term.cols, term.rows, sid);
 

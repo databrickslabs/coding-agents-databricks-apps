@@ -18,8 +18,11 @@ from werkzeug.utils import secure_filename
 from collections import deque
 
 import tomllib
+import requests
 
+import app_state
 from utils import ensure_https
+from pat_rotator import PATRotator
 
 # Sanitize DATABRICKS_TOKEN early — the platform sometimes injects trailing
 # newlines / whitespace which causes auth failures.  Cleaning it here prevents
@@ -45,6 +48,8 @@ GRACEFUL_SHUTDOWN_WAIT = 3          # Seconds to wait after SIGHUP before SIGKIL
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# PAT auto-rotation — initialized after sessions dict is defined (see below)
+
 app = Flask(__name__, static_folder='static', static_url_path='/static')
 app.secret_key = os.urandom(24)
 app.config['MAX_CONTENT_LENGTH'] = 32 * 1024 * 1024  # 32 MB — aligned with Claude Code's 30 MB file limit
@@ -56,6 +61,12 @@ socketio = SocketIO(app, async_mode='threading', cors_allowed_origins=[], logger
 # sessions_lock guards dict-level ops (add/remove/iterate); each session["lock"] guards per-session state
 sessions = {}
 sessions_lock = threading.Lock()
+
+# PAT auto-rotation (short-lived tokens, background refresh)
+# Only rotates while active sessions exist — stops when all sessions are reaped
+pat_rotator = PATRotator(
+    session_count_fn=lambda: len(sessions),
+)
 
 # SIGTERM graceful shutdown: notify clients before gunicorn stops the worker
 shutting_down = False
@@ -250,6 +261,68 @@ def _reinit_app_git():
     logger.info("Reinitialized app source git (template origin removed)")
 
 
+def _configure_all_cli_auth(token):
+    """Configure auth for ALL coding-agent CLIs after a PAT is provided.
+
+    Called from /api/configure-pat when a user supplies a PAT interactively.
+    Handles: Claude CLI (inline), Databricks CLI (via pat_rotator), and
+    Codex/OpenCode/Gemini CLIs (by re-running their setup scripts with token in env).
+    """
+    import json
+
+    home = os.environ.get("HOME", "/app/python/source_code")
+    if not home or home == "/":
+        home = "/app/python/source_code"
+
+    # 1. Configure Claude CLI (~/.claude/settings.json)
+    claude_dir = os.path.join(home, ".claude")
+    os.makedirs(claude_dir, exist_ok=True)
+
+    gateway_host = ensure_https(os.environ.get("DATABRICKS_GATEWAY_HOST", "").rstrip("/"))
+    databricks_host = ensure_https(os.environ.get("DATABRICKS_HOST", "").rstrip("/"))
+
+    if gateway_host:
+        anthropic_base_url = f"{gateway_host}/anthropic"
+    else:
+        anthropic_base_url = f"{databricks_host}/serving-endpoints/anthropic"
+
+    settings = {
+        "env": {
+            "ANTHROPIC_MODEL": os.environ.get("ANTHROPIC_MODEL", "databricks-claude-sonnet-4-6"),
+            "ANTHROPIC_BASE_URL": anthropic_base_url,
+            "ANTHROPIC_AUTH_TOKEN": token,
+            "ANTHROPIC_CUSTOM_HEADERS": "x-databricks-use-coding-agent-mode: true",
+        }
+    }
+
+    settings_path = os.path.join(claude_dir, "settings.json")
+    with open(settings_path, "w") as f:
+        json.dump(settings, f, indent=2)
+
+    logger.info(f"Claude CLI auth configured: {settings_path}")
+
+    # 2. Configure Databricks CLI (~/.databrickscfg) — already called by
+    #    configure_pat() via pat_rotator, but explicit for clarity
+    pat_rotator._write_databrickscfg(token)
+    logger.info("Databricks CLI auth configured: ~/.databrickscfg")
+
+    # 3. Re-run Codex, OpenCode, Gemini setup scripts with token in env
+    #    They are idempotent: detect CLI already installed, just write config files
+    env = {**os.environ, "DATABRICKS_TOKEN": token}
+    for script in ["setup_codex.py", "setup_opencode.py", "setup_gemini.py"]:
+        try:
+            result = subprocess.run(
+                ["uv", "run", "python", script],
+                env=env, capture_output=True, text=True, timeout=60
+            )
+            if result.returncode == 0:
+                logger.info(f"CLI config updated: {script}")
+            else:
+                logger.warning(f"CLI config failed: {script}: {result.stderr[:200]}")
+        except Exception as e:
+            logger.warning(f"CLI config error: {script}: {e}")
+
+
 def run_setup():
     with setup_lock:
         setup_state["status"] = "running"
@@ -301,9 +374,27 @@ def run_setup():
 
 
 def get_token_owner():
-    """Get the owner email from DATABRICKS_TOKEN at startup."""
+    """Get the owner email. Priority: Apps API (app.creator) > PAT (current_user.me).
+
+    Uses the auto-provisioned SP to call the Apps API — no PAT needed for
+    owner resolution. Falls back to PAT-based lookup for backward compat.
+    """
+    from databricks.sdk import WorkspaceClient
+
+    # 1. Try Apps API via SP credentials (no PAT needed)
+    app_name = os.environ.get("DATABRICKS_APP_NAME")
+    if app_name:
+        try:
+            w = WorkspaceClient()  # auto-detects SP credentials
+            app = w.apps.get(name=app_name)
+            owner = app.creator
+            logger.info(f"Owner resolved from app.creator: {owner}")
+            return owner
+        except Exception as e:
+            logger.warning(f"Could not resolve owner via Apps API: {e}")
+
+    # 2. Fallback: PAT-based resolution
     try:
-        from databricks.sdk import WorkspaceClient
         host = ensure_https(os.environ.get("DATABRICKS_HOST", ""))
         token = os.environ.get("DATABRICKS_TOKEN")
         if not host or not token:
@@ -611,7 +702,7 @@ def cleanup_stale_sessions():
 def authorize_request():
     """Check authorization before processing any request."""
     # Skip auth for health check, setup status, and Socket.IO (has own auth via connect event)
-    if request.path in ("/health", "/api/setup-status") or request.path.startswith("/socket.io"):
+    if request.path in ("/health", "/api/setup-status", "/api/pat-status", "/api/configure-pat", "/api/app-state") or request.path.startswith("/socket.io"):
         return None
 
     authorized, user = check_authorization()
@@ -650,16 +741,18 @@ def set_security_headers(response):
 
 @app.route("/")
 def index():
-    with setup_lock:
-        status = setup_state["status"]
-    if status in ("pending", "running"):
-        return send_from_directory("static", "loading.html")
     return send_from_directory("static", "index.html")
 
 
 @app.route("/api/setup-status")
 def get_setup_status():
     return jsonify(_get_setup_state_snapshot())
+
+
+@app.route("/api/app-state")
+def get_app_state():
+    """Admin endpoint: persisted app state (owner, last rotation)."""
+    return jsonify(app_state.get_state())
 
 
 @app.route("/health")
@@ -680,6 +773,79 @@ def health():
 @app.route("/api/version")
 def get_version():
     return jsonify({"version": APP_VERSION})
+
+
+@app.route("/api/pat-status")
+def pat_status():
+    """Check if a valid, usable PAT is configured."""
+    host = ensure_https(os.environ.get("DATABRICKS_HOST", ""))
+    token = os.environ.get("DATABRICKS_TOKEN", "").strip()
+
+    if not token or pat_rotator.is_token_expired:
+        # No token, or token lifetime exceeded (rotation stopped while no sessions)
+        return jsonify({"configured": False, "valid": False,
+                       "workspace_host": host})
+
+    # Validate with direct HTTP — avoids SDK auth fallback to SP
+    try:
+        resp = requests.get(f"{host}/api/2.0/preview/scim/v2/Me",
+                           headers={"Authorization": f"Bearer {token}"}, timeout=10)
+        if resp.status_code == 200:
+            user = resp.json().get("userName", "unknown")
+            return jsonify({"configured": True, "valid": True, "user": user})
+        return jsonify({"configured": True, "valid": False,
+                       "workspace_host": host})
+    except Exception:
+        return jsonify({"configured": True, "valid": False,
+                       "workspace_host": host})
+
+
+@app.route("/api/configure-pat", methods=["POST"])
+def configure_pat():
+    """Accept a user-provided PAT, validate it, and start rotation."""
+    data = request.json
+    token = data.get("token", "").strip()
+    if not token:
+        return jsonify({"error": "Token required"}), 400
+
+    # Validate the token — direct HTTP, no SDK fallback
+    host = ensure_https(os.environ.get("DATABRICKS_HOST", ""))
+    try:
+        resp = requests.get(f"{host}/api/2.0/preview/scim/v2/Me",
+                           headers={"Authorization": f"Bearer {token}"}, timeout=10)
+        if resp.status_code != 200:
+            return jsonify({"error": "Invalid token"}), 400
+        user = resp.json().get("userName", "unknown")
+    except Exception as e:
+        return jsonify({"error": f"Token validation failed: {e}"}), 400
+
+    # Immediately mint a controlled short-lived token from the user-pasted PAT.
+    # This gives us a token ID we own — all future rotations can revoke the old one.
+    # The user-pasted PAT becomes unused after this (expires per its own lifetime).
+    os.environ["DATABRICKS_TOKEN"] = token
+    pat_rotator._current_token = token
+    pat_rotator._current_token_id = None
+    rotated = pat_rotator._rotate_once()
+    if rotated:
+        token = pat_rotator.token  # use the newly minted token from here on
+    else:
+        # Rotation failed — fall back to user-pasted token (still valid)
+        pat_rotator._write_databrickscfg(token)
+    pat_rotator.start()
+
+    # Configure all CLI tools (Claude, Codex, OpenCode, Gemini, Databricks)
+    _configure_all_cli_auth(pat_rotator.token or token)
+
+    # Run setup now that we have a valid token (installs CLIs, configures agents)
+    # Only run if setup hasn't completed yet
+    with setup_lock:
+        if setup_state["status"] != "complete":
+            setup_thread = threading.Thread(target=run_setup, daemon=True, name="setup-thread")
+            setup_thread.start()
+            logger.info("Setup triggered after PAT configuration")
+
+    logger.info(f"PAT configured interactively by {user} — rotation started")
+    return jsonify({"status": "ok", "user": user, "message": "Token configured. Auto-rotation started."})
 
 
 @app.route("/api/session", methods=["POST"])
@@ -923,27 +1089,27 @@ def initialize_app(local_dev=False):
     if not local_dev:
         signal.signal(signal.SIGTERM, handle_sigterm)
 
-    # Remove OAuth credentials - force PAT auth only
-    os.environ.pop("DATABRICKS_CLIENT_ID", None)
-    os.environ.pop("DATABRICKS_CLIENT_SECRET", None)
+    # SP credentials preserved — needed for Apps API (owner resolution) and secret persistence
 
-    # Determine app owner from DATABRICKS_TOKEN
+    # Resolve owner: Apps API (app.creator via SP) > PAT (current_user.me)
     app_owner = get_token_owner()
     if app_owner:
-        logger.info(f"App owner (from token): {app_owner}")
+        logger.info(f"App owner: {app_owner}")
         os.environ["APP_OWNER"] = app_owner
+        app_state.set_app_owner(app_owner)
     else:
         logger.warning("Could not determine app owner - authorization disabled")
+
+    # Strip SP credentials — only needed for owner resolution above.
+    # Keeping them causes SDK to silently fall back to SP auth when PAT is dead.
+    os.environ.pop("DATABRICKS_CLIENT_ID", None)
+    os.environ.pop("DATABRICKS_CLIENT_SECRET", None)
+    logger.info("SP credentials stripped — PAT-only auth from this point")
 
     # Start background cleanup thread
     cleanup_thread = threading.Thread(target=cleanup_stale_sessions, daemon=True)
     cleanup_thread.start()
     logger.info(f"Started session cleanup thread (timeout={SESSION_TIMEOUT_SECONDS}s, interval={CLEANUP_INTERVAL_SECONDS}s)")
-
-    # Start setup in background thread — app starts immediately with loading screen
-    setup_thread = threading.Thread(target=run_setup, daemon=True, name="setup-thread")
-    setup_thread.start()
-    logger.info("Started background setup thread")
 
 
 if __name__ == "__main__":

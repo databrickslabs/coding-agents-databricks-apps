@@ -3,7 +3,6 @@
 ## Prerequisites
 
 - A Databricks workspace with Model Serving endpoints enabled
-- A Personal Access Token (PAT)
 
 ## Easy Start (Git Repo)
 
@@ -14,8 +13,8 @@ The simplest way — no CLI, no cloning, everything stays in the Databricks UI.
    ```
    https://github.com/datasciencemonkey/coding-agents-in-databricks.git
    ```
-3. In the **App Resources** tab, add your PAT as the `DATABRICKS_TOKEN` secret
-4. Click **Deploy**
+3. Click **Deploy**
+4. Open the app — on first terminal session, paste a short-lived PAT when prompted
 
 The app pulls the code directly from Git. To update later, just re-deploy — it picks up the latest from the repo.
 
@@ -45,13 +44,13 @@ cp app.yaml.template app.yaml
 
 Set your `DATABRICKS_GATEWAY_HOST`, or remove the gateway lines to fall back to direct model serving endpoints.
 
-### 3. Create the app and add your token
+### 3. Create the app and deploy
 
 ```bash
 databricks apps create <your-app-name>
 ```
 
-In the [App Resources tab](https://docs.databricks.com/aws/en/dev-tools/databricks-apps/resources), add your PAT as the `DATABRICKS_TOKEN` secret.
+No secrets or resources to configure. On first terminal session, paste a short-lived PAT when prompted — all CLIs are configured automatically.
 
 ### 4. Deploy
 
@@ -66,7 +65,7 @@ databricks apps deploy <your-app-name> \
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `DATABRICKS_TOKEN` | Yes | Your Personal Access Token (secret) |
+| `DATABRICKS_TOKEN` | No | Optional. If not set, the app prompts for a token on first session. Auto-rotated every 10 minutes |
 | `HOME` | Yes | Set to `/app/python/source_code` in app.yaml |
 | `ANTHROPIC_MODEL` | No | Claude model name (default: `databricks-claude-opus-4-6`) |
 | `CODEX_MODEL` | No | Codex model name (default: `databricks-gpt-5-2`) |
@@ -75,12 +74,14 @@ databricks apps deploy <your-app-name> \
 
 ## Security Model
 
-This is a **single-user app**. Each user deploys their own instance with their own PAT:
+This is a **single-user, zero-config auth** app. No secrets or tokens are required at deploy time.
 
-1. The `DATABRICKS_TOKEN` in `app.yaml` identifies the owner
-2. At startup, the app determines the token owner via Databricks API
-3. Only requests from the token owner are allowed
-4. Other users see a 403 Forbidden error
+1. **Owner resolution**: The app owner is determined from `app.creator` via the service principal + Apps API — no PAT needed
+2. **Authorization**: Each request's `X-Forwarded-Email` header is compared against `app.creator`. Non-matching users see 403
+3. **Interactive PAT setup**: On first terminal session, the user pastes a short-lived PAT interactively. All CLIs (Claude, Codex, OpenCode, Gemini, Databricks) are configured automatically
+4. **Auto-rotation**: PAT rotates every 10 minutes with a 15-minute lifetime. Old tokens are proactively revoked. Maximum leaked-token exposure: 15 minutes
+5. **Session-aware**: Rotation is skipped when no active terminal sessions exist
+6. **On restart**: The user re-pastes a token (no persistence by design)
 
 ## Gunicorn Configuration
 
