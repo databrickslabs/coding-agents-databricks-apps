@@ -1341,8 +1341,7 @@
         const wsHost = patData.workspace_host || '';
         const tokenUrl = wsHost ? wsHost + '#setting/account/token' : 'your Databricks workspace > User Settings > Access Tokens';
         term.write('\x1b[90m  1. Open: \x1b[4;36m' + tokenUrl + '\x1b[0m\r\n');
-        term.write('\x1b[90m  2. Create a token (any lifetime \u2014 it will be\x1b[0m\r\n');
-        term.write('\x1b[90m     auto-rotated every 10 minutes)\x1b[0m\r\n');
+        term.write('\x1b[90m  2. Create a token with the shortest lifetime\x1b[0m\r\n');
         term.write('\x1b[90m  3. Paste it below\x1b[0m\r\n');
         term.write('\r\n');
         term.write('\x1b[1;37m  Token: \x1b[0m');
