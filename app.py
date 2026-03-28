@@ -961,6 +961,9 @@ def create_session():
         # Remove Claude Code env vars so the browser terminal isn't seen as nested
         shell_env.pop("CLAUDECODE", None)
         shell_env.pop("CLAUDE_CODE_SESSION", None)
+        # Remove DATABRICKS_TOKEN so CLI/SDK reads from ~/.databrickscfg (always
+        # current after rotation) instead of inheriting a stale env var snapshot
+        shell_env.pop("DATABRICKS_TOKEN", None)
         # Ensure HOME is set correctly
         if not shell_env.get("HOME") or shell_env["HOME"] == "/":
             shell_env["HOME"] = "/app/python/source_code"
