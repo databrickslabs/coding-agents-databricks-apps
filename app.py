@@ -629,15 +629,17 @@ def read_pty_output(session_id, fd):
         except OSError:
             break
 
-    # Process exited or fd closed — notify WebSocket clients (AC-9) and mark for HTTP poll
+    # Process exited or fd closed — notify WebSocket clients (AC-9)
     try:
         socketio.emit('session_exited', {'session_id': session_id}, room=session_id)
     except Exception:
         pass
 
-    with session_lock:
-        session["exited"] = True
-        logger.info(f"Session {session_id} process exited")
+    logger.info(f"Session {session_id} process exited")
+
+    # Clean up immediately — no zombie sessions in the picker
+    if session:
+        terminate_session(session_id, session["pid"], session["master_fd"])
 
 
 def terminate_session(session_id, pid, master_fd):
@@ -668,6 +670,59 @@ def terminate_session(session_id, pid, master_fd):
 
     with sessions_lock:
         sessions.pop(session_id, None)
+
+
+def _get_session_process(pid):
+    """Return the name of the foreground child process for *pid*.
+
+    Uses ``pgrep -P`` to find children (works on both macOS and Linux),
+    then ``ps -o comm=`` to resolve the process name.
+
+    Returns:
+        str: process name, or ``"unknown"`` on any error / dead PID.
+    """
+    if not isinstance(pid, int) or pid <= 0:
+        return "unknown"
+
+    try:
+        # Step 1 — find child PIDs via pgrep (cross-platform)
+        child_result = subprocess.run(
+            ["pgrep", "-P", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+
+        if child_result.returncode == 0 and child_result.stdout.strip():
+            child_pids = child_result.stdout.strip().splitlines()
+            last_child_pid = child_pids[-1].strip()
+
+            # Step 2 — resolve child name
+            name_result = subprocess.run(
+                ["ps", "-o", "comm=", "-p", last_child_pid],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            if name_result.returncode == 0 and name_result.stdout.strip():
+                name = name_result.stdout.strip().splitlines()[0].strip()
+                # ps may return the full path; take basename
+                return os.path.basename(name)
+
+        # Step 3 — no children: fall back to the process itself
+        self_result = subprocess.run(
+            ["ps", "-o", "comm=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if self_result.returncode == 0 and self_result.stdout.strip():
+            name = self_result.stdout.strip().splitlines()[0].strip()
+            return os.path.basename(name)
+
+        return "unknown"
+    except Exception:
+        return "unknown"
 
 
 def cleanup_stale_sessions():
@@ -702,7 +757,7 @@ def cleanup_stale_sessions():
 def authorize_request():
     """Check authorization before processing any request."""
     # Skip auth for health check, setup status, and Socket.IO (has own auth via connect event)
-    if request.path in ("/health", "/api/setup-status", "/api/pat-status", "/api/configure-pat", "/api/app-state") or request.path.startswith("/socket.io"):
+    if request.path in ("/health", "/api/setup-status", "/api/pat-status", "/api/configure-pat", "/api/app-state", "/api/sessions", "/api/session/attach") or request.path.startswith("/socket.io"):
         return None
 
     authorized, user = check_authorization()
@@ -753,6 +808,51 @@ def get_setup_status():
 def get_app_state():
     """Admin endpoint: persisted app state (owner, last rotation)."""
     return jsonify(app_state.get_state())
+
+
+@app.route("/api/sessions")
+def list_sessions():
+    """Return a JSON array of active (non-exited) sessions with metadata."""
+    now = time.time()
+    with sessions_lock:
+        snapshot = list(sessions.items())
+
+    result = []
+    for session_id, sess in snapshot:
+        if sess.get("exited"):
+            continue
+        result.append({
+            "session_id": session_id,
+            "label": sess.get("label", ""),
+            "created_at": sess.get("created_at"),
+            "last_poll_time": sess.get("last_poll_time"),
+            "exited": False,
+            "process": _get_session_process(sess["pid"]),
+            "idle_seconds": round(now - sess.get("last_poll_time", now), 1),
+        })
+    return jsonify(result)
+
+
+@app.route("/api/session/attach", methods=["POST"])
+def attach_session():
+    """Reattach to an existing session — returns buffered output for replay."""
+    data = request.get_json(silent=True) or {}
+    session_id = data.get("session_id", "")
+
+    sess = _get_session(session_id)
+    if not sess or sess.get("exited"):
+        return jsonify({"error": "Session not found or exited"}), 404
+
+    # Reset idle clock so the 24h reaper starts fresh
+    sess["last_poll_time"] = time.time()
+
+    return jsonify({
+        "session_id": session_id,
+        "label": sess.get("label", ""),
+        "output": list(sess["output_buffer"]),
+        "process": _get_session_process(sess["pid"]),
+        "created_at": sess.get("created_at"),
+    })
 
 
 @app.route("/health")
@@ -851,6 +951,8 @@ def configure_pat():
 @app.route("/api/session", methods=["POST"])
 def create_session():
     """Create a new terminal session."""
+    data = request.get_json(silent=True) or {}
+    label = data.get("label", "")
     try:
         master_fd, slave_fd = pty.openpty()
         # Set up environment for the shell
@@ -890,7 +992,8 @@ def create_session():
                 "output_buffer": deque(maxlen=1000),
                 "lock": threading.Lock(),
                 "last_poll_time": time.time(),
-                "created_at": time.time()
+                "created_at": time.time(),
+                "label": label,
             }
 
         # Start background reader thread
