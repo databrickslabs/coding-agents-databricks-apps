@@ -1152,6 +1152,7 @@
           term.write('\r\n  \x1b[1;33mn\x1b[0m  New session\r\n');
           term.write('  \x1b[1;31md\x1b[0m\x1b[1;31mN\x1b[0m Kill session N (e.g. d2)\r\n');
           term.write('  \x1b[1;31mx\x1b[0m  Kill all and start fresh\r\n');
+          term.write('  \x1b[90mq\x1b[0m  Cancel\r\n');
           term.write('\r\n\x1b[90m  Select:\x1b[0m ');
         }
 
@@ -1218,6 +1219,9 @@
                 body: JSON.stringify({ session_id: s.session_id })
               })
             )).then(() => createSession().then(sid => resolve({ sid, reattached: false })));
+          } else if (data === 'q' || data === 'Q' || data === '\x1b') {
+            disposable.dispose();
+            resolve({ sid: null, reattached: false, cancelled: true });
           }
         });
       });
@@ -1453,7 +1457,15 @@
           var reattached = true;
         } else {
           // Multiple sessions — show picker (may return reattach or new)
-          var { sid, reattached } = await showSessionPicker(term, liveSessions);
+          var pickerResult = await showSessionPicker(term, liveSessions);
+          if (pickerResult.cancelled) {
+            // Cancel on page load — just attach to the first session
+            var sid = await _doAttach(term, liveSessions[0].session_id);
+            var reattached = true;
+          } else {
+            var sid = pickerResult.sid;
+            var reattached = pickerResult.reattached;
+          }
         }
       } else {
         // Split pane or new tab — always create fresh session
@@ -1831,6 +1843,9 @@
         return;
       }
 
+      // Save current session so we can restore on cancel
+      const prevSessionId = pane.sessionId;
+
       // Detach current pane from its session (stop polling, leave WS room)
       pollWorker.postMessage({ type: 'stop_poll', paneId: pane.id });
       if (pane.sessionId && wsConnected && socket) {
@@ -1838,9 +1853,25 @@
       }
 
       // Show picker in this pane
-      const { sid, reattached } = await showSessionPicker(pane.term, liveSessions);
+      const result = await showSessionPicker(pane.term, liveSessions);
+
+      if (result.cancelled) {
+        // Restore previous session
+        pane.sessionId = prevSessionId;
+        if (prevSessionId) {
+          if (wsConnected && socket) {
+            socket.emit('join_session', { session_id: prevSessionId });
+          } else {
+            pollWorker.postMessage({ type: 'start_poll', paneId: pane.id, sessionId: prevSessionId });
+          }
+          // Replay buffer to restore the terminal view
+          await _doAttach(pane.term, prevSessionId);
+        }
+        return;
+      }
 
       // Wire up the selected session
+      const sid = result.sid;
       pane.sessionId = sid;
       if (wsConnected && socket) {
         socket.emit('join_session', { session_id: sid });
