@@ -1492,8 +1492,11 @@
         term.write('\x1b[90m \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\x1b[0m\r\n');
         term.write('\x1b[90m v' + appVersion + '  \u2502  Ready\x1b[0m\r\n');
         term.write('\r\n');
-        term.write('\x1b[90m Ctrl+/ for keyboard shortcuts\x1b[0m\r\n');
+        term.write('\x1b[90m Ctrl+/       keyboard shortcuts\x1b[0m\r\n');
+        term.write('\x1b[90m Ctrl+Shift+S manage sessions\x1b[0m\r\n');
         term.write('\x1b[90m Projects in ~/projects auto-sync to Workspace on commit\x1b[0m\r\n');
+        term.write('\r\n');
+        term.write('\x1b[33m Sessions persist until you type \x1b[1mexit\x1b[0m\x1b[33m — idle sessions expire after 24h.\x1b[0m\r\n');
         term.write('\r\n');
       }
 
