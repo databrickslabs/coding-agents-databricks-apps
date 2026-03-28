@@ -1855,7 +1855,7 @@
       const result = await showSessionPicker(pane.term, liveSessions);
 
       if (result.cancelled) {
-        // Restore previous session
+        // Restore previous session — rejoin and force redraw via resize
         pane.sessionId = prevSessionId;
         if (prevSessionId) {
           if (wsConnected && socket) {
@@ -1863,8 +1863,9 @@
           } else {
             pollWorker.postMessage({ type: 'start_poll', paneId: pane.id, sessionId: prevSessionId });
           }
-          // Replay buffer to restore the terminal view
-          await _doAttach(pane.term, prevSessionId);
+          // Clear picker and force the running program to redraw
+          pane.term.write('\x1b[2J\x1b[H');
+          await sendResize(pane.term.cols, pane.term.rows, prevSessionId);
         }
         return;
       }
