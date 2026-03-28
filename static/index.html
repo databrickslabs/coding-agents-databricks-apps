@@ -1239,7 +1239,6 @@
         data.output.forEach(line => term.write(line));
       }
       // Show reattach message at the bottom without overwriting buffer content
-      term.write('\x1b[90m\u2500\u2500 reattached \u2500\u2500\x1b[0m\r\n');
       // Tell PTY the current terminal size so it redraws correctly
       await sendResize(term.cols, term.rows, sessionId);
       return sessionId;
