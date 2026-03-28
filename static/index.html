@@ -1838,17 +1838,15 @@
       const result = await showSessionPicker(pane.term, liveSessions);
 
       if (result.cancelled) {
-        // Restore previous session — rejoin and force redraw via resize
-        pane.sessionId = prevSessionId;
+        // Restore previous session — replay scrollback buffer via _doAttach
         if (prevSessionId) {
+          await _doAttach(pane.term, prevSessionId);
+          pane.sessionId = prevSessionId;
           if (wsConnected && socket) {
             socket.emit('join_session', { session_id: prevSessionId });
           } else {
             pollWorker.postMessage({ type: 'start_poll', paneId: pane.id, sessionId: prevSessionId });
           }
-          // Clear picker and force the running program to redraw
-          pane.term.write('\x1b[2J\x1b[H');
-          await sendResize(pane.term.cols, pane.term.rows, prevSessionId);
         }
         return;
       }
