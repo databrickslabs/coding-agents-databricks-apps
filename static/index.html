@@ -1424,48 +1424,28 @@
         var sid = await createSession(tab.label);
         var reattached = false;
       } else if (!opts.newSession) {
-        // PAT is valid, initial page load — check for existing sessions to reattach
-        const sessionsResp = await fetch('/api/sessions');
-        const liveSessions = (await sessionsResp.json()).filter(s => !s.exited);
-
-        if (liveSessions.length === 0) {
-          // No existing sessions — check setup then create new
-          const setupResp2 = await fetch('/api/setup-status');
-          const setupData2 = await setupResp2.json();
-          if (setupData2.status !== 'complete' && setupData2.status !== 'error') {
-            term.write('\x1b[90m  Setting up CLI tools...\x1b[0m\r\n');
-            while (true) {
-              await new Promise(r => setTimeout(r, 2000));
-              const pollResp2 = await fetch('/api/setup-status');
-              const pollData2 = await pollResp2.json();
-              if (pollData2.status === 'complete' || pollData2.status === 'error') {
-                if (pollData2.status === 'complete') {
-                  term.write('\x1b[1;32m  Setup complete!\x1b[0m\r\n\r\n');
-                } else {
-                  term.write('\x1b[1;33m  Setup completed with warnings.\x1b[0m\r\n\r\n');
-                }
-                break;
+        // PAT is valid, initial page load — always create a fresh session.
+        // Reattaching to a previous session is intentional (Ctrl+Shift+S).
+        const setupResp2 = await fetch('/api/setup-status');
+        const setupData2 = await setupResp2.json();
+        if (setupData2.status !== 'complete' && setupData2.status !== 'error') {
+          term.write('\x1b[90m  Setting up CLI tools...\x1b[0m\r\n');
+          while (true) {
+            await new Promise(r => setTimeout(r, 2000));
+            const pollResp2 = await fetch('/api/setup-status');
+            const pollData2 = await pollResp2.json();
+            if (pollData2.status === 'complete' || pollData2.status === 'error') {
+              if (pollData2.status === 'complete') {
+                term.write('\x1b[1;32m  Setup complete!\x1b[0m\r\n\r\n');
+              } else {
+                term.write('\x1b[1;33m  Setup completed with warnings.\x1b[0m\r\n\r\n');
               }
+              break;
             }
           }
-          var sid = await createSession(tab.label);
-          var reattached = false;
-        } else if (liveSessions.length === 1) {
-          // One session — auto-reattach
-          var sid = await _doAttach(term, liveSessions[0].session_id);
-          var reattached = true;
-        } else {
-          // Multiple sessions — show picker (may return reattach or new)
-          var pickerResult = await showSessionPicker(term, liveSessions);
-          if (pickerResult.cancelled) {
-            // Cancel on page load — just attach to the first session
-            var sid = await _doAttach(term, liveSessions[0].session_id);
-            var reattached = true;
-          } else {
-            var sid = pickerResult.sid;
-            var reattached = pickerResult.reattached;
-          }
         }
+        var sid = await createSession(tab.label);
+        var reattached = false;
       } else {
         // Split pane or new tab — always create fresh session
         var sid = await createSession(tab.label);

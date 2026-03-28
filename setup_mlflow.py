@@ -33,7 +33,7 @@ experiment_name = f"/Users/{app_owner}/{app_name}"
 
 # Merge MLflow env vars
 settings.setdefault("env", {})
-settings["env"]["MLFLOW_CLAUDE_TRACING_ENABLED"] = "true"
+settings["env"]["MLFLOW_CLAUDE_TRACING_ENABLED"] = "false"
 settings["env"]["MLFLOW_TRACKING_URI"] = "databricks"
 settings["env"]["MLFLOW_EXPERIMENT_NAME"] = experiment_name
 # Override container-level OTEL endpoint so MLflow uses its native MlflowV3SpanExporter

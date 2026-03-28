@@ -65,7 +65,7 @@ class TestMlflowEnvVars:
         result = run_setup_mlflow(tmp_path, {"APP_OWNER": "jane@company.com"})
         assert result.returncode == 0
         settings = read_settings(tmp_path)
-        assert settings["env"]["MLFLOW_CLAUDE_TRACING_ENABLED"] == "true"
+        assert settings["env"]["MLFLOW_CLAUDE_TRACING_ENABLED"] == "false"
 
     def test_tracking_uri(self, tmp_path):
         write_existing_settings(tmp_path, {"env": {}})
@@ -140,7 +140,7 @@ class TestSettingsMerge:
         assert settings["env"]["ANTHROPIC_MODEL"] == "databricks-claude-opus-4-6"
         assert settings["env"]["ANTHROPIC_BASE_URL"] == "https://test.com/anthropic"
         assert settings["env"]["ANTHROPIC_AUTH_TOKEN"] == "secret"
-        assert settings["env"]["MLFLOW_CLAUDE_TRACING_ENABLED"] == "true"
+        assert settings["env"]["MLFLOW_CLAUDE_TRACING_ENABLED"] == "false"
 
     def test_preserves_existing_hooks(self, tmp_path):
         write_existing_settings(tmp_path, {
