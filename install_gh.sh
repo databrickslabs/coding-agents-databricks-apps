@@ -17,11 +17,20 @@ GH_VERSION=$(curl -fsSL "https://api.github.com/repos/cli/cli/releases/latest" \
 
 echo "Installing GitHub CLI v${GH_VERSION}"
 
-curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
+# Detect OS and architecture
+_OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+_ARCH=$(uname -m)
+case "$_ARCH" in
+  x86_64)  _ARCH="amd64" ;;
+  aarch64|arm64) _ARCH="arm64" ;;
+esac
+GH_TARBALL="gh_${GH_VERSION}_${_OS}_${_ARCH}"
+
+curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/${GH_TARBALL}.tar.gz" \
   -o /tmp/gh.tar.gz
 tar -xzf /tmp/gh.tar.gz -C /tmp
-mv "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" "$INSTALL_DIR/gh"
-rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_amd64"
+mv "/tmp/${GH_TARBALL}/bin/gh" "$INSTALL_DIR/gh"
+rm -rf /tmp/gh.tar.gz "/tmp/${GH_TARBALL}"
 chmod +x "$INSTALL_DIR/gh"
 
 # Set git protocol to HTTPS
