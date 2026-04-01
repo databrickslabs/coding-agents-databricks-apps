@@ -1,33 +1,28 @@
 # Makefile for deploying Coding Agents to Databricks Apps
 #
 # Usage:
-#   make deploy-e2e PROFILE=dogfood          # fully automated deploy (auto-generates PAT)
-#   make deploy PROFILE=dogfood              # full deploy (prompts for PAT interactively)
-#   make redeploy PROFILE=dogfood            # skip secret setup, just sync + deploy
+#   make deploy PROFILE=dogfood              # full deploy (create app, sync, deploy)
+#   make redeploy PROFILE=dogfood            # skip app creation, just sync + deploy
+#   make create-pat PROFILE=dogfood          # generate a 1-day PAT and copy to clipboard
 #   make status PROFILE=dogfood              # check app status
 #   make open PROFILE=dogfood                # open app in browser
 #   make clean PROFILE=dogfood               # remove app and secret scope
 
-# Configuration (accepts lowercase: make deploy-e2e profile=dogfood)
+# Configuration (accepts lowercase: make deploy profile=dogfood)
 ifdef profile
 PROFILE := $(profile)
 endif
 ifdef app_name
 APP_NAME := $(app_name)
 endif
-ifdef pat
-PAT := $(pat)
-endif
 PROFILE       ?= DEFAULT
 APP_NAME      ?= coding-agents
-SECRET_SCOPE  ?= $(APP_NAME)-secrets
-SECRET_KEY    ?= databricks-token
 
 # Resolve user email and workspace path from the profile
 USER_EMAIL    = $(shell databricks current-user me --profile $(PROFILE) --output json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('userName',''))")
 WORKSPACE_PATH = /Workspace/Users/$(USER_EMAIL)/apps/$(APP_NAME)
 
-.PHONY: help deploy-e2e deploy redeploy create-app create-pat setup-secret sync deploy-app status open clean clean-secret
+.PHONY: help deploy redeploy create-app create-pat sync deploy-app status open clean
 
 # ── Help ─────────────────────────────────────────────
 
@@ -36,12 +31,7 @@ help: ## Show this help
 
 # ── Workflows ────────────────────────────────────────
 
-deploy-e2e: create-app create-pat sync deploy-app ## Full automated deploy (auto-generates PAT)
-	@echo ""
-	@echo "Deployment complete! App URL:"
-	@databricks apps get $(APP_NAME) --profile $(PROFILE) --output json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('url','(pending)'))"
-
-deploy: create-app setup-secret sync deploy-app ## Full deploy (prompts for PAT interactively)
+deploy: create-app sync deploy-app ## Full deploy (create app, sync, deploy)
 	@echo ""
 	@echo "Deployment complete! App URL:"
 	@databricks apps get $(APP_NAME) --profile $(PROFILE) --output json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('url','(pending)'))"
@@ -73,55 +63,13 @@ create-app: ## Create the Databricks App (idempotent)
 		databricks apps create $(APP_NAME) --profile $(PROFILE); \
 	fi
 
-create-pat: ## Generate a 90-day PAT and store it as the app secret
-	@echo "==> Ensuring secret scope '$(SECRET_SCOPE)' exists..."
-	@if databricks secrets list-scopes --profile $(PROFILE) --output json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); scopes=[s['name'] for s in (d if isinstance(d,list) else d.get('scopes',[]))]; exit(0 if '$(SECRET_SCOPE)' in scopes else 1)" 2>/dev/null; then \
-		echo "    Secret scope '$(SECRET_SCOPE)' already exists."; \
-	else \
-		echo "    Creating secret scope '$(SECRET_SCOPE)'..."; \
-		databricks secrets create-scope $(SECRET_SCOPE) --profile $(PROFILE); \
-	fi
-	@echo "==> Generating a 90-day PAT..."
-	@databricks tokens create --lifetime-seconds $$((90 * 24 * 60 * 60)) --comment "coding-agents (auto-generated)" --profile $(PROFILE) --output json \
-		| python3 -c "import sys,json; print(json.load(sys.stdin)['token_value'])" \
-		| databricks secrets put-secret $(SECRET_SCOPE) $(SECRET_KEY) --profile $(PROFILE)
-	@echo "    PAT created and stored in $(SECRET_SCOPE)/$(SECRET_KEY)"
-	@echo "==> Linking secret to app resource 'DATABRICKS_TOKEN'..."
-	@curl -s -X PATCH \
-		"$$(databricks auth env --profile $(PROFILE) 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)['env']['DATABRICKS_HOST'])")/api/2.0/apps/$(APP_NAME)" \
-		-H "Authorization: Bearer $$(databricks auth token --profile $(PROFILE) 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")" \
-		-H "Content-Type: application/json" \
-		-d '{"resources":[{"name":"DATABRICKS_TOKEN","description":"PAT for model serving access","secret":{"scope":"$(SECRET_SCOPE)","key":"$(SECRET_KEY)","permission":"READ"}}]}' \
-		>/dev/null
-	@echo "    App resource linked."
+create-pat: ## Generate a 1-day PAT and copy it to your clipboard
+	@echo "==> Generating a 1-day PAT..."
+	@token=$$(databricks tokens create --lifetime-seconds $$((1 * 24 * 60 * 60)) --comment "coding-agents (1-day)" --profile $(PROFILE) --output json \
+		| python3 -c "import sys,json; print(json.load(sys.stdin)['token_value'])") && \
+	echo "$$token" | pbcopy && \
+	echo "    PAT copied to clipboard! (expires in 24 hours)"
 
-setup-secret: ## Create secret scope and store PAT (interactive)
-	@echo "==> Setting up DATABRICKS_TOKEN secret..."
-	@# Create scope if it doesn't exist
-	@if databricks secrets list-scopes --profile $(PROFILE) --output json 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); scopes=[s['name'] for s in (d if isinstance(d,list) else d.get('scopes',[]))]; exit(0 if '$(SECRET_SCOPE)' in scopes else 1)" 2>/dev/null; then \
-		echo "    Secret scope '$(SECRET_SCOPE)' already exists."; \
-	else \
-		echo "    Creating secret scope '$(SECRET_SCOPE)'..."; \
-		databricks secrets create-scope $(SECRET_SCOPE) --profile $(PROFILE); \
-	fi
-	@# Store the PAT - prompt if not provided
-	@if [ -z "$(PAT)" ]; then \
-		echo "    Enter your Databricks PAT (will not echo):"; \
-		read -s pat_value && \
-		echo "$$pat_value" | databricks secrets put-secret $(SECRET_SCOPE) $(SECRET_KEY) --profile $(PROFILE); \
-	else \
-		echo "$(PAT)" | databricks secrets put-secret $(SECRET_SCOPE) $(SECRET_KEY) --profile $(PROFILE); \
-	fi
-	@echo "    Secret stored in $(SECRET_SCOPE)/$(SECRET_KEY)"
-	@# Link secret to app resource
-	@echo "    Linking secret to app resource 'DATABRICKS_TOKEN'..."
-	@curl -s -X PATCH \
-		"$$(databricks auth env --profile $(PROFILE) 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)['env']['DATABRICKS_HOST'])")/api/2.0/apps/$(APP_NAME)" \
-		-H "Authorization: Bearer $$(databricks auth token --profile $(PROFILE) 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")" \
-		-H "Content-Type: application/json" \
-		-d '{"resources":[{"name":"DATABRICKS_TOKEN","description":"PAT for model serving access","secret":{"scope":"$(SECRET_SCOPE)","key":"$(SECRET_KEY)","permission":"READ"}}]}' \
-		>/dev/null
-	@echo "    App resource linked."
 
 sync: ## Sync local files to Databricks workspace
 	@echo "==> Syncing to $(WORKSPACE_PATH)..."
@@ -143,28 +91,9 @@ open: ## Open the app in browser
 
 # ── Cleanup (destructive) ───────────────────────────
 
-clean: ## Remove app and secret scope (destructive)
+clean: ## Remove the app (destructive)
 	@echo "==> Removing app '$(APP_NAME)'..."
 	@databricks apps delete $(APP_NAME) --profile $(PROFILE) 2>/dev/null && \
 		echo "    App '$(APP_NAME)' deleted." || \
 		echo "    App '$(APP_NAME)' not found or already deleted."
-	@echo "==> Removing secret scope '$(SECRET_SCOPE)'..."
-	@databricks secrets delete-scope $(SECRET_SCOPE) --profile $(PROFILE) 2>/dev/null && \
-		echo "    Secret scope '$(SECRET_SCOPE)' deleted." || \
-		echo "    Secret scope '$(SECRET_SCOPE)' not found or already deleted."
 
-clean-secret: ## Remove secret and optionally the scope (destructive)
-	@echo "==> Removing secret '$(SECRET_KEY)' from scope '$(SECRET_SCOPE)'..."
-	@databricks secrets delete-secret $(SECRET_SCOPE) $(SECRET_KEY) --profile $(PROFILE) 2>/dev/null && \
-		echo "    Secret '$(SECRET_KEY)' deleted." || \
-		echo "    Secret '$(SECRET_KEY)' not found or already deleted."
-	@printf "    Remove the entire secret scope '$(SECRET_SCOPE)'? [y/N] " && \
-		read answer && \
-		if [ "$$answer" = "y" ] || [ "$$answer" = "Y" ]; then \
-			echo "    Removing secret scope '$(SECRET_SCOPE)'..."; \
-			databricks secrets delete-scope $(SECRET_SCOPE) --profile $(PROFILE) && \
-				echo "    Secret scope '$(SECRET_SCOPE)' deleted." || \
-				echo "    Failed to delete secret scope."; \
-		else \
-			echo "    Keeping secret scope '$(SECRET_SCOPE)'."; \
-		fi
