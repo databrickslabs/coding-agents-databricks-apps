@@ -1,0 +1,40 @@
+name: Update Lockfile
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "requirements.txt"
+
+jobs:
+  update-lockfile:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Regenerate requirements.lock
+        run: uv pip compile requirements.txt -o requirements.lock --generate-hashes
+
+      - name: Commit updated lockfile
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet requirements.lock; then
+            echo "requirements.lock is already up to date, nothing to commit"
+          else
+            git add requirements.lock
+            git commit -m "chore: regenerate requirements.lock after requirements.txt update"
+            git push
+          fi

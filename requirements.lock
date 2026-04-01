@@ -256,7 +256,7 @@ click==8.3.1 \
     #   flask
     #   flask-socketio
     #   uvicorn
-cryptography @ git+https://github.com/pyca/cryptography@91d728897bdad30cd5c79a2b23e207f1f050d587
+cryptography==46.0.6
     # via
     #   -r requirements.txt
     #   pyjwt

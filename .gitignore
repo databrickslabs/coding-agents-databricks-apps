@@ -17,3 +17,6 @@ outstanding-todos.md
 
 # Uploaded files (clipboard paste images)
 uploads/
+
+# uv lockfile — not portable across PyPI proxies, generate locally with `uv lock`
+uv.lock

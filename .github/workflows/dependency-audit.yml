@@ -27,8 +27,22 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
       - name: Install audit tools
-        run: pip install pip-audit==2.9.0 uv==0.7.12
+        run: pip install pip-audit==2.9.0
+
+      - name: Compile requirements.txt from pyproject.toml
+        run: |
+          # Keep requirements.txt in sync with pyproject.toml so Dependabot can scan it.
+          # Note: [tool.uv.sources] git overrides are not resolved by pip compile —
+          # requests and cryptography fall back to their PyPI versions here, which is
+          # intentional for Dependabot's purposes.
+          uv pip compile pyproject.toml -o /tmp/requirements.compiled.txt
+          if ! diff -q requirements.txt /tmp/requirements.compiled.txt > /dev/null 2>&1; then
+            echo "::warning::requirements.txt is out of date with pyproject.toml. Run: uv pip compile pyproject.toml -o requirements.txt"
+          fi
 
       - name: Audit pinned dependencies
         run: |

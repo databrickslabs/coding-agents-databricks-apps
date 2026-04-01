@@ -5,8 +5,23 @@ description = "CoDA - Coding Agents on Databricks Apps"
 requires-python = ">=3.10"
 dependencies = [
     "flask>=2.0",
+    "flask-socketio>=5.0",
+    "simple-websocket>=1.0",
     "claude-agent-sdk",
     "databricks-sdk>=0.20.0",
-    "mlflow[genai]>=3.4",
+    "mlflow-tracing>=3.4",
     "opentelemetry-exporter-otlp-proto-grpc",
+    "requests",
+    "cryptography",
 ]
+
+[tool.uv]
+# Exclude packages uploaded to PyPI more recently than ~30 days ago.
+# This gives the community time to catch supply-chain issues before they land here.
+# Bump this date when you intentionally need a newer release.
+exclude-newer = "7 days"
+
+[tool.uv.sources]
+# Direct GitHub installs — workaround for Databricks internal PyPI proxy gaps.
+# Remove these once the proxy has current versions.
+requests = { git = "https://github.com/psf/requests", rev = "v2.33.0" }
