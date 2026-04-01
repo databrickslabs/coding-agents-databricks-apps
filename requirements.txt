@@ -6,4 +6,4 @@ databricks-sdk==0.102.0
 mlflow-tracing==3.10.1
 opentelemetry-exporter-otlp-proto-grpc==1.40.0
 requests @ git+https://github.com/psf/requests@v2.33.0
-cryptography @ git+https://github.com/pyca/cryptography@46.0.6
+cryptography==46.0.6

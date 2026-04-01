@@ -25,4 +25,3 @@ exclude-newer = "7 days"
 # Direct GitHub installs — workaround for Databricks internal PyPI proxy gaps.
 # Remove these once the proxy has current versions.
 requests = { git = "https://github.com/psf/requests", rev = "v2.33.0" }
-cryptography = { git = "https://github.com/pyca/cryptography", rev = "46.0.6" }
