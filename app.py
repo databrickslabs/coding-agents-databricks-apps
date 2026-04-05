@@ -921,13 +921,14 @@ def configure_pat():
 
     # Immediately mint a controlled short-lived token from the user-pasted PAT.
     # This gives us a token ID we own — all future rotations can revoke the old one.
-    # The user-pasted PAT becomes unused after this (expires per its own lifetime).
     os.environ["DATABRICKS_TOKEN"] = token
     pat_rotator._current_token = token
     pat_rotator._current_token_id = None
     rotated = pat_rotator._rotate_once()
     if rotated:
         token = pat_rotator.token  # use the newly minted token from here on
+        # Revoke only the bootstrap PAT — leave other user PATs intact (#98)
+        pat_rotator.revoke_bootstrap_token()
     else:
         # Rotation failed — fall back to user-pasted token (still valid)
         pat_rotator._write_databrickscfg(token)

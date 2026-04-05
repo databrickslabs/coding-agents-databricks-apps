@@ -1,6 +1,7 @@
 name: Dependency Audit
 
 on:
+  workflow_dispatch:
   pull_request:
     paths:
       - "requirements.txt"
