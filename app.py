@@ -21,7 +21,7 @@ import tomllib
 import requests
 
 import app_state
-from utils import ensure_https
+from utils import ensure_https, get_gateway_host
 from pat_rotator import PATRotator
 
 # Sanitize DATABRICKS_TOKEN early — the platform sometimes injects trailing
@@ -278,7 +278,7 @@ def _configure_all_cli_auth(token):
     claude_dir = os.path.join(home, ".claude")
     os.makedirs(claude_dir, exist_ok=True)
 
-    gateway_host = ensure_https(os.environ.get("DATABRICKS_GATEWAY_HOST", "").rstrip("/"))
+    gateway_host = get_gateway_host()
     databricks_host = ensure_https(os.environ.get("DATABRICKS_HOST", "").rstrip("/"))
 
     if gateway_host:

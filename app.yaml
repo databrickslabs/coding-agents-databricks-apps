@@ -10,7 +10,5 @@ env:
     value: databricks-gemini-3-1-pro
   - name: CODEX_MODEL
     value: databricks-gpt-5-2
-  - name: DATABRICKS_GATEWAY_HOST
-    valueFrom: DATABRICKS_GATEWAY_HOST
   - name: CLAUDE_CODE_DISABLE_AUTO_MEMORY
     value: 0

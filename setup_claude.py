@@ -4,7 +4,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from utils import ensure_https
+from utils import ensure_https, get_gateway_host
 
 # Set HOME if not properly set
 if not os.environ.get("HOME") or os.environ["HOME"] == "/":
@@ -19,8 +19,7 @@ claude_dir.mkdir(exist_ok=True)
 # 1. Write settings.json for Databricks model serving (requires DATABRICKS_TOKEN)
 token = os.environ.get("DATABRICKS_TOKEN", "").strip()
 if token:
-    # Use DATABRICKS_GATEWAY_HOST if available (new AI Gateway), otherwise fall back to DATABRICKS_HOST
-    gateway_host = ensure_https(os.environ.get("DATABRICKS_GATEWAY_HOST", "").rstrip("/"))
+    gateway_host = get_gateway_host()
     databricks_host = ensure_https(os.environ.get("DATABRICKS_HOST", "").rstrip("/"))
 
     if gateway_host:

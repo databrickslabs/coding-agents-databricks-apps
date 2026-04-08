@@ -16,7 +16,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from utils import adapt_instructions_file, ensure_https, get_npm_version
+from utils import adapt_instructions_file, ensure_https, get_gateway_host, get_npm_version
 
 # Set HOME if not properly set
 if not os.environ.get("HOME") or os.environ["HOME"] == "/":
@@ -59,11 +59,10 @@ if not host or not token:
 # Strip trailing slash and ensure https:// prefix
 host = ensure_https(host.rstrip("/"))
 
-# Use DATABRICKS_GATEWAY_HOST if available (new AI Gateway), otherwise fall back to DATABRICKS_HOST
-gateway_host = ensure_https(os.environ.get("DATABRICKS_GATEWAY_HOST", "").rstrip("/"))
+gateway_host = get_gateway_host()
 gateway_token = os.environ.get("DATABRICKS_TOKEN", "") if gateway_host else ""
 if gateway_host and not gateway_token:
-    print("Warning: DATABRICKS_GATEWAY_HOST set but DATABRICKS_TOKEN missing, falling back to DATABRICKS_HOST")
+    print("Warning: AI Gateway resolved but DATABRICKS_TOKEN missing, falling back to DATABRICKS_HOST")
     gateway_host = ""
 
 if gateway_host:

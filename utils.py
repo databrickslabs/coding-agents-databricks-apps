@@ -1,5 +1,6 @@
 """Shared utilities for Databricks App setup scripts."""
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -58,6 +59,25 @@ def adapt_instructions_file(
     target_path.write_text(adapted_content)
     print(f"{cli_name} instructions configured: {target_path}")
     return True
+
+
+def get_gateway_host() -> str:
+    """Resolve the AI Gateway host URL.
+
+    Priority:
+      1. Explicit DATABRICKS_GATEWAY_HOST env var (override)
+      2. Auto-constructed from DATABRICKS_WORKSPACE_ID
+      3. Empty string (caller falls back to DATABRICKS_HOST/serving-endpoints)
+    """
+    explicit = os.environ.get("DATABRICKS_GATEWAY_HOST", "").strip().rstrip("/")
+    if explicit:
+        return ensure_https(explicit)
+
+    workspace_id = os.environ.get("DATABRICKS_WORKSPACE_ID", "").strip()
+    if workspace_id:
+        return f"https://{workspace_id}.ai-gateway.cloud.databricks.com"
+
+    return ""
 
 
 def ensure_https(url: str) -> str:

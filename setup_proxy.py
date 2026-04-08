@@ -18,7 +18,7 @@ from pathlib import Path
 from urllib.request import urlopen, Request
 from urllib.error import URLError
 
-from utils import ensure_https
+from utils import ensure_https, get_gateway_host
 
 PROXY_PORT = 4000
 PROXY_HOST = "127.0.0.1"
@@ -63,7 +63,7 @@ pid_path = home / ".content-filter-proxy.pid"
 pid_path.unlink(missing_ok=True)
 
 # Databricks configuration
-gateway_host = ensure_https(os.environ.get("DATABRICKS_GATEWAY_HOST", "").rstrip("/"))
+gateway_host = get_gateway_host()
 host = ensure_https(os.environ.get("DATABRICKS_HOST", "").rstrip("/"))
 token = os.environ.get("DATABRICKS_TOKEN", "")
 
