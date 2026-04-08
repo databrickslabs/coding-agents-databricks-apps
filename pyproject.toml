@@ -12,7 +12,7 @@ dependencies = [
     "mlflow-tracing>=3.4",
     "opentelemetry-exporter-otlp-proto-grpc",
     "requests",
-    "cryptography",
+    "cryptography>=46.0.6",
 ]
 
 [tool.uv]
