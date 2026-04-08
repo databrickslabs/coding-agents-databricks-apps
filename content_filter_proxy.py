@@ -16,10 +16,12 @@ beyond stdlib + requests (already installed via databricks-sdk).
 See: https://github.com/sst/opencode/issues/5028
      https://github.com/BerriAI/litellm/pull/20384
 """
+import configparser
 import json
 import logging
 import os
 import sys
+import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
@@ -28,6 +30,45 @@ import requests
 UPSTREAM_BASE = os.environ.get("PROXY_UPSTREAM_BASE", "")
 LISTEN_HOST = os.environ.get("PROXY_HOST", "127.0.0.1")
 LISTEN_PORT = int(os.environ.get("PROXY_PORT", "4000"))
+
+# ---------------------------------------------------------------------------
+# Fresh token injection — survives PAT rotation
+# ---------------------------------------------------------------------------
+# The PAT rotator writes the latest token to ~/.databrickscfg every rotation.
+# OpenCode (and this proxy) are separate processes with frozen env snapshots,
+# so we read the file on-demand instead of trusting os.environ.
+
+_TOKEN_CACHE: dict = {"token": None, "read_at": 0.0}
+_TOKEN_CACHE_TTL = 30  # seconds — short enough to pick up rotations quickly
+
+_HOME = os.environ.get("HOME", "/app/python/source_code")
+if not _HOME or _HOME == "/":
+    _HOME = "/app/python/source_code"
+_DATABRICKSCFG_PATH = os.path.join(_HOME, ".databrickscfg")
+
+
+def _get_fresh_token() -> str | None:
+    """Read current token from ~/.databrickscfg (updated by PAT rotator).
+
+    Returns cached value if read within the last _TOKEN_CACHE_TTL seconds.
+    """
+    now = time.time()
+    if _TOKEN_CACHE["token"] and (now - _TOKEN_CACHE["read_at"]) < _TOKEN_CACHE_TTL:
+        return _TOKEN_CACHE["token"]
+
+    try:
+        config = configparser.ConfigParser()
+        config.read(_DATABRICKSCFG_PATH)
+        token = config.get("DEFAULT", "token", fallback=None)
+        if token:
+            _TOKEN_CACHE["token"] = token
+            _TOKEN_CACHE["read_at"] = now
+            return token
+    except Exception as e:
+        log.warning(f"Could not read fresh token from {_DATABRICKSCFG_PATH}: {e}")
+
+    return _TOKEN_CACHE.get("token")  # stale is better than nothing
+
 
 # Diagnostic logging — writes to stderr which goes to ~/.content-filter-proxy.log
 log = logging.getLogger("content-filter-proxy")
@@ -502,12 +543,18 @@ class ProxyHandler(BaseHTTPRequestHandler):
         # Build upstream URL
         upstream_url = UPSTREAM_BASE + self.path
 
-        # Forward headers
+        # Forward headers (inject fresh token to survive PAT rotation)
         headers = {}
         for key in self.headers:
             if key.lower() not in ("host", "content-length", "transfer-encoding"):
                 headers[key] = self.headers[key]
         headers["Content-Length"] = str(len(body))
+
+        # Override auth with fresh token from disk — OpenCode's cached token
+        # goes stale after PAT rotation since it's a long-lived TUI process
+        fresh_token = _get_fresh_token()
+        if fresh_token:
+            headers["Authorization"] = f"Bearer {fresh_token}"
 
         # Detect streaming
         is_stream = False
