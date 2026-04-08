@@ -68,7 +68,7 @@ databricks apps deploy <your-app-name> \
 | `DATABRICKS_TOKEN` | No | Optional. If not set, the app prompts for a token on first session. Auto-rotated every 10 minutes |
 | `HOME` | Yes | Set to `/app/python/source_code` in app.yaml |
 | `ANTHROPIC_MODEL` | No | Claude model name (default: `databricks-claude-opus-4-6`) |
-| `CODEX_MODEL` | No | Codex model name (default: `databricks-gpt-5-2`) |
+| `CODEX_MODEL` | No | Codex model name (default: `databricks-gpt-5-3-codex`) |
 | `GEMINI_MODEL` | No | Gemini model name (default: `databricks-gemini-3-1-pro`) |
 | `DATABRICKS_GATEWAY_HOST` | No | AI Gateway URL override. Auto-discovered from `DATABRICKS_WORKSPACE_ID` if unset. Falls back to direct model serving if neither is available |
 

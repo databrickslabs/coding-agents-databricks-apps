@@ -152,8 +152,8 @@ if gateway_host:
                     "compatibility": "compatible"
                 },
                 "models": {
-                    "databricks-gpt-5-2-codex": {
-                        "name": "GPT 5.2 Codex (Databricks)",
+                    "databricks-gpt-5-3-codex": {
+                        "name": "GPT 5.3 Codex (Databricks)",
                         "limit": {
                             "context": 200000,
                             "output": 16384
@@ -285,6 +285,6 @@ print(f"OpenCode auth configured: {auth_path}")
 print(f"\nOpenCode ready! Default model: {anthropic_model}")
 print("  opencode                          # Start OpenCode TUI")
 if gateway_host:
-    print("  opencode -m databricks-openai/databricks-gpt-5-2-codex  # Use GPT 5.2 Codex")
+    print("  opencode -m databricks-openai/databricks-gpt-5-3-codex  # Use GPT 5.3 Codex")
 print("  opencode -m databricks/databricks-gemini-2-5-flash  # Use Gemini")
 print(f"  opencode -m databricks/{anthropic_model} # Use Claude (default)")

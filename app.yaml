@@ -9,6 +9,6 @@ env:
   - name: GEMINI_MODEL
     value: databricks-gemini-3-1-pro
   - name: CODEX_MODEL
-    value: databricks-gpt-5-2
+    value: databricks-gpt-5-3-codex
   - name: CLAUDE_CODE_DISABLE_AUTO_MEMORY
     value: 0

@@ -29,7 +29,8 @@ ALWAYS use exact endpoint names from this table. NEVER guess or abbreviate.
 
 | Endpoint Name | Provider | Notes |
 |--------------|----------|-------|
-| `databricks-gpt-5-2` | OpenAI | Latest GPT, 400K context |
+| `databricks-gpt-5-3-codex` | OpenAI | Latest GPT Codex, 400K context |
+| `databricks-gpt-5-2` | OpenAI | GPT 5.2, 400K context |
 | `databricks-gpt-5-1` | OpenAI | Instant + Thinking modes |
 | `databricks-gpt-5-1-codex-max` | OpenAI | Code-specialized (high perf) |
 | `databricks-gpt-5-1-codex-mini` | OpenAI | Code-specialized (cost-opt) |
