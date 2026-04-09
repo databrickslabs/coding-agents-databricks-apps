@@ -28,9 +28,9 @@ certifi==2026.2.25
     #   requests
 cffi==2.0.0
     # via cryptography
-charset-normalizer==3.4.6
+charset-normalizer==3.4.7
     # via requests
-claude-agent-sdk==0.1.50
+claude-agent-sdk==0.1.54
     # via coda (pyproject.toml)
 click==8.3.1
     # via
