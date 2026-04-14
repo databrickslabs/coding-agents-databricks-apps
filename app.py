@@ -271,6 +271,9 @@ def _configure_all_cli_auth(token):
     """
     import json
 
+    from utils import resolve_and_cache_gateway
+    resolve_and_cache_gateway()
+
     home = os.environ.get("HOME", "/app/python/source_code")
     if not home or home == "/":
         home = "/app/python/source_code"
@@ -333,6 +336,10 @@ def run_setup():
         setup_state["status"] = "running"
         setup_state["started_at"] = time.time()
 
+    # Probe AI Gateway once; result is cached in _GATEWAY_RESOLVED for subprocesses
+    from utils import resolve_and_cache_gateway
+    resolve_and_cache_gateway()
+
     # --- Sequential prerequisites (git identity + editor) ---
     # Git config — done directly in Python, not as a subprocess
     _update_step("git", status="running", started_at=time.time())
@@ -392,7 +399,7 @@ def get_token_owner():
         try:
             w = WorkspaceClient()  # auto-detects SP credentials
             app = w.apps.get(name=app_name)
-            owner = app.creator
+            owner = (app.creator or "").lower()
             logger.info(f"Owner resolved from app.creator: {owner}")
             return owner
         except Exception as e:
@@ -405,17 +412,24 @@ def get_token_owner():
         if not host or not token:
             return None
         w = WorkspaceClient(host=host, token=token, auth_type="pat")
-        return w.current_user.me().user_name
+        username = w.current_user.me().user_name
+        return username.lower() if username else username
     except Exception as e:
         logger.warning(f"Could not determine token owner: {e}")
         return None
 
 
 def get_request_user():
-    """Extract user email from Databricks Apps request headers."""
-    return request.headers.get("X-Forwarded-Email") or \
-           request.headers.get("X-Forwarded-User") or \
-           request.headers.get("X-Databricks-User-Email")
+    """Extract user email from Databricks Apps request headers.
+
+    Returns lowercase email to ensure case-insensitive matching against app_owner.
+    """
+    email = (
+        request.headers.get("X-Forwarded-Email")
+        or request.headers.get("X-Forwarded-User")
+        or request.headers.get("X-Databricks-User-Email")
+    )
+    return email.lower() if email else email
 
 
 def _is_databricks_apps():
@@ -468,9 +482,12 @@ def _check_ws_authorization():
         return True  # Local dev only
 
     # Socket.IO passes HTTP headers from the initial handshake via request context
-    current_user = request.headers.get("X-Forwarded-Email") or \
-                   request.headers.get("X-Forwarded-User") or \
-                   request.headers.get("X-Databricks-User-Email")
+    raw_user = (
+        request.headers.get("X-Forwarded-Email")
+        or request.headers.get("X-Forwarded-User")
+        or request.headers.get("X-Databricks-User-Email")
+    )
+    current_user = raw_user.lower() if raw_user else raw_user
 
     if not current_user:
         if _is_databricks_apps():

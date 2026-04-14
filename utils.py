@@ -1,5 +1,7 @@
 """Shared utilities for Databricks App setup scripts."""
 
+from __future__ import annotations
+
 import os
 import re
 import subprocess
@@ -61,23 +63,67 @@ def adapt_instructions_file(
     return True
 
 
+def _probe_gateway(url: str, timeout: float = 2.0) -> bool:
+    """Quick connectivity check against an AI Gateway host.
+
+    Sends a lightweight GET to the root. Any HTTP response (even 401/404)
+    means the host exists. Only a connection failure means it doesn't.
+    Timeout is 2s — the gateway is same-region, so it responds fast if it exists.
+    """
+    import requests
+
+    try:
+        requests.get(url, timeout=timeout, allow_redirects=False)
+        return True
+    except (requests.ConnectionError, requests.Timeout):
+        return False
+    except Exception:
+        return False
+
+
 def get_gateway_host() -> str:
     """Resolve the AI Gateway host URL.
 
     Priority:
-      1. Explicit DATABRICKS_GATEWAY_HOST env var (override)
-      2. Auto-constructed from DATABRICKS_WORKSPACE_ID
+      0. _GATEWAY_RESOLVED env var (set by parent process after probing — avoids
+         re-probing in subprocesses). None = never probed, "" = probed, no gateway.
+      1. Explicit DATABRICKS_GATEWAY_HOST env var (trusted — no probe)
+      2. Auto-constructed from DATABRICKS_WORKSPACE_ID (probed for reachability)
       3. Empty string (caller falls back to DATABRICKS_HOST/serving-endpoints)
     """
+    # Tier 0: already resolved by a parent process
+    resolved = os.environ.get("_GATEWAY_RESOLVED")
+    if resolved is not None:
+        return resolved
+
+    # Tier 1: explicit override (trusted, no probe)
     explicit = os.environ.get("DATABRICKS_GATEWAY_HOST", "").strip().rstrip("/")
     if explicit:
         return ensure_https(explicit)
 
+    # Tier 2: auto-construct from workspace ID and probe for reachability
     workspace_id = os.environ.get("DATABRICKS_WORKSPACE_ID", "").strip()
     if workspace_id:
-        return f"https://{workspace_id}.ai-gateway.cloud.databricks.com"
+        candidate = f"https://{workspace_id}.ai-gateway.cloud.databricks.com"
+        if _probe_gateway(candidate):
+            return candidate
+        print(
+            f"AI Gateway not reachable at {candidate}, "
+            "falling back to serving-endpoints"
+        )
 
     return ""
+
+
+def resolve_and_cache_gateway() -> str:
+    """Probe the gateway once and cache the result in the environment.
+
+    Subsequent calls to get_gateway_host() — including those in child
+    processes — will see _GATEWAY_RESOLVED and skip the probe.
+    """
+    result = get_gateway_host()
+    os.environ["_GATEWAY_RESOLVED"] = result
+    return result
 
 
 def ensure_https(url: str) -> str:
