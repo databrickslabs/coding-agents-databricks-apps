@@ -1,6 +1,6 @@
 [project]
 name = "coda"
-version = "0.16.7"
+version = "0.17.0"
 description = "CoDA - Coding Agents on Databricks Apps"
 requires-python = ">=3.10"
 dependencies = [
@@ -9,8 +9,7 @@ dependencies = [
     "simple-websocket>=1.0",
     "claude-agent-sdk",
     "databricks-sdk>=0.20.0",
-    "mlflow-tracing>=3.4",
-    "opentelemetry-exporter-otlp-proto-grpc",
+    "mlflow-skinny==3.10.1",
     "requests",
     "cryptography>=46.0.6",
 ]

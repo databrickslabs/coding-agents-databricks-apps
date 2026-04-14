@@ -301,7 +301,7 @@ Production uses `workers=1` (PTY state is process-local), `threads=16` (concurre
 <summary><strong>📁 Project Structure</strong></summary>
 
 ```
-coding-agents-in-databricks/
+coding-agents-databricks-apps/
 ├── app.py                       # Flask backend + PTY management + setup orchestration
 ├── app_state.py                 # Shared app state (setup progress, session registry)
 ├── app.yaml.template            # Databricks Apps deployment config template

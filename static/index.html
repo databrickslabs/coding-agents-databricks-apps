@@ -142,6 +142,11 @@
       border-color: rgba(100,150,255,0.25);
       box-shadow: 0 0 8px rgba(100,150,255,0.1);
     }
+    #session-count-label {
+      margin-left: auto; padding: 0 12px;
+      font-size: 11px; color: rgba(255,255,255,0.4);
+      white-space: nowrap; flex-shrink: 0;
+    }
     #toolbar .font-size-row {
       display: flex; align-items: center; gap: 4px;
     }
@@ -375,6 +380,7 @@
 
   <div id="tab-bar">
     <button id="new-tab-btn" title="New tab (Ctrl+Shift+T)">+</button>
+    <span id="session-count-label"></span>
   </div>
   <!-- Tab pane containers are created dynamically by createTab() -->
 
@@ -383,6 +389,7 @@
   <script src="/static/lib/addon-web-links.js"></script>
   <script src="/static/lib/addon-search.js"></script>
   <script src="/static/lib/addon-image.js"></script>
+  <script src="/static/lib/addon-clipboard.js"></script>
   <script src="/static/lib/socket.io.min.js"></script>
   <script>
     // ── Platform-aware shortcut labels ──────────────────────────────
@@ -885,6 +892,42 @@
       }
     }, true);  // capture phase — fire before xterm.js
 
+    // ── Write Batching (prevents escape sequence fragmentation) ────
+    // PTY output arrives in fixed-size chunks that can split multi-byte
+    // escape sequences. Batching per animation frame (~16ms) lets split
+    // sequences rejoin before xterm.js parses them.
+    function createWriteBatcher(term) {
+      let pending = '';
+      let rafId = null;
+      let altExitTimer = null;
+      function flush() {
+        if (pending) {
+          const data = pending;
+          pending = '';
+          term.write(data);
+          // Detect alternate screen buffer exit (e.g. Claude Code no-flicker, vim).
+          // After exit, the restored main screen has stale content overlapping with
+          // the app's exit output. Clear after a short delay to let exit output
+          // finish, then the shell redraws a clean prompt.
+          if (data.includes('\x1b[?1049l')) {
+            clearTimeout(altExitTimer);
+            altExitTimer = setTimeout(() => term.write('\x1b[2J\x1b[H'), 150);
+          }
+        }
+        rafId = null;
+      }
+      function batchWrite(data) {
+        pending += data;
+        if (!rafId) { rafId = requestAnimationFrame(flush); }
+      }
+      batchWrite.cancel = function() {
+        clearTimeout(altExitTimer);
+        if (rafId) { cancelAnimationFrame(rafId); rafId = null; }
+        pending = '';
+      };
+      return batchWrite;
+    }
+
     // ── Session / IO (parameterized by sessionId) ──────────────────
     const status = document.getElementById('status');
 
@@ -988,10 +1031,12 @@
       });
 
       // Receive terminal output pushed from server (AC-8)
+      // Output is batched per-animation-frame to prevent escape sequence
+      // fragmentation when PTY chunks split mid-sequence (e.g. no-flicker mode).
       socket.on('terminal_output', (data) => {
         const pane = getAllPanes().find(p => p.sessionId === data.session_id);
         if (pane && data.output) {
-          pane.term.write(data.output);
+          pane.batchWrite(data.output);
         }
       });
 
@@ -1063,7 +1108,7 @@
           if (data.timeout_warning) {
             pane.term.write('\r\n\x1b[33m\u26A0 Session idle \u2014 will terminate soon if no activity.\x1b[0m\r\n');
           }
-          if (data.output) pane.term.write(data.output);
+          if (data.output) pane.batchWrite(data.output);
           break;
         }
         case 'session_ended':
@@ -1112,6 +1157,7 @@
     });
 
     function cleanupPane(pane) {
+      if (pane.batchWrite && pane.batchWrite.cancel) pane.batchWrite.cancel();
       pollWorker.postMessage({ type: 'stop_poll', paneId: pane.id });
       if (pane.sessionId) {
         // Leave WebSocket room — session stays alive for reattach
@@ -1120,6 +1166,10 @@
         }
         pane.sessionId = null;
       }
+      // Update immediately, then again after backend finishes cleanup
+      // (terminate_session has a 3s SIGKILL wait before popping the session).
+      updateSessionBadge();
+      setTimeout(updateSessionBadge, 4000);
     }
 
     function cleanupAllPanes() {
@@ -1177,6 +1227,7 @@
               }).then(() => {
                 sessions.splice(num - 1, 1);
                 pendingDelete = false;
+                updateSessionBadge();
                 if (sessions.length === 0) {
                   disposable.dispose();
                   createSession().then(sid => resolve({ sid, reattached: false }));
@@ -1218,7 +1269,7 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ session_id: s.session_id })
               })
-            )).then(() => createSession().then(sid => resolve({ sid, reattached: false })));
+            )).then(() => { updateSessionBadge(); return createSession().then(sid => resolve({ sid, reattached: false })); });
           } else if (data === 'q' || data === 'Q' || data === '\x1b') {
             disposable.dispose();
             resolve({ sid: null, reattached: false, cancelled: true });
@@ -1234,13 +1285,16 @@
         body: JSON.stringify({ session_id: sessionId })
       });
       const data = await resp.json();
-      term.write('\x1b[2J\x1b[H');  // clear
-      if (data.output && data.output.length > 0) {
-        data.output.forEach(line => term.write(line));
-      }
-      // Show reattach message at the bottom without overwriting buffer content
-      // Tell PTY the current terminal size so it redraws correctly
-      await sendResize(term.cols, term.rows, sessionId);
+      // Send a resize to trigger the running app (bash, Claude Code, vim) to
+      // redraw from scratch via SIGWINCH. We skip buffer replay because it
+      // contains raw escape sequences that produce garbled output.
+      // The kernel only sends SIGWINCH when the size actually changes, so we
+      // force a 1-column shrink first, then restore the real size. This
+      // guarantees two SIGWINCH signals even if the terminal size hasn't changed.
+      const cols = term.cols;
+      const rows = term.rows;
+      await sendResize(Math.max(1, cols - 1), rows, sessionId);
+      await sendResize(cols, rows, sessionId);
       return sessionId;
     }
 
@@ -1255,6 +1309,94 @@
       if (seconds < 60) return seconds + 's';
       if (seconds < 3600) return Math.floor(seconds / 60) + 'm';
       return Math.floor(seconds / 3600) + 'h';
+    }
+
+    // ── Session Creation Prompt ───────────────────────────────────
+    async function promptExistingSessions(term, sessions) {
+      // Lightweight prompt shown before creating a new session when others exist.
+      // Returns { action: 'reuse', sessionId } or { action: 'new' }
+      return new Promise((resolve) => {
+        term.write('\x1b[2J\x1b[H');  // clear
+        term.write('\r\n');
+        const n = sessions.length;
+        term.write('\x1b[1;36m  You have ' + n + ' active session' + (n > 1 ? 's' : '') + ':\x1b[0m\r\n\r\n');
+
+        const attachedIds = new Set(getAllPanes().map(p => p.sessionId).filter(Boolean));
+        sessions.forEach((s, i) => {
+          const name = (s.label || s.process || 'bash').padEnd(14);
+          const proc = s.label ? ' \x1b[90m[' + (s.process || 'bash') + ']\x1b[0m' : '';
+          const ago = _formatAge(s.created_at);
+          const idle = s.idle_seconds > 60 ? ', idle ' + _formatDuration(s.idle_seconds) : '';
+          const open = attachedIds.has(s.session_id) ? ' \x1b[1;33m(open)\x1b[0m' : '';
+          term.write('  \x1b[1;32m' + (i + 1) + '\x1b[0m  ');
+          term.write('\x1b[1;37m' + name + '\x1b[0m');
+          term.write('\x1b[90m(' + ago + idle + ')\x1b[0m' + proc + open + '\r\n');
+        });
+
+        term.write('\r\n  \x1b[1;33mn\x1b[0m  New session\r\n');
+        term.write('\r\n\x1b[90m  Select:\x1b[0m ');
+
+        const disposable = term.onData(data => {
+          const num = parseInt(data);
+          if (num >= 1 && num <= sessions.length) {
+            const picked = sessions[num - 1];
+            const openPanes = getAllPanes().filter(p => p.sessionId === picked.session_id);
+            if (openPanes.length > 0) {
+              term.write(data + '\r\n\x1b[1;33m  Already open in another pane. Pick another:\x1b[0m ');
+              return;
+            }
+            disposable.dispose();
+            resolve({ action: 'reuse', sessionId: picked.session_id });
+          } else if (data === 'n' || data === 'N') {
+            disposable.dispose();
+            term.write('\r\n');
+            resolve({ action: 'new' });
+          } else if (data === 'q' || data === 'Q' || data === '\x1b') {
+            disposable.dispose();
+            term.write('\r\n');
+            resolve({ action: 'new' });  // default to new session on cancel
+          }
+        });
+      });
+    }
+
+    async function getOrPromptSession(term, label, skipPrompt) {
+      // Check for existing sessions and prompt user before creating a new one.
+      if (!skipPrompt) {
+        try {
+          const resp = await fetch('/api/sessions');
+          const existing = (await resp.json()).filter(s => !s.exited);
+          if (existing.length > 0) {
+            const choice = await promptExistingSessions(term, existing);
+            if (choice.action === 'reuse') {
+              await _doAttach(term, choice.sessionId);
+              return { sid: choice.sessionId, reattached: true };
+            }
+          }
+        } catch (e) { /* session list failed — just create new */ }
+      }
+      try {
+        const sid = await createSession(label);
+        return { sid, reattached: false };
+      } catch (e) {
+        if (e.message && e.message.includes('Maximum')) {
+          term.write('\r\n\x1b[1;31m  ' + e.message + '\x1b[0m\r\n');
+          term.write('\x1b[90m  Increase MAX_CONCURRENT_SESSIONS in app.yaml or close a session (Ctrl+Shift+S).\x1b[0m\r\n\r\n');
+        } else {
+          term.write('\r\n\x1b[1;31m  Failed to create session: ' + e.message + '\x1b[0m\r\n');
+        }
+        throw e;
+      }
+    }
+
+    async function updateSessionBadge() {
+      try {
+        const resp = await fetch('/api/sessions');
+        const active = (await resp.json()).filter(s => !s.exited);
+        const label = document.getElementById('session-count-label');
+        const n = active.length;
+        label.textContent = n === 0 ? 'No active sessions' : n + ' active session' + (n > 1 ? 's' : '');
+      } catch (e) { /* ignore */ }
     }
 
     // ── Pane Management ────────────────────────────────────────────
@@ -1288,6 +1430,9 @@
       const fitAddon = new FitAddon.FitAddon();
       term.loadAddon(fitAddon);
       term.loadAddon(new WebLinksAddon.WebLinksAddon());
+      if (typeof ClipboardAddon !== 'undefined') {
+        term.loadAddon(new ClipboardAddon.ClipboardAddon());
+      }
 
       let searchAddon = null;
       if (typeof SearchAddon !== 'undefined') {
@@ -1421,11 +1566,9 @@
                 }
             }
         }
-        var sid = await createSession(tab.label);
-        var reattached = false;
+        var { sid, reattached } = await getOrPromptSession(term, tab.label, opts.skipPrompt);
       } else if (!opts.newSession) {
-        // PAT is valid, initial page load — always create a fresh session.
-        // Reattaching to a previous session is intentional (Ctrl+Shift+S).
+        // PAT is valid, initial page load — check for existing sessions first.
         const setupResp2 = await fetch('/api/setup-status');
         const setupData2 = await setupResp2.json();
         if (setupData2.status !== 'complete' && setupData2.status !== 'error') {
@@ -1444,12 +1587,10 @@
             }
           }
         }
-        var sid = await createSession(tab.label);
-        var reattached = false;
+        var { sid, reattached } = await getOrPromptSession(term, tab.label, opts.skipPrompt);
       } else {
-        // Split pane or new tab — always create fresh session
-        var sid = await createSession(tab.label);
-        var reattached = false;
+        // Split pane or new tab — check for existing sessions first
+        var { sid, reattached } = await getOrPromptSession(term, tab.label, opts.skipPrompt);
       }
 
       if (!reattached) {
@@ -1480,7 +1621,8 @@
         term.write('\r\n');
       }
 
-      const pane = { id, element, term, fitAddon, searchAddon, sessionId: sid };
+      const pane = { id, element, term, fitAddon, searchAddon, sessionId: sid,
+        batchWrite: createWriteBatcher(term) };
       term.onData(data => sendInput(data, pane.sessionId));
 
       // Join WebSocket room if connected; otherwise start HTTP polling (AC-11, AC-16)
@@ -1496,6 +1638,7 @@
       tab.panes.push(pane);
       focusPane(id);
 
+      updateSessionBadge();
       return pane;
     }
 
@@ -1848,6 +1991,7 @@
             pollWorker.postMessage({ type: 'start_poll', paneId: pane.id, sessionId: prevSessionId });
           }
         }
+        updateSessionBadge();
         return;
       }
 
@@ -1859,6 +2003,7 @@
       } else {
         pollWorker.postMessage({ type: 'start_poll', paneId: pane.id, sessionId: sid });
       }
+      updateSessionBadge();
     });
 
     // ── Toast Notification ──────────────────────────────────────────
@@ -1991,6 +2136,7 @@
         initWebSocket();
 
         await createTab();
+        updateSessionBadge();
 
         status.textContent = 'Connected!';
         setTimeout(() => { status.style.display = 'none'; }, 1000);

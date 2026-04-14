@@ -12,3 +12,5 @@ env:
     value: databricks-gpt-5-3-codex
   - name: CLAUDE_CODE_DISABLE_AUTO_MEMORY
     value: 0
+  - name: MAX_CONCURRENT_SESSIONS
+    value: "5"

@@ -43,6 +43,7 @@ except Exception:
 SESSION_TIMEOUT_SECONDS = 86400      # No poll for 24 hours = dead session
 CLEANUP_INTERVAL_SECONDS = 900       # Check for stale sessions every 15 min
 GRACEFUL_SHUTDOWN_WAIT = 3          # Seconds to wait after SIGHUP before SIGKILL
+MAX_CONCURRENT_SESSIONS = int(os.environ.get("MAX_CONCURRENT_SESSIONS", "5"))
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -604,7 +605,7 @@ def read_pty_output(session_id, fd):
         try:
             readable, _, errors = select.select([fd], [], [fd], 0.05)
             if readable or errors:
-                output = os.read(fd, 4096)
+                output = os.read(fd, 65536)
                 if not output:
                     # EOF — process exited
                     break
@@ -956,6 +957,11 @@ def configure_pat():
 @app.route("/api/session", methods=["POST"])
 def create_session():
     """Create a new terminal session."""
+    # Quick reject before forking a PTY (approximate — authoritative check below)
+    with sessions_lock:
+        if len(sessions) >= MAX_CONCURRENT_SESSIONS:
+            return jsonify({"error": f"Maximum {MAX_CONCURRENT_SESSIONS} concurrent sessions reached. Close an existing session first."}), 429
+
     data = request.get_json(silent=True) or {}
     label = data.get("label", "")
     try:
@@ -997,6 +1003,15 @@ def create_session():
         session_id = str(uuid.uuid4())
 
         with sessions_lock:
+            # Authoritative check under the same lock as insertion — prevents
+            # TOCTOU race where two concurrent requests both pass the early check.
+            if len(sessions) >= MAX_CONCURRENT_SESSIONS:
+                os.close(master_fd)
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+                return jsonify({"error": f"Maximum {MAX_CONCURRENT_SESSIONS} concurrent sessions reached. Close an existing session first."}), 429
             sessions[session_id] = {
                 "master_fd": master_fd,
                 "pid": pid,
