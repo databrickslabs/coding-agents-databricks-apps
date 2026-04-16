@@ -561,9 +561,9 @@ mcp==1.26.0 \
     # via
     #   -r requirements.txt
     #   claude-agent-sdk
-mlflow-skinny==3.10.1 \
-    --hash=sha256:3d1c5c30245b6e7065b492b09dd47be7528e0a14c4266b782fe58f9bcd1e0be0 \
-    --hash=sha256:df1dd507d8ddadf53bfab2423c76cdcafc235cd1a46921a06d1a6b4dd04b023c
+mlflow-skinny==3.11.1 \
+    --hash=sha256:82ffd5f6980320b4ac19f741e7a754faa1d01707e632b002ea68e04fd25a0535 \
+    --hash=sha256:86ce63491349f6713afc8a4ef0bf77a8314d0e79e03753cb150d6c860a0b0475
     # via -r requirements.txt
 opentelemetry-api==1.40.0 \
     --hash=sha256:159be641c0b04d11e9ecd576906462773eb97ae1b657730f0ecf64d32071569f \
