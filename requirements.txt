@@ -102,7 +102,7 @@ markupsafe==3.0.3
     #   werkzeug
 mcp==1.26.0
     # via claude-agent-sdk
-mlflow-skinny==3.10.1
+mlflow-skinny==3.11.1
     # via coda (pyproject.toml)
 opentelemetry-api==1.40.0
     # via
