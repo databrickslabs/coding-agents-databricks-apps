@@ -9,7 +9,7 @@ dependencies = [
     "simple-websocket>=1.0",
     "claude-agent-sdk",
     "databricks-sdk>=0.20.0",
-    "mlflow-skinny==3.10.1",
+    "mlflow-skinny==3.11.1",
     "requests",
     "cryptography>=46.0.6",
 ]
