@@ -5,7 +5,7 @@ env:
   - name: HOME
     value: /app/python/source_code
   - name: ANTHROPIC_MODEL
-    value: databricks-claude-opus-4-6
+    value: databricks-claude-opus-4-7
   - name: GEMINI_MODEL
     value: databricks-gemini-3-1-pro
   - name: CODEX_MODEL
