@@ -202,7 +202,7 @@ typing-inspection==0.4.2
     #   pydantic-settings
 urllib3==2.6.3
     # via requests
-uvicorn==0.42.0
+uvicorn==0.44.0
     # via
     #   mcp
     #   mlflow-skinny
