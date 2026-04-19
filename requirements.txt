@@ -32,7 +32,7 @@ cffi==2.0.0
     # via cryptography
 charset-normalizer==3.4.7
     # via requests
-claude-agent-sdk==0.1.54
+claude-agent-sdk==0.1.58
     # via coda (pyproject.toml)
 click==8.3.1
     # via
@@ -42,7 +42,7 @@ click==8.3.1
     #   uvicorn
 cloudpickle==3.1.2
     # via mlflow-skinny
-cryptography==46.0.6
+cryptography==46.0.7
     # via
     #   coda (pyproject.toml)
     #   google-auth
@@ -146,7 +146,7 @@ python-dotenv==1.2.2
     #   pydantic-settings
 python-engineio==4.13.1
     # via python-socketio
-python-multipart==0.0.22
+python-multipart==0.0.26
     # via mcp
 python-socketio==5.16.1
     # via flask-socketio
