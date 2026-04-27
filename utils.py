@@ -81,6 +81,28 @@ def _probe_gateway(url: str, timeout: float = 2.0) -> bool:
         return False
 
 
+def _derive_workspace_id_from_host(host: str) -> str:
+    """Extract the workspace ID from a Databricks host URL.
+
+    Azure host pattern is `adb-{workspace_id}.{region}.azuredatabricks.net`,
+    so the digits between `adb-` and the first dot are the workspace ID. AWS
+    hosts don't carry the workspace ID in the URL, so this returns "" there.
+    """
+    m = re.match(r"(?:https?://)?adb-(\d+)\.", host or "")
+    return m.group(1) if m else ""
+
+
+def _build_gateway_candidate(workspace_id: str, host: str) -> str:
+    """Build the AI Gateway URL for a workspace, picking the right cloud pattern.
+
+    Azure: `https://{ws}.0.ai-gateway.azuredatabricks.net`
+    AWS:   `https://{ws}.ai-gateway.cloud.databricks.com`
+    """
+    if "azuredatabricks.net" in (host or "").lower():
+        return f"https://{workspace_id}.0.ai-gateway.azuredatabricks.net"
+    return f"https://{workspace_id}.ai-gateway.cloud.databricks.com"
+
+
 def get_gateway_host() -> str:
     """Resolve the AI Gateway host URL.
 
@@ -88,7 +110,11 @@ def get_gateway_host() -> str:
       0. _GATEWAY_RESOLVED env var (set by parent process after probing — avoids
          re-probing in subprocesses). None = never probed, "" = probed, no gateway.
       1. Explicit DATABRICKS_GATEWAY_HOST env var (trusted — no probe)
-      2. Auto-constructed from DATABRICKS_WORKSPACE_ID (probed for reachability)
+      2. Auto-constructed from workspace ID. Workspace ID is read from
+         DATABRICKS_WORKSPACE_ID, or derived from DATABRICKS_HOST on Azure
+         (host pattern `adb-{ws}.{region}.azuredatabricks.net`). Cloud-specific
+         URL pattern is picked based on whether the host is Azure or AWS.
+         Result is probed for reachability before returning.
       3. Empty string (caller falls back to DATABRICKS_HOST/serving-endpoints)
     """
     # Tier 0: already resolved by a parent process
@@ -102,9 +128,13 @@ def get_gateway_host() -> str:
         return ensure_https(explicit)
 
     # Tier 2: auto-construct from workspace ID and probe for reachability
-    workspace_id = os.environ.get("DATABRICKS_WORKSPACE_ID", "").strip()
+    host = os.environ.get("DATABRICKS_HOST", "")
+    workspace_id = (
+        os.environ.get("DATABRICKS_WORKSPACE_ID", "").strip()
+        or _derive_workspace_id_from_host(host)
+    )
     if workspace_id:
-        candidate = f"https://{workspace_id}.ai-gateway.cloud.databricks.com"
+        candidate = _build_gateway_candidate(workspace_id, host)
         if _probe_gateway(candidate):
             return candidate
         print(
