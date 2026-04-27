@@ -110,6 +110,7 @@ setup_state = {
         {"id": "codex",      "label": "Configuring Codex CLI",        "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "opencode",   "label": "Configuring OpenCode CLI",     "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "gemini",     "label": "Configuring Gemini CLI",       "status": "pending", "started_at": None, "completed_at": None, "error": None},
+        {"id": "hermes",     "label": "Configuring Hermes Agent",     "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "databricks", "label": "Setting up Databricks CLI",    "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "mlflow",     "label": "Enabling MLflow tracing",       "status": "pending", "started_at": None, "completed_at": None, "error": None},
     ]
@@ -317,7 +318,7 @@ def _configure_all_cli_auth(token):
     # 3. Re-run Codex, OpenCode, Gemini setup scripts with token in env
     #    They are idempotent: detect CLI already installed, just write config files
     env = {**os.environ, "DATABRICKS_TOKEN": token}
-    for script in ["setup_codex.py", "setup_opencode.py", "setup_gemini.py"]:
+    for script in ["setup_codex.py", "setup_opencode.py", "setup_gemini.py", "setup_hermes.py"]:
         try:
             result = subprocess.run(
                 ["uv", "run", "python", script],
@@ -368,6 +369,7 @@ def run_setup():
         ("codex",      ["uv", "run", "python", "setup_codex.py"]),
         ("opencode",   ["uv", "run", "python", "setup_opencode.py"]),
         ("gemini",     ["uv", "run", "python", "setup_gemini.py"]),
+        ("hermes",     ["uv", "run", "python", "setup_hermes.py"]),
         ("databricks", ["uv", "run", "python", "setup_databricks.py"]),
         ("mlflow",     ["uv", "run", "python", "setup_mlflow.py"]),
     ]
@@ -378,6 +380,18 @@ def run_setup():
             for step_id, command in parallel_steps
         ]
         wait(futures)
+
+    # Sync latest token into all CLI configs — covers the race where PAT
+    # rotation happened while a setup script was still installing (the
+    # rotation's update_cli_tokens() call silently skips missing config files).
+    current_token = os.environ.get("DATABRICKS_TOKEN", "")
+    if current_token:
+        try:
+            from cli_auth import update_cli_tokens
+            update_cli_tokens(current_token)
+            logger.info("Post-setup token sync: all CLI configs updated with current token")
+        except Exception as e:
+            logger.warning(f"Post-setup token sync failed: {e}")
 
     with setup_lock:
         any_error = any(s["status"] == "error" for s in setup_state["steps"])
@@ -995,6 +1009,9 @@ def create_session():
         # DATABRICKS_HOST is set in env (even without credentials).
         shell_env.pop("DATABRICKS_TOKEN", None)
         shell_env.pop("DATABRICKS_HOST", None)
+        # Also strip CLI-specific API keys so they read from config files
+        # (always current after rotation) instead of stale env snapshots.
+        shell_env.pop("GEMINI_API_KEY", None)
         # Ensure HOME is set correctly
         if not shell_env.get("HOME") or shell_env["HOME"] == "/":
             shell_env["HOME"] = "/app/python/source_code"

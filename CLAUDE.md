@@ -1,6 +1,6 @@
 # Claude Code on Databricks
 
-Welcome! This environment comes pre-configured with 39 skills and 2 MCP servers.
+Welcome! This environment comes pre-configured with 5 AI coding agents, 39 skills, and 2 MCP servers. Hermes Agent is available alongside Claude Code, Codex, Gemini CLI, and OpenCode — launch it with `hermes chat`.
 
 ## Skills (30 total)
 

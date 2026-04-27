@@ -22,6 +22,7 @@ def update_cli_tokens(token):
     _update_codex(token)
     _update_opencode(token)
     _update_gemini(token)
+    _update_hermes(token)
 
 
 def _update_claude(token):
@@ -66,6 +67,25 @@ def _update_gemini(token):
     """Update GEMINI_API_KEY in ~/.gemini/.env."""
     path = os.path.join(_HOME, ".gemini", ".env")
     _replace_dotenv_key(path, "GEMINI_API_KEY", token)
+
+
+def _update_hermes(token):
+    """Update api_key lines in ~/.hermes/config.yaml."""
+    path = os.path.join(_HOME, ".hermes", "config.yaml")
+    try:
+        with open(path) as f:
+            content = f.read()
+        new_content = re.sub(
+            r'^(  api_key: ).*$',
+            rf'\g<1>{token}',
+            content,
+            flags=re.MULTILINE
+        )
+        if new_content != content:
+            with open(path, "w") as f:
+                f.write(new_content)
+    except OSError:
+        pass
 
 
 def _replace_dotenv_key(path, key, value):

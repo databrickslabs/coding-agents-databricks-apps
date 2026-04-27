@@ -134,8 +134,8 @@ if gateway_host:
                             "output": 8192
                         }
                     },
-                    "databricks-gemini-3-1-pro": {
-                        "name": "Gemini 3.1 Pro (Databricks)",
+                    "databricks-gemini-2-5-pro": {
+                        "name": "Gemini 2.5 Pro (Databricks)",
                         "limit": {
                             "context": 1000000,
                             "output": 8192
@@ -226,8 +226,8 @@ else:
                             "output": 8192
                         }
                     },
-                    "databricks-gemini-3-1-pro": {
-                        "name": "Gemini 3.1 Pro (Databricks)",
+                    "databricks-gemini-2-5-pro": {
+                        "name": "Gemini 2.5 Pro (Databricks)",
                         "limit": {
                             "context": 1000000,
                             "output": 8192

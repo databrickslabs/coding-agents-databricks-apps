@@ -26,7 +26,7 @@ home = Path(os.environ["HOME"])
 
 host = os.environ.get("DATABRICKS_HOST", "")
 token = os.environ.get("DATABRICKS_TOKEN", "")
-gemini_model = os.environ.get("GEMINI_MODEL", "databricks-gemini-3-1-pro")
+gemini_model = os.environ.get("GEMINI_MODEL", "databricks-gemini-2-5-pro")
 
 # 1. Install Gemini CLI into ~/.local/bin (always, even without token)
 local_bin = home / ".local" / "bin"
@@ -78,13 +78,34 @@ else:
 gemini_dir = home / ".gemini"
 gemini_dir.mkdir(exist_ok=True)
 
+# Pre-trust ~/projects/ so Gemini CLI loads .env and project settings.
+# Without this, Gemini's security engine silently skips .env loading in
+# untrusted workspaces, causing auth failures (see gemini-cli#20005).
+projects_dir = str(home / "projects")
+trusted_folders_path = gemini_dir / "trustedFolders.json"
+try:
+    if trusted_folders_path.exists():
+        trusted = json.loads(trusted_folders_path.read_text())
+    else:
+        trusted = {}
+    if trusted.get(projects_dir) != "TRUST_FOLDER":
+        trusted[projects_dir] = "TRUST_FOLDER"
+    # Also trust home dir so ~/.gemini/.env is always loadable
+    home_str = str(home)
+    if trusted.get(home_str) != "TRUST_FOLDER":
+        trusted[home_str] = "TRUST_FOLDER"
+    trusted_folders_path.write_text(json.dumps(trusted, indent=2))
+    print(f"Gemini trusted folders configured: {trusted_folders_path}")
+except Exception as e:
+    print(f"Warning: could not write trustedFolders.json: {e}")
+
 # Write .env file with Databricks endpoint configuration
 # Gemini CLI auto-loads env from ~/.gemini/.env
 # The Google-native endpoint on Databricks mirrors /serving-endpoints/anthropic
 env_content = f"""# Databricks Model Serving - Google Gemini native endpoint
 GEMINI_MODEL={gemini_model}
 GOOGLE_GEMINI_BASE_URL={gemini_base_url}
-GEMINI_API_KEY_AUTH_MECHANISM="bearer"
+GEMINI_API_KEY_AUTH_MECHANISM=bearer
 GEMINI_API_KEY={auth_token}
 """
 

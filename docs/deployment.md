@@ -69,7 +69,8 @@ databricks apps deploy <your-app-name> \
 | `HOME` | Yes | Set to `/app/python/source_code` in app.yaml |
 | `ANTHROPIC_MODEL` | No | Claude model name (default: `databricks-claude-opus-4-6`) |
 | `CODEX_MODEL` | No | Codex model name (default: `databricks-gpt-5-3-codex`) |
-| `GEMINI_MODEL` | No | Gemini model name (default: `databricks-gemini-3-1-pro`) |
+| `GEMINI_MODEL` | No | Gemini model name (default: `databricks-gemini-2-5-pro`) |
+| `HERMES_MODEL` | No | Hermes model name (default: `databricks-claude-opus-4-7`) |
 | `DATABRICKS_GATEWAY_HOST` | No | AI Gateway URL override. Auto-discovered from `DATABRICKS_WORKSPACE_ID` if unset. Falls back to direct model serving if neither is available |
 
 ## Security Model
@@ -78,7 +79,7 @@ This is a **single-user, zero-config auth** app. No secrets or tokens are requir
 
 1. **Owner resolution**: The app owner is determined from `app.creator` via the service principal + Apps API — no PAT needed
 2. **Authorization**: Each request's `X-Forwarded-Email` header is compared against `app.creator`. Non-matching users see 403
-3. **Interactive PAT setup**: On first terminal session, the user pastes a short-lived PAT interactively. All CLIs (Claude, Codex, OpenCode, Gemini, Databricks) are configured automatically
+3. **Interactive PAT setup**: On first terminal session, the user pastes a short-lived PAT interactively. All CLIs (Claude, Codex, OpenCode, Gemini, Hermes, Databricks) are configured automatically
 4. **Auto-rotation**: PAT rotates every 10 minutes with a 15-minute lifetime. Old tokens are proactively revoked. Maximum leaked-token exposure: 15 minutes
 5. **Session-aware**: Rotation is skipped when no active terminal sessions exist
 6. **On restart**: The user re-pastes a token (no persistence by design)

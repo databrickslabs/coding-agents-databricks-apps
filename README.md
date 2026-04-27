@@ -2,10 +2,10 @@
 
 [![Use this template](https://img.shields.io/badge/Use%20this%20template-2ea44f?logo=github)](https://github.com/datasciencemonkey/coding-agents-databricks-apps/generate)
 [![Deploy to Databricks](https://img.shields.io/badge/Deploy-Databricks%20Apps-FF3621?logo=databricks&logoColor=white)](docs/deployment.md)
-[![Agents](https://img.shields.io/badge/Agents-4%20included-green)](#whats-inside)
+[![Agents](https://img.shields.io/badge/Agents-5%20included-green)](#whats-inside)
 [![Skills](https://img.shields.io/badge/Skills-39%20built--in-blue)](#-all-39-skills)
 
-> Run Claude Code, Codex, Gemini CLI, and OpenCode in your browser — zero setup, wired to your Databricks workspace.
+> Run Claude Code, Codex, Gemini CLI, Hermes Agent, and OpenCode in your browser — zero setup, wired to your Databricks workspace.
 
 ---
 
@@ -24,6 +24,8 @@
 🟣 **Codex** — OpenAI's coding agent, pre-configured for Databricks
 
 🔵 **Gemini CLI** — Google's coding agent with shared skills
+
+🟡 **Hermes Agent** — NousResearch's multi-provider AI CLI with tool-calling and skills
 
 🟢 **OpenCode** — Open-source agent with multi-provider support
 
@@ -55,7 +57,7 @@ This isn't just a terminal in the cloud. Running coding agents on Databricks giv
 | ✂️ **Split Panes** | Run two sessions side by side with a draggable divider |
 | 🌐 **WebSocket I/O** | Real-time terminal output over WebSocket — zero-latency, eliminates polling delay |
 | 🔁 **HTTP Polling Fallback** | Automatic fallback via Web Worker when WebSocket is unavailable |
-| 🚀 **Parallel Setup** | 6 agent setups run in parallel (~5x faster startup) |
+| 🚀 **Parallel Setup** | 7 agent setups run in parallel (~5x faster startup) |
 | 🔍 **Search** | Find anything in your terminal history (Ctrl+Shift+F) |
 | 🎤 **Voice Input** | Dictate commands with your mic (Option+V) |
 | 📋 **Image Paste** | Paste or drag-and-drop images into the terminal — saved to `~/uploads/`, path inserted automatically |
@@ -284,7 +286,7 @@ This template repo opens that vision up for every Databricks user — no IDE set
 | `HOME` | Yes | Set to `/app/python/source_code` in app.yaml |
 | `ANTHROPIC_MODEL` | No | Claude model name (default: `databricks-claude-opus-4-6`) |
 | `CODEX_MODEL` | No | Codex model name (default: `databricks-gpt-5-3-codex`) |
-| `GEMINI_MODEL` | No | Gemini model name (default: `databricks-gemini-3-1-pro`) |
+| `GEMINI_MODEL` | No | Gemini model name (default: `databricks-gemini-2-5-pro`) |
 | `DATABRICKS_GATEWAY_HOST` | No | AI Gateway URL override. Auto-discovered from `DATABRICKS_WORKSPACE_ID` if unset |
 
 ### Security Model
