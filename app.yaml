@@ -17,6 +17,13 @@ env:
   # Set ENABLE_HERMES=false to skip Hermes Agent install. Other CLIs are unaffected.
   - name: ENABLE_HERMES
     value: "true"
+  # Routes all CLIs (Claude, Codex, Gemini, OpenCode, Hermes) through the
+  # Databricks AI Gateway instead of direct /serving-endpoints. Required for
+  # Hermes specifically: setup_hermes.py's direct-serving fallback uses
+  # `{host}/serving-endpoints` with no API namespace, so chat/completions
+  # 404s. Gateway path (mlflow/v1) handles OpenAI-style requests correctly.
+  - name: DATABRICKS_GATEWAY_HOST
+    value: https://7405611674437990.0.ai-gateway.azuredatabricks.net
   - name: CLAUDE_CODE_DISABLE_AUTO_MEMORY
     value: 0
   - name: MAX_CONCURRENT_SESSIONS
