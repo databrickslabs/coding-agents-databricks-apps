@@ -159,6 +159,13 @@ class PATRotator:
             logger.info(f"INFO: PAT rotation complete — new token (id={new_token_id}, "
                         f"expires in {self._token_lifetime}s). First rotation — no old token to revoke.")
 
+        # Telemetry: track PAT rotation events (import here to avoid circular deps)
+        try:
+            from telemetry import log_telemetry
+            log_telemetry("event", "pat_rotation")
+        except Exception:
+            pass  # Telemetry must never break rotation
+
         return True
 
     def revoke_bootstrap_token(self):
