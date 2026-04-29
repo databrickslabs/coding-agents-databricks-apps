@@ -24,3 +24,6 @@ uv.lock
 # Codex CLI generated/cached files (only the bundled model catalog is tracked)
 .codex/*
 !.codex/databricks-models.json
+
+# Codex skills are generated at runtime by setup_codex.py from .claude/skills/
+.agents/

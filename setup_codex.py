@@ -120,7 +120,22 @@ env_path.write_text(env_content)
 env_path.chmod(0o600)
 print(f"Codex CLI env configured: {env_path}")
 
-# 5. Adapt CLAUDE.md to AGENTS.md for Codex
+# 5. Copy Claude skills into ~/.agents/skills/ where Codex discovers them.
+# Codex searches `$HOME/.agents/skills/` plus `.agents/skills/` walking up
+# from cwd; both resolve to the same path on the deployed app since
+# HOME == repo root, and the user-level lookup also covers local dev.
+claude_skills_dir = home / ".claude" / "skills"
+codex_skills_dir = home / ".agents" / "skills"
+if claude_skills_dir.exists():
+    codex_skills_dir.parent.mkdir(exist_ok=True)
+    if codex_skills_dir.exists():
+        shutil.rmtree(codex_skills_dir)
+    shutil.copytree(claude_skills_dir, codex_skills_dir)
+    print(f"Skills copied: {claude_skills_dir} -> {codex_skills_dir}")
+else:
+    print(f"No Claude skills found at {claude_skills_dir}, skipping copy")
+
+# 6. Adapt CLAUDE.md to AGENTS.md for Codex
 # Look for CLAUDE.md in common locations
 claude_md_locations = [
     Path(__file__).parent / "CLAUDE.md",  # Same directory as setup script
