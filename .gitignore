@@ -20,3 +20,7 @@ uploads/
 
 # uv lockfile — not portable across PyPI proxies, generate locally with `uv lock`
 uv.lock
+
+# Codex CLI generated/cached files (only the bundled model catalog is tracked)
+.codex/*
+!.codex/databricks-models.json
