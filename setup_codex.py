@@ -22,7 +22,7 @@ home = Path(os.environ["HOME"])
 
 host = os.environ.get("DATABRICKS_HOST", "")
 token = os.environ.get("DATABRICKS_TOKEN", "")
-codex_model = os.environ.get("CODEX_MODEL", "databricks-gpt-5-3-codex")
+codex_model = os.environ.get("CODEX_MODEL", "databricks-gpt-5-5")
 
 # 1. Install Codex CLI into ~/.local/bin (always, even without token)
 local_bin = home / ".local" / "bin"
