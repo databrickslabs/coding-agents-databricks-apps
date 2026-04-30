@@ -293,20 +293,24 @@ def _configure_all_cli_auth(token):
     else:
         anthropic_base_url = f"{databricks_host}/serving-endpoints/anthropic"
 
-    settings = {
-        "env": {
-            "ANTHROPIC_MODEL": os.environ.get("ANTHROPIC_MODEL", "databricks-claude-opus-4-7"),
-            "ANTHROPIC_BASE_URL": anthropic_base_url,
-            "ANTHROPIC_AUTH_TOKEN": token,
-            "ANTHROPIC_DEFAULT_OPUS_MODEL": "databricks-claude-opus-4-7",
-            "ANTHROPIC_DEFAULT_SONNET_MODEL": "databricks-claude-sonnet-4-6",
-            "ANTHROPIC_DEFAULT_HAIKU_MODEL": "databricks-claude-haiku-4-5",
-            "ANTHROPIC_CUSTOM_HEADERS": "x-databricks-use-coding-agent-mode: true",
-            "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
-        }
-    }
-
+    # Read-merge-write to preserve env vars from other setup scripts (e.g. setup_mlflow.py)
     settings_path = os.path.join(claude_dir, "settings.json")
+    try:
+        with open(settings_path) as f:
+            settings = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        settings = {}
+
+    settings.setdefault("env", {})
+    settings["env"]["ANTHROPIC_MODEL"] = os.environ.get("ANTHROPIC_MODEL", "databricks-claude-opus-4-7")
+    settings["env"]["ANTHROPIC_BASE_URL"] = anthropic_base_url
+    settings["env"]["ANTHROPIC_AUTH_TOKEN"] = token
+    settings["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = "databricks-claude-opus-4-7"
+    settings["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = "databricks-claude-sonnet-4-6"
+    settings["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = "databricks-claude-haiku-4-5"
+    settings["env"]["ANTHROPIC_CUSTOM_HEADERS"] = "x-databricks-use-coding-agent-mode: true"
+    settings["env"]["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] = "1"
+
     with open(settings_path, "w") as f:
         json.dump(settings, f, indent=2)
 
@@ -373,7 +377,6 @@ def run_setup():
         ("gemini",     ["uv", "run", "python", "setup_gemini.py"]),
         ("hermes",     ["uv", "run", "python", "setup_hermes.py"]),
         ("databricks", ["uv", "run", "python", "setup_databricks.py"]),
-        ("mlflow",     ["uv", "run", "python", "setup_mlflow.py"]),
     ]
 
     with ThreadPoolExecutor(max_workers=len(parallel_steps)) as executor:
@@ -382,6 +385,11 @@ def run_setup():
             for step_id, command in parallel_steps
         ]
         wait(futures)
+
+    # --- MLflow setup runs AFTER claude setup to avoid settings.json race ---
+    # setup_mlflow.py merges env vars into ~/.claude/settings.json which
+    # setup_claude.py also writes; running sequentially prevents clobbering.
+    _run_step("mlflow", ["uv", "run", "python", "setup_mlflow.py"])
 
     # Sync latest token into all CLI configs — covers the race where PAT
     # rotation happened while a setup script was still installing (the
