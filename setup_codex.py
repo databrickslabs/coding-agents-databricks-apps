@@ -30,22 +30,39 @@ local_bin = home / ".local" / "bin"
 local_bin.mkdir(parents=True, exist_ok=True)
 codex_bin = local_bin / "codex"
 
+MAX_RETRIES = 3
+RETRY_DELAY = 5  # seconds
+
 if not codex_bin.exists():
-    # Use --prefix ~/.local so npm installs directly into ~/.local/bin
     npm_prefix = str(home / ".local")
     codex_version = get_npm_version("@openai/codex")
     codex_pkg = f"@openai/codex@{codex_version}" if codex_version else "@openai/codex"
-    print(f"Installing {codex_pkg}...")
-    result = subprocess.run(
-        ["npm", "install", "-g", f"--prefix={npm_prefix}", codex_pkg],
-        capture_output=True,
-        text=True,
-        env={**os.environ, "HOME": str(home)},
-    )
-    if result.returncode == 0:
-        print(f"Codex CLI installed to {codex_bin}")
-    else:
-        print(f"Codex CLI install warning: {result.stderr}")
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        print(f"Installing {codex_pkg} (attempt {attempt}/{MAX_RETRIES})...")
+        result = subprocess.run(
+            ["npm", "install", "-g", f"--prefix={npm_prefix}", codex_pkg],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "HOME": str(home)},
+        )
+        if result.returncode == 0 and codex_bin.exists():
+            print(f"Codex CLI installed to {codex_bin}")
+            break
+        else:
+            stderr = result.stderr.strip()
+            print(f"Codex CLI install failed (attempt {attempt}/{MAX_RETRIES}, rc={result.returncode})")
+            if stderr:
+                print(f"  stderr: {stderr[:500]}")
+            if result.stdout.strip():
+                print(f"  stdout: {result.stdout.strip()[:500]}")
+            if attempt < MAX_RETRIES:
+                import time
+                print(f"  Retrying in {RETRY_DELAY}s...")
+                time.sleep(RETRY_DELAY)
+            else:
+                print(f"ERROR: Codex CLI installation failed after {MAX_RETRIES} attempts. "
+                      f"Run manually: npm install -g --prefix=$HOME/.local @openai/codex")
 else:
     print(f"Codex CLI already installed at {codex_bin}")
 

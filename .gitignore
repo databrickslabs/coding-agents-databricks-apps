@@ -27,3 +27,6 @@ uv.lock
 
 # Codex skills are generated at runtime by setup_codex.py from .claude/skills/
 .agents/
+
+# Agent-plane reference clone
+agent-plane-ref/
