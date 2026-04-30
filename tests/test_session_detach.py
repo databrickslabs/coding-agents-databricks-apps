@@ -105,6 +105,9 @@ class TestListSessions:
     def setup_app(self):
         app_module = _get_app()
         app_module.app_owner = "test@example.com"
+        # Clear leftover sessions from prior test classes
+        with app_module.sessions_lock:
+            app_module.sessions.clear()
         self.client = app_module.app.test_client()
         self.app_module = app_module
         yield
