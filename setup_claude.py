@@ -31,10 +31,10 @@ if token:
 
     settings = {
         "env": {
-            "ANTHROPIC_MODEL": os.environ.get("ANTHROPIC_MODEL", "databricks-claude-opus-4-6"),
+            "ANTHROPIC_MODEL": os.environ.get("ANTHROPIC_MODEL", "databricks-claude-opus-4-7"),
             "ANTHROPIC_BASE_URL": anthropic_base_url,
             "ANTHROPIC_AUTH_TOKEN": token,
-            "ANTHROPIC_DEFAULT_OPUS_MODEL": "databricks-claude-opus-4-6",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": "databricks-claude-opus-4-7",
             "ANTHROPIC_DEFAULT_SONNET_MODEL": "databricks-claude-sonnet-4-6",
             "ANTHROPIC_DEFAULT_HAIKU_MODEL": "databricks-claude-haiku-4-5",
             "ANTHROPIC_CUSTOM_HEADERS": "x-databricks-use-coding-agent-mode: true",
