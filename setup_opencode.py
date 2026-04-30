@@ -32,23 +32,40 @@ local_bin = home / ".local" / "bin"
 local_bin.mkdir(parents=True, exist_ok=True)
 opencode_bin = local_bin / "opencode"
 
+MAX_RETRIES = 3
+RETRY_DELAY = 5  # seconds
+
 if not opencode_bin.exists():
-    # Use --prefix ~/.local so npm installs directly into ~/.local/bin (avoids EACCES on /usr/local)
     npm_prefix = str(home / ".local")
 
     # Resolve exact versions to avoid mutable @latest tags (supply chain hardening)
     oc_version = get_npm_version("opencode-ai")
     oc_pkg = f"opencode-ai@{oc_version}" if oc_version else "opencode-ai@latest"
-    print(f"Installing {oc_pkg}...")
-    result = subprocess.run(
-        ["npm", "install", "-g", f"--prefix={npm_prefix}", oc_pkg],
-        capture_output=True, text=True,
-        env={**os.environ, "HOME": str(home)}
-    )
-    if result.returncode == 0:
-        print(f"OpenCode CLI installed to {opencode_bin}")
-    else:
-        print(f"OpenCode install warning: {result.stderr}")
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        print(f"Installing {oc_pkg} (attempt {attempt}/{MAX_RETRIES})...")
+        result = subprocess.run(
+            ["npm", "install", "-g", f"--prefix={npm_prefix}", oc_pkg],
+            capture_output=True, text=True,
+            env={**os.environ, "HOME": str(home)}
+        )
+        if result.returncode == 0 and opencode_bin.exists():
+            print(f"OpenCode CLI installed to {opencode_bin}")
+            break
+        else:
+            stderr = result.stderr.strip()
+            print(f"OpenCode install failed (attempt {attempt}/{MAX_RETRIES}, rc={result.returncode})")
+            if stderr:
+                print(f"  stderr: {stderr[:500]}")
+            if result.stdout.strip():
+                print(f"  stdout: {result.stdout.strip()[:500]}")
+            if attempt < MAX_RETRIES:
+                import time
+                print(f"  Retrying in {RETRY_DELAY}s...")
+                time.sleep(RETRY_DELAY)
+            else:
+                print(f"ERROR: OpenCode installation failed after {MAX_RETRIES} attempts. "
+                      f"Run manually: npm install -g --prefix=$HOME/.local opencode-ai")
 
     # Install @ai-sdk/openai for GPT models (Responses API support)
     sdk_version = get_npm_version("@ai-sdk/openai")
@@ -62,7 +79,7 @@ if not opencode_bin.exists():
     if result.returncode == 0:
         print(f"@ai-sdk/openai@{sdk_version or 'latest'} installed (Responses API support)")
     else:
-        print(f"@ai-sdk/openai install warning: {result.stderr}")
+        print(f"@ai-sdk/openai install warning: {result.stderr[:500]}")
 else:
     print(f"OpenCode CLI already installed at {opencode_bin}")
 

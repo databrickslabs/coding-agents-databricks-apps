@@ -29,20 +29,27 @@ if token:
         anthropic_base_url = f"{databricks_host}/serving-endpoints/anthropic"
         print(f"Using Databricks Host: {databricks_host}")
 
-    settings = {
-        "env": {
-            "ANTHROPIC_MODEL": os.environ.get("ANTHROPIC_MODEL", "databricks-claude-opus-4-6"),
-            "ANTHROPIC_BASE_URL": anthropic_base_url,
-            "ANTHROPIC_AUTH_TOKEN": token,
-            "ANTHROPIC_DEFAULT_OPUS_MODEL": "databricks-claude-opus-4-6",
-            "ANTHROPIC_DEFAULT_SONNET_MODEL": "databricks-claude-sonnet-4-6",
-            "ANTHROPIC_DEFAULT_HAIKU_MODEL": "databricks-claude-haiku-4-5",
-            "ANTHROPIC_CUSTOM_HEADERS": "x-databricks-use-coding-agent-mode: true",
-            "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1",
-        }
-    }
-
     settings_path = claude_dir / "settings.json"
+
+    # Read-merge-write to preserve env vars from other setup scripts (e.g. setup_mlflow.py)
+    if settings_path.exists():
+        try:
+            settings = json.loads(settings_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            settings = {}
+    else:
+        settings = {}
+
+    settings.setdefault("env", {})
+    settings["env"]["ANTHROPIC_MODEL"] = os.environ.get("ANTHROPIC_MODEL", "databricks-claude-opus-4-7")
+    settings["env"]["ANTHROPIC_BASE_URL"] = anthropic_base_url
+    settings["env"]["ANTHROPIC_AUTH_TOKEN"] = token
+    settings["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = "databricks-claude-opus-4-7"
+    settings["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = "databricks-claude-sonnet-4-6"
+    settings["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = "databricks-claude-haiku-4-5"
+    settings["env"]["ANTHROPIC_CUSTOM_HEADERS"] = "x-databricks-use-coding-agent-mode: true"
+    settings["env"]["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] = "1"
+
     settings_path.write_text(json.dumps(settings, indent=2))
     print(f"Claude configured: {settings_path}")
 else:

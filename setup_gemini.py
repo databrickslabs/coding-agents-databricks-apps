@@ -12,7 +12,6 @@ Auth: GEMINI_API_KEY_AUTH_MECHANISM=bearer sends Databricks PAT as Bearer token.
 """
 import os
 import json
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -33,21 +32,38 @@ local_bin = home / ".local" / "bin"
 local_bin.mkdir(parents=True, exist_ok=True)
 gemini_bin = local_bin / "gemini"
 
+MAX_RETRIES = 3
+RETRY_DELAY = 5  # seconds
+
 if not gemini_bin.exists():
-    # Use --prefix ~/.local so npm installs directly into ~/.local/bin (avoids EACCES on /usr/local)
     npm_prefix = str(home / ".local")
     gemini_version = get_npm_version("@google/gemini-cli")
     gemini_pkg = f"@google/gemini-cli@{gemini_version}" if gemini_version else "@google/gemini-cli@latest"
-    print(f"Installing {gemini_pkg}...")
-    result = subprocess.run(
-        ["npm", "install", "-g", f"--prefix={npm_prefix}", gemini_pkg],
-        capture_output=True, text=True,
-        env={**os.environ, "HOME": str(home)}
-    )
-    if result.returncode == 0:
-        print(f"Gemini CLI installed to {gemini_bin}")
-    else:
-        print(f"Gemini CLI install warning: {result.stderr}")
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        print(f"Installing {gemini_pkg} (attempt {attempt}/{MAX_RETRIES})...")
+        result = subprocess.run(
+            ["npm", "install", "-g", f"--prefix={npm_prefix}", gemini_pkg],
+            capture_output=True, text=True,
+            env={**os.environ, "HOME": str(home)}
+        )
+        if result.returncode == 0 and gemini_bin.exists():
+            print(f"Gemini CLI installed to {gemini_bin}")
+            break
+        else:
+            stderr = result.stderr.strip()
+            print(f"Gemini CLI install failed (attempt {attempt}/{MAX_RETRIES}, rc={result.returncode})")
+            if stderr:
+                print(f"  stderr: {stderr[:500]}")
+            if result.stdout.strip():
+                print(f"  stdout: {result.stdout.strip()[:500]}")
+            if attempt < MAX_RETRIES:
+                import time
+                print(f"  Retrying in {RETRY_DELAY}s...")
+                time.sleep(RETRY_DELAY)
+            else:
+                print(f"ERROR: Gemini CLI installation failed after {MAX_RETRIES} attempts. "
+                      f"Run manually: npm install -g --prefix=$HOME/.local @google/gemini-cli")
 else:
     print(f"Gemini CLI already installed at {gemini_bin}")
 
@@ -127,16 +143,9 @@ settings_path = gemini_dir / "settings.json"
 settings_path.write_text(json.dumps(settings, indent=2))
 print(f"Gemini CLI settings configured: {settings_path}")
 
-# 5. Copy Claude skills into .gemini/skills for shared reference
-claude_skills_dir = home / ".claude" / "skills"
-gemini_skills_dir = gemini_dir / "skills"
-if claude_skills_dir.exists():
-    if gemini_skills_dir.exists():
-        shutil.rmtree(gemini_skills_dir)
-    shutil.copytree(claude_skills_dir, gemini_skills_dir)
-    print(f"Skills copied: {claude_skills_dir} -> {gemini_skills_dir}")
-else:
-    print(f"No Claude skills found at {claude_skills_dir}, skipping copy")
+# 5. Skills live in ~/.agents/skills/ (shared across all CLIs, copied by setup_codex.py).
+#    Do NOT copy into ~/.gemini/skills/ — Gemini discovers both paths and logs
+#    "Skill conflict detected" warnings for every duplicate.
 
 # 6. Adapt CLAUDE.md to GEMINI.md for Gemini CLI
 # Look for CLAUDE.md in common locations

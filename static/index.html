@@ -1490,26 +1490,40 @@
         term.write('\x1b[90m  3. Paste it below\x1b[0m\r\n');
         term.write('\r\n');
         term.write('\x1b[1;37m  Token: \x1b[0m');
+        term.focus();
 
         // Collect token input from the terminal
         let tokenInput = '';
         await new Promise((resolve) => {
           const disposable = term.onData(data => {
             if (data === '\r' || data === '\n') {
-              // Enter pressed — submit token
               term.write('\r\n');
               disposable.dispose();
               resolve();
-            } else if (data === '\x7f' || data === '\b') {
-              // Backspace
+              return;
+            }
+            if (data === '\x7f' || data === '\b') {
               if (tokenInput.length > 0) {
                 tokenInput = tokenInput.slice(0, -1);
                 term.write('\b \b');
               }
-            } else if (data >= ' ') {
-              // Printable character — mask with asterisks
-              tokenInput += data;
-              term.write('*');
+              return;
+            }
+            let chunk = data;
+            let submitAfter = false;
+            if (/[\r\n]$/.test(chunk)) {
+              chunk = chunk.replace(/[\r\n]+$/, '');
+              submitAfter = true;
+            }
+            const printable = Array.from(chunk).filter(c => c >= ' ');
+            if (printable.length) {
+              tokenInput += printable.join('');
+              term.write('*'.repeat(printable.length));
+            }
+            if (submitAfter) {
+              term.write('\r\n');
+              disposable.dispose();
+              resolve();
             }
           });
         });
@@ -2028,14 +2042,18 @@
     // Use capture phase (3rd arg = true) so we fire BEFORE xterm.js consumes the event
     document.addEventListener('paste', async (e) => {
       const active = getActivePane();
-      if (!active || !active.sessionId) {
-        console.log('[paste] No active pane or session');
-        return;
-      }
-
       const items = e.clipboardData?.items;
       if (!items) {
         console.log('[paste] No clipboardData items');
+        return;
+      }
+
+      // Image paste needs a live session to upload to. Text paste must always
+      // fall through to xterm (the PAT prompt fires before sessionId is set).
+      const hasImage = Array.from(items).some(i => i.type.startsWith('image/'));
+      if (!hasImage) return;
+      if (!active || !active.sessionId) {
+        console.log('[paste] image paste ignored — no active session');
         return;
       }
 

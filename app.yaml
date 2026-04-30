@@ -9,7 +9,7 @@ env:
   - name: GEMINI_MODEL
     value: databricks-gemini-2-5-pro
   - name: CODEX_MODEL
-    value: databricks-gpt-5-3-codex
+    value: databricks-gpt-5-5
   - name: CLAUDE_CODE_DISABLE_AUTO_MEMORY
     value: 0
   - name: MAX_CONCURRENT_SESSIONS

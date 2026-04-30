@@ -170,6 +170,9 @@ class TestRemovedSessionsFreeSlots:
     def test_removing_session_frees_slot(self):
         """After removing a session from the dict, a new one can be created."""
         app_module = _get_app()
+        # Clear any leaked sessions from prior tests
+        with app_module.sessions_lock:
+            app_module.sessions.clear()
         limit = app_module.MAX_CONCURRENT_SESSIONS
         sids = [f"full-{i}" for i in range(limit)]
         try:
