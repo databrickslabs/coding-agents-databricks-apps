@@ -23,6 +23,7 @@ import requests
 import app_state
 from utils import ensure_https, get_gateway_host
 from pat_rotator import PATRotator
+from telemetry import log_telemetry, set_product_info
 
 # Sanitize DATABRICKS_TOKEN early — the platform sometimes injects trailing
 # newlines / whitespace which causes auth failures.  Cleaning it here prevents
@@ -175,6 +176,7 @@ def _setup_git_config():
         db_token = os.environ.get("DATABRICKS_TOKEN")
         if db_host and db_token:
             w = WorkspaceClient(host=db_host, token=db_token, auth_type="pat")
+            set_product_info(w)
             me = w.current_user.me()
             user_email = me.user_name
             display_name = me.display_name or user_email.split("@")[0]
@@ -412,6 +414,7 @@ def get_token_owner():
     if app_name:
         try:
             w = WorkspaceClient()  # auto-detects SP credentials
+            set_product_info(w)
             app = w.apps.get(name=app_name)
             owner = (app.creator or "").lower()
             logger.info(f"Owner resolved from app.creator: {owner}")
@@ -426,6 +429,7 @@ def get_token_owner():
         if not host or not token:
             return None
         w = WorkspaceClient(host=host, token=token, auth_type="pat")
+        set_product_info(w)
         username = w.current_user.me().user_name
         return username.lower() if username else username
     except Exception as e:
@@ -1060,6 +1064,9 @@ def create_session():
         thread = threading.Thread(target=read_pty_output, args=(session_id, master_fd), daemon=True)
         thread.start()
 
+        # Telemetry: track session creation with agent type
+        log_telemetry("agent", label or "shell")
+
         return jsonify({"session_id": session_id})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1112,6 +1119,10 @@ def upload_file():
 
     file_size = os.path.getsize(file_path) if os.path.exists(file_path) else 0
     logger.info(f"Upload saved: {file_path} ({file_size} bytes)")
+
+    # Telemetry: track file uploads
+    log_telemetry("event", "file_upload")
+
     return jsonify({"path": file_path})
 
 
@@ -1268,6 +1279,9 @@ def initialize_app(local_dev=False):
     os.environ.pop("DATABRICKS_CLIENT_ID", None)
     os.environ.pop("DATABRICKS_CLIENT_SECRET", None)
     logger.info("SP credentials stripped — PAT-only auth from this point")
+
+    # Telemetry: app startup ping (fire-and-forget in background thread)
+    log_telemetry("event", "app_startup")
 
     # Start background cleanup thread
     cleanup_thread = threading.Thread(target=cleanup_stale_sessions, daemon=True)

@@ -35,6 +35,11 @@ def get_user_email():
     if not host or not token:
         raise RuntimeError("~/.databrickscfg missing host or token")
     w = WorkspaceClient(host=host, token=token, auth_type="pat")
+    try:
+        from telemetry import set_product_info
+        set_product_info(w)
+    except Exception:
+        pass
     return w.current_user.me().user_name
 
 
@@ -68,6 +73,12 @@ def sync_project(project_path: Path):
 
         if result.returncode == 0:
             print(f"✓ Synced to {workspace_dest}")
+            # Telemetry: track workspace sync events
+            try:
+                from telemetry import log_telemetry
+                log_telemetry("event", "workspace_sync")
+            except Exception:
+                pass  # Telemetry must never break sync
         else:
             print(f"⚠ Sync warning: {result.stderr}", file=sys.stderr)
 
