@@ -16,9 +16,12 @@ on:
   schedule:
     - cron: '0 6 * * 1'  # Weekly Monday 6am UTC — catch newly disclosed CVEs
 
+permissions:
+  contents: read
+
 jobs:
   audit:
-    runs-on: ubuntu-latest
+    runs-on: databrickslabs-protected-runner-group
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
@@ -29,7 +32,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@94527f2e458b27549849d47d273a16bec83a01e9  # v7
 
       - name: Install audit tools
         run: pip install pip-audit==2.9.0
