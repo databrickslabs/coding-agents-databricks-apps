@@ -22,9 +22,12 @@ APP_NAME      ?= coding-agents
 USER_EMAIL    = $(shell databricks current-user me --profile $(PROFILE) --output json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('userName',''))")
 WORKSPACE_PATH = /Workspace/Users/$(USER_EMAIL)/apps/$(APP_NAME)
 
-.PHONY: help deploy redeploy create-app create-pat sync deploy-app status open clean
+.PHONY: help test deploy redeploy create-app create-pat sync deploy-app status open clean
 
 # ── Help ─────────────────────────────────────────────
+
+test: ## Run unit tests
+	uv run pytest tests/ -v
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
