@@ -28,6 +28,17 @@ All agent versions are resolved dynamically at install time (latest from npm reg
 
 ---
 
+## MCP Servers (Remote Services)
+
+The following Model Context Protocol (MCP) servers are configured as remote endpoints. They are not installed locally but accessed over HTTPS at runtime.
+
+| Server | Endpoint | License | Provider | Source |
+| --- | --- | --- | --- | --- |
+| DeepWiki | https://mcp.deepwiki.com/mcp | Proprietary (hosted service) | Cognition AI (Devin) | [https://deepwiki.com](https://deepwiki.com) |
+| Exa | https://mcp.exa.ai/mcp | MIT (server reference impl.) | Exa Labs | [https://github.com/exa-labs/exa-mcp-server](https://github.com/exa-labs/exa-mcp-server) |
+
+---
+
 ## Bundled Skills and Plugins
 
 The following skill sets are bundled in `.claude/skills/` and `.claude/plugins/` to provide Databricks-specific knowledge and development workflows.
