@@ -6,11 +6,31 @@ This Software includes software developed at Databricks (https://www.databricks.
 
 ---
 
-Dependencies are grouped below by license. Each table row lists a third-party package bundled or used at runtime, along with its license and upstream source. All packages are in the Python (PyPI) ecosystem; there are no frontend/npm dependencies.
+Dependencies are grouped below by license. Each table row lists a third-party package bundled or used at runtime, along with its license and upstream source.
 
-This NOTICE is regenerated from `pip-licenses` and `uv.lock`. See `pyproject.toml` for the direct dependency declarations.
+This NOTICE is regenerated from `pip-licenses` and `uv.lock` (Python), `npm view` (npm), and upstream repositories (Git-installed tools). See `pyproject.toml` for the direct Python dependency declarations.
 
-**Dual-licensed packages** — the following packages offer a choice of license. They are listed below under the first license option:
+## Installed AI Coding Agents
+
+The following tools are installed at runtime as user-facing coding agents. They are not Python library dependencies but standalone CLI tools provisioned by the setup scripts.
+
+| Tool | Install Method | Package | License | Copyright | Source |
+| --- | --- | --- | --- | --- | --- |
+| Claude Code | curl \| bash | @anthropic-ai/claude-code | Custom (see README.md) | Anthropic, PBC. | [https://github.com/anthropics/claude-code](https://github.com/anthropics/claude-code) |
+| Codex | npm install -g | @openai/codex | Apache-2.0 | OpenAI | [https://github.com/openai/codex](https://github.com/openai/codex) |
+| Gemini CLI | npm install -g | @google/gemini-cli | Apache-2.0 | Google LLC | [https://github.com/google-gemini/gemini-cli](https://github.com/google-gemini/gemini-cli) |
+| Hermes Agent | uv tool install (Git) | hermes-agent | MIT | Nous Research | [https://github.com/NousResearch/hermes-agent](https://github.com/NousResearch/hermes-agent) |
+| OpenCode | npm install -g | opencode-ai | MIT | OpenCode contributors | [https://github.com/nicepkg/opencode](https://github.com/nicepkg/opencode) |
+
+Additionally, OpenCode installs `@ai-sdk/openai` (Apache-2.0, Vercel Inc.) as a runtime provider SDK.
+
+All agent versions are resolved dynamically at install time (latest from npm registry or Git HEAD); no versions are pinned. See `setup_claude.py`, `setup_codex.py`, `setup_gemini.py`, `setup_hermes.py`, and `setup_opencode.py` for installation details.
+
+---
+
+## Python Dependencies
+
+**Dual-licensed Python packages** — the following packages offer a choice of license. They are listed below under the first license option:
 - `cryptography` 47.0.0 — Apache-2.0 **OR** BSD-3-Clause (listed under Apache License 2.0)
 - `packaging` 26.2 — Apache-2.0 **OR** BSD-2-Clause (listed under Apache License 2.0)
 - `sniffio` 1.3.1 — Apache-2.0 **OR** MIT (listed under MIT License)
