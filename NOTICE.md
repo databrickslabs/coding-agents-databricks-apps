@@ -28,6 +28,17 @@ All agent versions are resolved dynamically at install time (latest from npm reg
 
 ---
 
+## Bundled Skills and Plugins
+
+The following skill sets are bundled in `.claude/skills/` and `.claude/plugins/` to provide Databricks-specific knowledge and development workflows.
+
+| Source | License | Copyright | Source |
+| --- | --- | --- | --- |
+| [databricks-solutions/ai-dev-kit](https://github.com/databricks-solutions/ai-dev-kit) (Databricks skills) | Databricks License | Databricks, Inc. | [https://github.com/databricks-solutions/ai-dev-kit](https://github.com/databricks-solutions/ai-dev-kit) |
+| [obra/superpowers](https://github.com/obra/superpowers) (development workflow skills) | MIT License | Jesse Vincent | [https://github.com/obra/superpowers](https://github.com/obra/superpowers) |
+
+---
+
 ## Python Dependencies
 
 **Dual-licensed Python packages** — the following packages offer a choice of license. They are listed below under the first license option:
