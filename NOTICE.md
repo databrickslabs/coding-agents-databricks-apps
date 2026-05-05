@@ -34,7 +34,7 @@ The following Model Context Protocol (MCP) servers are configured as remote endp
 
 | Server | Endpoint | License | Provider | Source |
 | --- | --- | --- | --- | --- |
-| DeepWiki | https://mcp.deepwiki.com/mcp | Proprietary (hosted service) | Cognition AI (Devin) | [https://deepwiki.com](https://deepwiki.com) |
+| DeepWiki | https://mcp.deepwiki.com/mcp | MIT | Cognition AI (Devin) | [https://github.com/regenrek/deepwiki-mcp](https://github.com/regenrek/deepwiki-mcp) |
 | Exa | https://mcp.exa.ai/mcp | MIT (server reference impl.) | Exa Labs | [https://github.com/exa-labs/exa-mcp-server](https://github.com/exa-labs/exa-mcp-server) |
 
 ---
