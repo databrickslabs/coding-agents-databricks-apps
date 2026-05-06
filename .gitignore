@@ -21,9 +21,21 @@ uploads/
 # uv lockfile — not portable across PyPI proxies, generate locally with `uv lock`
 uv.lock
 
-# Codex CLI generated/cached files (only the bundled model catalog is tracked)
-.codex/*
-!.codex/databricks-models.json
+# Codex CLI generated/cached files. The bundled model catalog
+# (.codex/databricks-models.json) is tracked. Listed file-by-file rather
+# than `.codex/* + !.codex/databricks-models.json` because `databricks sync`
+# (and several other gitignore-honoring tools) doesn't respect the negation
+# pattern — that broke the deploy of databricks-models.json to the app
+# workspace, which Codex needs to start.
+.codex/config.toml
+.codex/.env
+.codex/AGENTS.md
+.codex/.personality_migration
+.codex/memories/
+.codex/tmp/
+.codex/sessions/
+.codex/cron/
+.codex/skills/
 
 # Codex skills are generated at runtime by setup_codex.py from .claude/skills/
 .agents/
