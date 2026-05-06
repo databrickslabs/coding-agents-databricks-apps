@@ -4,7 +4,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from utils import ensure_https, get_gateway_host
+from utils import discover_serving_endpoints, ensure_https, get_gateway_host, pick_in_geo_model
 
 # Set HOME if not properly set
 if not os.environ.get("HOME") or os.environ["HOME"] == "/":
@@ -40,13 +40,46 @@ if token:
     else:
         settings = {}
 
+    # Discover models actually served at this workspace. The direct serving-
+    # endpoints list reflects Databricks Geo Designated Services policy — a
+    # workspace in AU only sees in-geo models, etc. Validating env-set defaults
+    # against this list avoids configuring Claude Code with a model the gateway
+    # claims to serve but the user's geo can't access.
+    available = discover_serving_endpoints(databricks_host, token)
+    if available:
+        print(f"Discovered {len(available)} READY serving endpoints at workspace")
+
+    requested_model = os.environ.get("ANTHROPIC_MODEL", "databricks-claude-opus-4-7")
+    active_model = pick_in_geo_model(
+        [requested_model, "databricks-claude-opus-4-6", "databricks-claude-sonnet-4-6"],
+        available,
+        fallback=requested_model,
+    )
+    opus_model = pick_in_geo_model(
+        ["databricks-claude-opus-4-7", "databricks-claude-opus-4-6"],
+        available,
+        fallback="databricks-claude-opus-4-7",
+    )
+    sonnet_model = pick_in_geo_model(
+        ["databricks-claude-sonnet-4-6", "databricks-claude-sonnet-4-5"],
+        available,
+        fallback="databricks-claude-sonnet-4-6",
+    )
+    haiku_model = pick_in_geo_model(
+        ["databricks-claude-haiku-4-5"],
+        available,
+        fallback="databricks-claude-haiku-4-5",
+    )
+    if available and active_model != requested_model:
+        print(f"ANTHROPIC_MODEL={requested_model} not served at this workspace, using {active_model}")
+
     settings.setdefault("env", {})
-    settings["env"]["ANTHROPIC_MODEL"] = os.environ.get("ANTHROPIC_MODEL", "databricks-claude-opus-4-7")
+    settings["env"]["ANTHROPIC_MODEL"] = active_model
     settings["env"]["ANTHROPIC_BASE_URL"] = anthropic_base_url
     settings["env"]["ANTHROPIC_AUTH_TOKEN"] = token
-    settings["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = "databricks-claude-opus-4-7"
-    settings["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = "databricks-claude-sonnet-4-6"
-    settings["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = "databricks-claude-haiku-4-5"
+    settings["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = opus_model
+    settings["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = sonnet_model
+    settings["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = haiku_model
     settings["env"]["ANTHROPIC_CUSTOM_HEADERS"] = "x-databricks-use-coding-agent-mode: true"
     settings["env"]["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] = "1"
 
