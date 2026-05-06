@@ -10,6 +10,13 @@ env:
     value: databricks-gemini-2-5-pro
   - name: CODEX_MODEL
     value: databricks-gpt-5-5
+  - name: HERMES_MODEL
+    value: databricks-claude-opus-4-6
+  - name: HERMES_FALLBACK_MODEL
+    value: databricks-claude-opus-4-6
+  # Set ENABLE_HERMES=false to skip Hermes Agent install. Other CLIs are unaffected.
+  - name: ENABLE_HERMES
+    value: "true"
   - name: CLAUDE_CODE_DISABLE_AUTO_MEMORY
     value: 0
   - name: MAX_CONCURRENT_SESSIONS
