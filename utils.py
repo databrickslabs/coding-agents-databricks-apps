@@ -2,10 +2,63 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import subprocess
 from pathlib import Path
+
+import requests
+
+logger = logging.getLogger(__name__)
+
+
+def discover_serving_endpoints(host: str, token: str, timeout: float = 5.0) -> set[str]:
+    """Return the set of READY serving-endpoint names at the workspace.
+
+    The workspace's direct serving-endpoints list naturally reflects in-geo
+    model availability — Databricks Geo Designated Services restricts which
+    models are deployed to each region. Validating an env-set model against
+    this list is therefore equivalent to "is this model in the workspace's
+    geo / data-residency policy", without parsing GDS rules ourselves.
+
+    Returns an empty set on any failure (auth error, network blip, JSON parse,
+    etc.) — caller should treat empty as "discovery unavailable, keep defaults".
+    """
+    if not host or not token:
+        return set()
+    try:
+        resp = requests.get(
+            f"{host}/api/2.0/serving-endpoints",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=timeout,
+        )
+        resp.raise_for_status()
+        endpoints = resp.json().get("endpoints", [])
+        return {
+            ep["name"]
+            for ep in endpoints
+            if ep.get("name") and ep.get("state", {}).get("ready") == "READY"
+        }
+    except Exception as e:
+        logger.warning("Could not discover serving endpoints at %s: %s", host, e)
+        return set()
+
+
+def pick_in_geo_model(preferred: list[str], available: set[str], fallback: str) -> str:
+    """Pick the highest-priority preferred model that's actually served here.
+
+    `preferred` is the caller's degradation chain (e.g. opus-4-7 → opus-4-6).
+    Returns the first entry that's in `available`. If none match (or `available`
+    is empty because discovery failed), returns `fallback` — typically the
+    original env-set default. The user will see a clean ENDPOINT_NOT_FOUND
+    later if they actually try to use a missing model, rather than getting
+    silently downgraded to a different model tier.
+    """
+    for m in preferred:
+        if m in available:
+            return m
+    return fallback
 
 
 def get_npm_version(package_name):
