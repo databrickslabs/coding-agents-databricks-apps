@@ -8,6 +8,8 @@ import re
 import subprocess
 from pathlib import Path
 
+import requests
+
 logger = logging.getLogger(__name__)
 
 
@@ -26,7 +28,6 @@ def discover_serving_endpoints(host: str, token: str, timeout: float = 5.0) -> s
     if not host or not token:
         return set()
     try:
-        import requests
         resp = requests.get(
             f"{host}/api/2.0/serving-endpoints",
             headers={"Authorization": f"Bearer {token}"},
