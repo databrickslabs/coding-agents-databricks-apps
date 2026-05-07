@@ -537,10 +537,11 @@
       });
     }
 
-    // Resolve initial theme
+    // Resolve initial theme — default to Dark so onboarding ANSI prompts (e.g.
+    // the PAT setup screen) are legible. Users can still pick Light from the
+    // theme picker; their choice persists in localStorage.
     if (!currentThemeName || !themes[currentThemeName]) {
-      const prefersDark = !window.matchMedia('(prefers-color-scheme: light)').matches;
-      currentThemeName = prefersDark ? 'Dark' : 'Light';
+      currentThemeName = 'Dark';
     }
 
     // ── Theme Application ──────────────────────────────────────────
