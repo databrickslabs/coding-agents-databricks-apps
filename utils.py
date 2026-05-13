@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
 import subprocess
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -61,22 +63,107 @@ def pick_in_geo_model(preferred: list[str], available: set[str], fallback: str) 
     return fallback
 
 
-def get_npm_version(package_name):
-    """Resolve the latest stable version of an npm package.
+def _default_npm_min_age_days() -> int:
+    """Read NPM_MIN_RELEASE_AGE_DAYS env var, default 7. Falls back to 7 on parse error."""
+    try:
+        return int(os.environ.get("NPM_MIN_RELEASE_AGE_DAYS", "7"))
+    except ValueError:
+        return 7
 
-    Uses ``npm view`` to query the registry, returning an exact version string
-    (e.g. "1.2.24") that can be appended to the package spec for pinned installs.
-    Returns None if the lookup fails (network issue, package not found).
+
+def get_npm_version(package_name, min_age_days=None):
+    """Resolve the latest stable npm version that satisfies a release-age cooldown.
+
+    Returns the highest stable (non-pre-release) version of ``package_name``
+    that was published at least ``min_age_days`` days ago. This is a
+    supply-chain hardening measure: malicious npm packages are typically
+    detected and yanked within hours-to-days of publishing (see Shai-Hulud,
+    Nx, event-stream incidents), so an N-day cooldown gives the community
+    time to flag bad versions before we install them.
+
+    Mirrors the role of ``[tool.uv] exclude-newer = "7 days"`` in
+    ``pyproject.toml``. See https://github.com/lirantal/npm-security-best-practices
+    section 3 for background.
+
+    Args:
+        package_name: npm package name (e.g. "opencode-ai" or "@openai/codex").
+        min_age_days: Minimum publish age in days. Defaults to
+            ``NPM_MIN_RELEASE_AGE_DAYS`` env var or 7 days. Pass 0 to disable
+            the cooldown (single-query fast path, original behaviour).
+
+    Returns:
+        Exact version string (e.g. "1.2.24") suitable for pinning via
+        ``npm install -g <pkg>@<version>``. Returns None on lookup failure
+        (network, package not found, no version old enough) — callers
+        already fall back to "@latest" in that case.
     """
+    if min_age_days is None:
+        min_age_days = _default_npm_min_age_days()
+    if min_age_days <= 0:
+        return _npm_view_latest(package_name)
+    return _npm_view_with_cooldown(package_name, min_age_days)
+
+
+def _npm_view_latest(package_name):
+    """Single-query fast path: return whatever version 'latest' points at."""
     try:
         result = subprocess.run(
             ["npm", "view", package_name, "version"],
-            capture_output=True, text=True, timeout=30
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         if result.returncode == 0 and result.stdout.strip():
             return result.stdout.strip()
     except (subprocess.TimeoutExpired, FileNotFoundError):
         pass
+    return None
+
+
+def _npm_view_with_cooldown(package_name, min_age_days):
+    """Pick the highest stable version published >= min_age_days ago.
+
+    Walks ``npm view <pkg> versions time --json`` from newest to oldest,
+    skipping pre-release tags and any version whose publish time is too
+    recent. Returns the first match (which is the highest stable version
+    satisfying the cooldown). Returns None if no version qualifies or any
+    step fails — caller falls back to ``@latest``.
+    """
+    try:
+        result = subprocess.run(
+            ["npm", "view", package_name, "versions", "time", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            return None
+        data = json.loads(result.stdout)
+    except (subprocess.TimeoutExpired, FileNotFoundError, json.JSONDecodeError):
+        return None
+
+    versions = data.get("versions") or []
+    times = data.get("time") or {}
+    if not versions or not times:
+        return None
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=min_age_days)
+    # `versions` is in publish order (oldest -> newest); iterate newest first
+    # so we return the highest-numbered version that satisfies the cooldown.
+    for ver in reversed(versions):
+        # Skip pre-releases (alpha/beta/rc/next) — `1.2.3-rc.1` always
+        # contains a hyphen per semver. Matches the "latest stable" intent.
+        if "-" in ver:
+            continue
+        ts = times.get(ver)
+        if not ts:
+            continue
+        try:
+            pub = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if pub <= cutoff:
+            return ver
     return None
 
 
