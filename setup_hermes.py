@@ -50,7 +50,13 @@ hermes_bin = home / ".local" / "bin" / "hermes"
 # httpx, pyyaml, pydantic) cover chat + Databricks model serving. Not on PyPI,
 # so we install directly from GitHub. uv tool install handles venv + binary.
 # The mcp package is needed for HTTP transport (DeepWiki, Exa MCP servers).
-HERMES_PKG = "hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git"
+# Honour HERMES_PIP_URL for enterprise environments where the upstream git
+# URL is firewalled — customers can point at a mirrored git URL or, once
+# Hermes is mirrored in their internal PyPI, a pinned spec like
+# `hermes-agent==1.2.3`.
+from enterprise_config import hermes_pip_url
+
+HERMES_PKG = hermes_pip_url()
 HERMES_EXTRA_DEPS = ["mcp>=1.2.0"]
 
 # 1. Install Hermes Agent (always, even without token).

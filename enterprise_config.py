@@ -70,7 +70,9 @@ logger = logging.getLogger(__name__)
 DEFAULT_GITHUB_API = "https://api.github.com"
 DEFAULT_GITHUB_HOST = "https://github.com"
 DEFAULT_CLAUDE_INSTALLER = "https://claude.ai/install.sh"
-DEFAULT_HERMES_PIP_URL = "git+https://github.com/NousResearch/hermes-agent.git"
+DEFAULT_HERMES_PIP_URL = (
+    "hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git"
+)
 DEFAULT_DEEPWIKI_MCP = "https://mcp.deepwiki.com/mcp"
 DEFAULT_EXA_MCP = "https://mcp.exa.ai/mcp"
 

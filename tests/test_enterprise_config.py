@@ -418,8 +418,8 @@ class TestUrlOverrides:
     def test_hermes_pip_default(self):
         from enterprise_config import hermes_pip_url
 
-        assert (
-            hermes_pip_url() == "git+https://github.com/NousResearch/hermes-agent.git"
+        assert hermes_pip_url() == (
+            "hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git"
         )
 
     def test_hermes_pip_override(self, monkeypatch):

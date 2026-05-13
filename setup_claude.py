@@ -123,9 +123,14 @@ print(f"Onboarding skipped + MCPs configured: {claude_json_path}")
 local_bin = home / ".local" / "bin"
 claude_bin = local_bin / "claude"
 
-print("Installing/upgrading Claude Code CLI...")
+# Honour CLAUDE_INSTALLER_URL for enterprise environments where claude.ai is
+# firewalled — defaults to the public installer when unset.
+from enterprise_config import claude_installer_url
+
+installer_url = claude_installer_url()
+print(f"Installing/upgrading Claude Code CLI from {installer_url}...")
 result = subprocess.run(
-    ["bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash"],
+    ["bash", "-c", f"curl -fsSL '{installer_url}' | bash"],
     env={**os.environ, "HOME": str(home)},
     capture_output=True,
     text=True
