@@ -21,6 +21,7 @@ import tomllib
 import requests
 
 import app_state
+import enterprise_config
 from utils import ensure_https, get_gateway_host
 from pat_rotator import PATRotator
 from telemetry import log_telemetry, set_product_info
@@ -342,6 +343,12 @@ def run_setup():
     with setup_lock:
         setup_state["status"] = "running"
         setup_state["started_at"] = time.time()
+
+    # Apply enterprise (proxy/registry) config before any subprocess runs:
+    # writes ~/.npmrc, pushes derived env vars (npm_config_registry, CURL_CA_BUNDLE,
+    # etc.) into os.environ so every child process inherits them, and logs a
+    # banner of the effective config. No-op when no enterprise env vars are set.
+    enterprise_config.bootstrap()
 
     # Probe AI Gateway once; result is cached in _GATEWAY_RESOLVED for subprocesses
     from utils import resolve_and_cache_gateway

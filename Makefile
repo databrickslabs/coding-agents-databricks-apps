@@ -22,7 +22,7 @@ APP_NAME      ?= coding-agents
 USER_EMAIL    = $(shell databricks current-user me --profile $(PROFILE) --output json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('userName',''))")
 WORKSPACE_PATH = /Workspace/Users/$(USER_EMAIL)/apps/$(APP_NAME)
 
-.PHONY: help test deploy redeploy create-app create-pat sync deploy-app status open clean
+.PHONY: help test deploy redeploy create-app create-pat sync deploy-app status open clean enterprise-doctor
 
 # ── Help ─────────────────────────────────────────────
 
@@ -91,6 +91,17 @@ open: ## Open the app in browser
 	@databricks apps get $(APP_NAME) --profile $(PROFILE) --output json 2>/dev/null \
 		| python3 -c "import sys,json; print(json.load(sys.stdin).get('url',''))" \
 		| xargs open
+
+# ── Enterprise mode ─────────────────────────────────
+
+enterprise-doctor: ## Probe configured enterprise mirrors (PyPI, npm, GitHub) for reachability
+	@# Use the existing venv directly so the doctor doesn't itself trigger a uv resolve
+	@# (which would fail if PyPI is firewalled — the exact scenario this target diagnoses).
+	@if [ -x .venv/bin/python ]; then \
+		.venv/bin/python scripts/enterprise_doctor.py; \
+	else \
+		uv run python scripts/enterprise_doctor.py; \
+	fi
 
 # ── Cleanup (destructive) ───────────────────────────
 

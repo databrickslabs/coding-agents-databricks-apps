@@ -11,8 +11,13 @@ set -euo pipefail
 INSTALL_DIR="$HOME/.local/bin"
 mkdir -p "$INSTALL_DIR"
 
+# Enterprise mode: redirect upstream URLs to internal mirrors when configured.
+# See docs/enterprise.md for the env-var contract.
+GH_API="${GITHUB_API_BASE:-https://api.github.com}"
+GH_RELEASES="${GITHUB_RELEASE_MIRROR:-https://github.com}"
+
 # Fetch latest release tag
-GH_VERSION=$(curl -fsSL "https://api.github.com/repos/cli/cli/releases/latest" \
+GH_VERSION=$(curl -fsSL "${GH_API}/repos/cli/cli/releases/latest" \
   | python3 -c "import sys, json; print(json.load(sys.stdin)['tag_name'].lstrip('v'))")
 
 echo "Installing GitHub CLI v${GH_VERSION}"
@@ -27,14 +32,14 @@ esac
 
 if [ "$_UNAME" = "Darwin" ]; then
   GH_ASSET="gh_${GH_VERSION}_macOS_${_ARCH}.zip"
-  curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/${GH_ASSET}" \
+  curl -fsSL "${GH_RELEASES}/cli/cli/releases/download/v${GH_VERSION}/${GH_ASSET}" \
     -o /tmp/gh.zip
   unzip -q /tmp/gh.zip -d /tmp/gh_extract
   mv "/tmp/gh_extract/gh_${GH_VERSION}_macOS_${_ARCH}/bin/gh" "$INSTALL_DIR/gh"
   rm -rf /tmp/gh.zip /tmp/gh_extract
 else
   GH_ASSET="gh_${GH_VERSION}_linux_${_ARCH}.tar.gz"
-  curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/${GH_ASSET}" \
+  curl -fsSL "${GH_RELEASES}/cli/cli/releases/download/v${GH_VERSION}/${GH_ASSET}" \
     -o /tmp/gh.tar.gz
   tar -xzf /tmp/gh.tar.gz -C /tmp
   mv "/tmp/gh_${GH_VERSION}_linux_${_ARCH}/bin/gh" "$INSTALL_DIR/gh"

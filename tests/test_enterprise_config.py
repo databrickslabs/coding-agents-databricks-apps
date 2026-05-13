@@ -24,6 +24,7 @@ ENTERPRISE_VARS = (
     "REQUESTS_CA_BUNDLE",
     "NODE_EXTRA_CA_CERTS",
     "SSL_CERT_FILE",
+    "CURL_CA_BUNDLE",
     "UV_DEFAULT_INDEX",
     "UV_HTTP_TIMEOUT",
     "UV_INDEX_INTERNAL_USERNAME",
@@ -130,6 +131,24 @@ class TestProxyEnv:
         from enterprise_config import proxy_env
 
         assert "HTTPS_PROXY" not in proxy_env()
+
+    def test_ca_bundle_mirrored_to_curl_and_openssl(self, monkeypatch):
+        """REQUESTS_CA_BUNDLE → CURL_CA_BUNDLE + SSL_CERT_FILE so shell scripts pick it up."""
+        monkeypatch.setenv("REQUESTS_CA_BUNDLE", "/etc/ssl/corp.pem")
+        from enterprise_config import proxy_env
+
+        result = proxy_env()
+        assert result["CURL_CA_BUNDLE"] == "/etc/ssl/corp.pem"
+        assert result["SSL_CERT_FILE"] == "/etc/ssl/corp.pem"
+
+    def test_ca_bundle_does_not_overwrite_explicit_curl_var(self, monkeypatch):
+        """Operator-set CURL_CA_BUNDLE wins over derivation from REQUESTS_CA_BUNDLE."""
+        monkeypatch.setenv("REQUESTS_CA_BUNDLE", "/etc/ssl/corp.pem")
+        monkeypatch.setenv("CURL_CA_BUNDLE", "/etc/ssl/explicit.pem")
+        from enterprise_config import proxy_env
+
+        result = proxy_env()
+        assert result["CURL_CA_BUNDLE"] == "/etc/ssl/explicit.pem"
 
 
 # ---------------------------------------------------------------------------

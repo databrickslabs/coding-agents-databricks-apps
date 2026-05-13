@@ -136,6 +136,9 @@ def proxy_env() -> dict[str, str]:
 
     Includes both upper- and lower-case spellings because some tools only
     consult one (curl looks at lowercase; many Python libs look at uppercase).
+    Also mirrors REQUESTS_CA_BUNDLE to CURL_CA_BUNDLE and SSL_CERT_FILE so
+    the install_*.sh scripts pick up the corporate root CA without needing
+    explicit --cacert flags.
     """
     upper = _passthrough(
         "HTTPS_PROXY",
@@ -144,6 +147,7 @@ def proxy_env() -> dict[str, str]:
         "REQUESTS_CA_BUNDLE",
         "NODE_EXTRA_CA_CERTS",
         "SSL_CERT_FILE",
+        "CURL_CA_BUNDLE",
     )
     # Mirror to lowercase for curl/wget which only honour lowercase.
     mirrored = dict(upper)
@@ -154,6 +158,11 @@ def proxy_env() -> dict[str, str]:
     ):
         if upper_name in upper and lower_name not in os.environ:
             mirrored[lower_name] = upper[upper_name]
+    # Mirror REQUESTS_CA_BUNDLE to curl/openssl flavours so shell scripts
+    # don't need explicit --cacert handling.
+    if ca := upper.get("REQUESTS_CA_BUNDLE"):
+        mirrored.setdefault("CURL_CA_BUNDLE", ca)
+        mirrored.setdefault("SSL_CERT_FILE", ca)
     return mirrored
 
 
