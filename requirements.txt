@@ -83,7 +83,7 @@ idna==3.13
     #   anyio
     #   httpx
     #   requests
-importlib-metadata==8.7.1
+importlib-metadata==9.0.0
     # via
     #   mlflow-skinny
     #   opentelemetry-api
