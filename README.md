@@ -71,36 +71,34 @@ This isn't just a terminal in the cloud. Running coding agents on Databricks giv
 
 ## MLflow Tracing
 
-Every Claude Code session is **automatically traced** to a Databricks MLflow experiment — zero configuration required.
+Claude Code and Codex sessions can both be **automatically traced** to a single Databricks MLflow experiment — flip one switch to turn them on.
+
+### Turning it on
+
+Set **`MLFLOW_TRACING_ENABLED=true`** in `app.yaml` (or your shell for local dev). That single variable enables tracing for both CLIs. Tracing is **off by default** to keep deploys lightweight — opt in when you want it.
+
+```yaml
+# app.yaml
+env:
+  - name: MLFLOW_TRACING_ENABLED
+    value: "true"
+```
 
 ### How it works
 
 ```
-Claude Code session starts
+MLFLOW_TRACING_ENABLED=true
         │
-        ▼
-   Environment vars set automatically:
-   MLFLOW_TRACKING_URI=databricks
-   MLFLOW_EXPERIMENT_NAME=/Users/{you}/{app-name}
+        ├──► Claude Code: Stop hook fires on session end →
+        │     mlflow.claude_code.hooks.stop_hook_handler() logs the transcript
         │
-        ▼
-   You work normally — code, debug, deploy
-        │
-        ▼
-   Session ends → Stop hook fires
-        │
-        ▼
-   Full session transcript logged as an MLflow trace
-   at /Users/{you}/{app-name} in your workspace
+        └──► Codex: @mlflow/codex notify hook fires after each turn →
+              trace appended to the experiment
 ```
 
-### What gets traced
-
-When a Claude Code session ends, the **Stop hook** automatically calls `mlflow.claude_code.hooks.stop_hook_handler()`, which captures the full session transcript — your prompts, agent actions, tool calls, and outputs — and logs it as an MLflow trace.
+Both land in the same MLflow experiment, so you can compare runs across agents side by side.
 
 ### Where traces live
-
-Traces are stored in a Databricks MLflow experiment at:
 
 ```
 /Users/{your-email}/{app-name}
@@ -116,17 +114,17 @@ View them in the Databricks UI: **Workspace > Machine Learning > Experiments**.
 
 ### Configuration
 
-Tracing is configured during app startup by `setup_mlflow.py`, which merges the following into `~/.claude/settings.json`:
+Tracing is wired up during app startup:
 
 | Setting | Value | Purpose |
 |---------|-------|---------|
-| `MLFLOW_CLAUDE_TRACING_ENABLED` | `true` | Enables Claude Code tracing |
-| `MLFLOW_TRACKING_URI` | `databricks` | Routes traces to Databricks backend |
+| `MLFLOW_TRACING_ENABLED` | `true`/`false` (default `false`) | Master switch for Claude + Codex |
+| `MLFLOW_CLAUDE_TRACING_ENABLED` | mirrors `MLFLOW_TRACING_ENABLED` | Gates Claude's Stop hook at runtime |
+| `MLFLOW_TRACKING_URI` | `databricks` | Routes traces to the Databricks backend |
 | `MLFLOW_EXPERIMENT_NAME` | `/Users/{owner}/{app}` | Target experiment path |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | `""` | Overrides container OTEL to prevent trace loss |
-| Stop hook | `uv run python -c "from mlflow.claude_code.hooks import stop_hook_handler; stop_hook_handler()"` | Fires on session end |
+| `MLFLOW_EXPERIMENT_ID` | resolved from name | Set in `~/.codex/.env` (Codex needs an ID) |
 
-Tracing is skipped gracefully if `APP_OWNER` is not set (e.g., local dev without Databricks).
+Tracing setup is skipped gracefully when `APP_OWNER` is not set (e.g., local dev without Databricks) or when `MLFLOW_TRACING_ENABLED` is left at its default `false`.
 
 ---
 
@@ -288,6 +286,7 @@ This template repo opens that vision up for every Databricks user — no IDE set
 | `CODEX_MODEL` | No | Codex model name (default: `databricks-gpt-5-5`) |
 | `GEMINI_MODEL` | No | Gemini model name (default: `databricks-gemini-2-5-pro`) |
 | `DATABRICKS_GATEWAY_HOST` | No | AI Gateway URL override. Auto-discovered from `DATABRICKS_WORKSPACE_ID` if unset |
+| `MLFLOW_TRACING_ENABLED` | No | Set to `"true"` to enable MLflow tracing for Claude and Codex in one switch (default `"false"`) |
 
 ### Security Model
 

@@ -313,3 +313,30 @@ def ensure_https(url: str) -> str:
     if not url.startswith(("http://", "https://")):
         return f"https://{url}"
     return url
+
+
+def resolve_mlflow_experiment_id(host: str, token: str, experiment_name: str) -> str | None:
+    """Look up (or create) a Databricks MLflow experiment by name and return its ID.
+
+    Used by Codex and Gemini CLI tracing setup — both need an experiment *ID*,
+    not name, in their config files / OTLP headers.
+
+    Returns None on any failure so callers can degrade gracefully.
+    """
+    if not host or not token or not experiment_name:
+        return None
+    try:
+        from databricks.sdk import WorkspaceClient
+        from databricks.sdk.errors import ResourceDoesNotExist
+
+        w = WorkspaceClient(host=ensure_https(host.rstrip("/")), token=token)
+        try:
+            exp = w.experiments.get_by_name(experiment_name=experiment_name)
+            if exp and exp.experiment:
+                return exp.experiment.experiment_id
+        except ResourceDoesNotExist:
+            pass  # fall through to create
+        return w.experiments.create_experiment(name=experiment_name).experiment_id
+    except Exception as exc:
+        logger.warning(f"Could not resolve MLflow experiment '{experiment_name}': {exc}")
+        return None

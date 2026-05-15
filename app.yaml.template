@@ -26,3 +26,8 @@ env:
   # completes the rollout and auto memory is on by default, this can be removed entirely.
   - name: CLAUDE_CODE_DISABLE_AUTO_MEMORY
     value: 0
+  # Set MLFLOW_TRACING_ENABLED=true to auto-trace Claude, Codex, and Gemini
+  # sessions into /Users/{app_owner}/{app_name}. Default off to keep installs
+  # lightweight — opt in when you want observability across all three agents.
+  - name: MLFLOW_TRACING_ENABLED
+    value: "false"

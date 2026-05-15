@@ -60,12 +60,22 @@ def read_settings(tmp_path):
 class TestMlflowEnvVars:
     """Verify MLflow environment variables are added to settings.json."""
 
-    def test_tracing_enabled(self, tmp_path):
+    def test_tracing_disabled_by_default(self, tmp_path):
         write_existing_settings(tmp_path, {"env": {"ANTHROPIC_MODEL": "test"}})
         result = run_setup_mlflow(tmp_path, {"APP_OWNER": "jane@company.com"})
         assert result.returncode == 0
         settings = read_settings(tmp_path)
         assert settings["env"]["MLFLOW_CLAUDE_TRACING_ENABLED"] == "false"
+
+    def test_tracing_enabled_via_master_switch(self, tmp_path):
+        write_existing_settings(tmp_path, {"env": {"ANTHROPIC_MODEL": "test"}})
+        result = run_setup_mlflow(tmp_path, {
+            "APP_OWNER": "jane@company.com",
+            "MLFLOW_TRACING_ENABLED": "true",
+        })
+        assert result.returncode == 0
+        settings = read_settings(tmp_path)
+        assert settings["env"]["MLFLOW_CLAUDE_TRACING_ENABLED"] == "true"
 
     def test_tracking_uri(self, tmp_path):
         write_existing_settings(tmp_path, {"env": {}})
