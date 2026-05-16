@@ -23,6 +23,19 @@ dependencies = [
     "importlib-metadata<8.8",
 ]
 
+[dependency-groups]
+# Dev/test-only deps — not shipped to the app container. Install with
+# `uv sync --group dev` or `uv pip install --group dev`.
+dev = [
+    "pytest>=8.0",
+    "pytest-timeout>=2.4",
+    # Playwright for the e2e suite (tests/e2e/) — drives a real browser
+    # against the deployed app to verify SSO + setup pipeline + security
+    # fixes end-to-end. Optional: tests skip cleanly when not installed.
+    "playwright>=1.40",
+    "pytest-playwright>=0.5",
+]
+
 [tool.uv]
 # Exclude packages uploaded to PyPI more recently than ~30 days ago.
 # This gives the community time to catch supply-chain issues before they land here.

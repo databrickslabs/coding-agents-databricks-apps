@@ -22,12 +22,29 @@ APP_NAME      ?= coding-agents
 USER_EMAIL    = $(shell databricks current-user me --profile $(PROFILE) --output json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('userName',''))")
 WORKSPACE_PATH = /Workspace/Users/$(USER_EMAIL)/apps/$(APP_NAME)
 
-.PHONY: help test deploy redeploy create-app create-pat sync deploy-app status open clean enterprise-doctor
+.PHONY: help test integration-test e2e-test e2e-auth deploy redeploy create-app create-pat sync deploy-app status open clean enterprise-doctor
 
 # ── Help ─────────────────────────────────────────────
 
-test: ## Run unit tests
-	uv run pytest tests/ -v
+test: ## Run unit tests (fast — excludes Docker integration + Playwright e2e)
+	uv run pytest tests/ -v --ignore=tests/integration --ignore=tests/e2e
+
+integration-test: ## Run Docker-based pipeline integration test (~3-5 min wall time)
+	uv run pytest tests/integration/ -v -s
+
+e2e-test: ## Run Playwright e2e against live deployed app (needs `make e2e-auth` first)
+	uv run pytest tests/e2e/ -v -s
+
+e2e-auth: ## Record SSO session for e2e tests (one-time per cookie expiry)
+	@# Resolve the app URL via the configured profile, then launch a headed
+	@# Chromium that saves storage state to tests/e2e/auth.json.
+	@url=$$(databricks apps get coding-agents --profile $(PROFILE) --output json 2>/dev/null \
+		| python3 -c "import sys,json; print(json.load(sys.stdin)['url'])") && \
+	echo "Recording SSO session against $$url ..." && \
+	uv run playwright codegen --save-storage tests/e2e/auth.json "$$url"
+	@echo ""
+	@echo "Auth state saved to tests/e2e/auth.json (gitignored)."
+	@echo "Run `make e2e-test PROFILE=$(PROFILE)` to execute the suite."
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'

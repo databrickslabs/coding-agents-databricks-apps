@@ -1,0 +1,47 @@
+# Apps-like Docker image for CoDA integration tests.
+#
+# Approximates the Databricks Apps runtime (Ubuntu 22.04, unprivileged user,
+# uv-managed Python, system node/npm) closely enough that running our
+# setup_*.py + install_*.sh pipeline inside this container exercises the
+# same security-relevant paths as a real Apps deployment.
+#
+# What this image is NOT:
+#   - It's not the actual Databricks Apps base image (which is internal).
+#   - It does not bootstrap a Service Principal (we don't need to — the app
+#     strips those creds immediately at startup; tests run as a regular user).
+#   - It does not start gunicorn or the Flask app (we're testing the SETUP
+#     PIPELINE, not the running server).
+#
+# To rebuild: `docker build -f tests/integration/Dockerfile.apps-like -t coda-apps-test .`
+
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Base system: matches Databricks Apps' Ubuntu 22.04 + tools the setup
+# pipeline expects (python3, node/npm, git, curl, unzip).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl git unzip \
+        python3 python3-pip python3-venv \
+        nodejs npm \
+        build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# uv — installed system-wide so the unprivileged user can use it.
+RUN curl -fsSL https://astral.sh/uv/install.sh | env UV_UNMANAGED_INSTALL=/usr/local/bin sh && \
+    chmod +x /usr/local/bin/uv
+
+# Create the unprivileged 'app' user with a similar layout to Databricks
+# Apps' "app" user. Databricks Apps uses HOME=/app/python/source_code; we
+# use /home/app here for portability. The setup scripts handle either.
+RUN useradd -m -u 1001 -s /bin/bash app && \
+    mkdir -p /home/app/.local/bin && \
+    chown -R app:app /home/app
+
+USER app
+WORKDIR /work
+ENV HOME=/home/app
+ENV PATH=/home/app/.local/bin:/usr/local/bin:/usr/bin:/bin
+
+# The test driver mounts the repo at /work and runs the pipeline directly.
+# No CMD/ENTRYPOINT — let the driver script orchestrate.
