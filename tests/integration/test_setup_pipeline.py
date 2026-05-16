@@ -39,9 +39,65 @@ def _docker_available() -> bool:
         return False
 
 
+def _pypi_reachable_from_container() -> tuple[bool, str]:
+    """Quick test that pypi.org is reachable from inside a container.
+
+    On corporate networks (notably Databricks employee laptops), pypi.org is
+    explicitly blocked at the egress proxy. The integration test needs pypi
+    to install requirements.txt — without it, the test fails with confusing
+    "no matching distribution" errors deep inside pip. Detect this case up
+    front and skip cleanly.
+
+    Uses the apps-like image if it's already built (saves ~30s vs pulling
+    ubuntu:22.04 + apt install). Falls back to a minimal curl-only image.
+    """
+    if not shutil.which("docker"):
+        return False, "docker CLI not available"
+    # Prefer the apps-like image if built (has curl + ca-certs pre-installed)
+    image_check = subprocess.run(
+        ["docker", "image", "inspect", IMAGE_TAG],
+        capture_output=True, timeout=5,
+    )
+    if image_check.returncode == 0:
+        image = IMAGE_TAG
+    else:
+        image = "curlimages/curl:latest"
+    try:
+        result = subprocess.run(
+            [
+                "docker", "run", "--rm", "--entrypoint", "curl", image,
+                "-sS", "--max-time", "10",
+                "-o", "/dev/null", "-w", "%{http_code}",
+                "https://pypi.org/simple/wheel/",
+            ],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            return False, f"curl exited {result.returncode}: {result.stderr[:200].strip()}"
+        status = result.stdout.strip()
+        if status == "200":
+            return True, "pypi reachable"
+        return False, f"pypi returned HTTP {status} (likely blocked by corporate proxy)"
+    except subprocess.TimeoutExpired:
+        return False, "pypi reachability check timed out"
+
+
+def _integration_skip_reason() -> str | None:
+    if not _docker_available():
+        return "Docker daemon not available"
+    reachable, why = _pypi_reachable_from_container()
+    if not reachable:
+        return (
+            f"pypi.org not reachable from container ({why}). "
+            "This test needs pypi to install requirements.txt. "
+            "Run on a non-corporate network or in CI."
+        )
+    return None
+
+
 pytestmark = pytest.mark.skipif(
-    not _docker_available(),
-    reason="Docker daemon not available — integration test requires docker",
+    _integration_skip_reason() is not None,
+    reason=_integration_skip_reason() or "",
 )
 
 
@@ -70,15 +126,58 @@ def apps_like_image():
     return IMAGE_TAG
 
 
+def _host_ca_bundle() -> str | None:
+    """Detect a CA bundle path on the host for corporate TLS environments.
+
+    Checked in order: env vars (REQUESTS_CA_BUNDLE, SSL_CERT_FILE,
+    CURL_CA_BUNDLE), common Linux locations, common macOS Homebrew
+    locations. Returns None if no bundle is found — in that case the
+    container relies on its baked-in trust store (works for
+    non-intercepted networks).
+    """
+    import os
+    for var in ("REQUESTS_CA_BUNDLE", "SSL_CERT_FILE", "CURL_CA_BUNDLE"):
+        path = os.environ.get(var, "").strip()
+        if path and Path(path).exists():
+            return path
+    for candidate in (
+        Path.home() / ".ssl" / "combined-ca-bundle.pem",
+        Path("/etc/ssl/certs/ca-certificates.crt"),
+        Path("/etc/ssl/cert.pem"),
+    ):
+        if candidate.exists():
+            return str(candidate)
+    return None
+
+
 def _run_pipeline(image: str, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
-    """Run the pipeline script inside a fresh container with the repo mounted."""
+    """Run the pipeline script inside a fresh container with the repo mounted.
+
+    Auto-forwards the host's CA bundle (if found) so the container can reach
+    pypi.org / registry.npmjs.org / github.com from inside corporate-TLS-
+    intercepted networks. Same mechanism the enterprise feature uses.
+    """
     env_args: list[str] = []
+    mount_args: list[str] = []
+    ca = _host_ca_bundle()
+    if ca:
+        container_ca = "/etc/ssl/coda-host-ca.pem"
+        mount_args.extend(["-v", f"{ca}:{container_ca}:ro"])
+        env_args.extend([
+            "-e", f"REQUESTS_CA_BUNDLE={container_ca}",
+            "-e", f"SSL_CERT_FILE={container_ca}",
+            "-e", f"CURL_CA_BUNDLE={container_ca}",
+            "-e", f"NODE_EXTRA_CA_CERTS={container_ca}",
+            # uv reads its own var; default to native-tls so it uses the system bundle.
+            "-e", "UV_NATIVE_TLS=true",
+        ])
     for k, v in (extra_env or {}).items():
         env_args.extend(["-e", f"{k}={v}"])
     return subprocess.run(
         [
             "docker", "run", "--rm",
             "-v", f"{REPO_ROOT}:/repo:ro",  # repo read-only at /repo; pipeline copies to writable /work
+            *mount_args,
             *env_args,
             image,
             "bash", PIPELINE_SCRIPT,

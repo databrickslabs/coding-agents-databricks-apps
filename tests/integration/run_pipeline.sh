@@ -40,11 +40,23 @@ cp /repo/tests/integration/verify.sh /work/tests/integration/
 [ -d /repo/.claude ] && cp -a --no-preserve=ownership /repo/.claude /work/ || true
 cd /work
 
-# Stage 1: synced uv venv (mirrors what `databricks apps deploy` does at build)
-echo ">>> Stage 1: uv sync (pyproject.toml)"
-uv venv .venv
-uv pip install -r requirements.txt
+# Stage 1: install pinned deps (mirrors what `databricks apps deploy` does
+# at the [BUILD] step — pip, not uv pip). Two adjustments vs the real Apps
+# build:
+#   1. Pre-install setuptools/wheel so pip's build-isolation subprocess
+#      doesn't fail trying to reach pypi with a fresh trust store.
+#   2. `--no-build-isolation` — pip's isolated build env doesn't inherit
+#      our CA bundle env vars, which breaks corporate-proxied networks.
+#      The real Apps build runs in an env that has setuptools available.
+echo ">>> Stage 1: pip install -r requirements.txt"
+# Use python3 -m venv (not `uv venv`) so pip is seeded into the venv.
+# `uv venv` skips pip by default, which caused `pip` to resolve to the
+# system Python's pip (user-install mode, no CA bundle env), breaking
+# package resolution under corporate TLS interception.
+python3 -m venv .venv
 . .venv/bin/activate
+pip install --no-cache-dir --upgrade pip setuptools wheel
+pip install --no-cache-dir --no-build-isolation -r requirements.txt
 echo
 
 # Stage 2: install_*.sh — three GitHub-release downloaders

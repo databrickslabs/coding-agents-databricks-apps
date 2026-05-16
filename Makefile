@@ -30,7 +30,7 @@ test: ## Run unit tests (fast — excludes Docker integration + Playwright e2e)
 	uv run pytest tests/ -v --ignore=tests/integration --ignore=tests/e2e
 
 integration-test: ## Run Docker-based pipeline integration test (~3-5 min wall time)
-	uv run pytest tests/integration/ -v -s
+	uv run pytest tests/integration/ -v -s -rs
 
 e2e-test: ## Run Playwright e2e against live deployed app (needs `make e2e-auth` first)
 	uv run pytest tests/e2e/ -v -s
