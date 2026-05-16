@@ -229,3 +229,62 @@ enterprise_config: effective settings
 ```
 
 Any FAIL line is something your network team needs to fix before deployment.
+
+---
+
+## Security model and known limits
+
+CoDA's enterprise mode shifts one trust boundary materially: the operator
+gains a new control point — the ability to redirect every external package
+install to a mirror they control. The following limits are deliberate and
+worth understanding before deploying into a regulated environment.
+
+### Trust assumptions made by enterprise mode
+
+| Assumption | What relies on it |
+|---|---|
+| The operator's mirror serves correct artifacts | All CLI installs; no checksum/signature verification is performed |
+| `REQUESTS_CA_BUNDLE` (when set) is a legitimate corporate root CA, not an attacker-controlled CA | TLS validation on every outbound call from the app, including PAT-bearing calls to the Databricks workspace API |
+| The operator who controls `app.yaml` is trusted | Mirror URLs, installer URLs, MCP override URLs are not allow-listed — any URL the operator sets is accepted (after a shell-safety regex check) |
+| The Hermes upstream commit pin in `enterprise_config.py:DEFAULT_HERMES_PIN_SHA` was reviewed when it was set | `uv tool install` pulls Hermes from this specific SHA, mitigating the "force-push to default branch" attack — but the pin must be rotated deliberately on each CoDA release |
+
+### What enterprise mode does NOT verify
+
+- **No checksum verification on mirror-served binaries.** Claude installer
+  script, GitHub release tarballs (gh, micro, databricks CLI), and npm
+  packages are pulled with no SHA256 manifest check. The mirror operator
+  could swap a binary at any time.
+- **No CA bundle pinning.** If `REQUESTS_CA_BUNDLE` is set, the app trusts
+  whatever CA the operator points at. This is by design (needed for
+  corporate TLS interception) but means an attacker who can write
+  `app.yaml` can MITM every outbound TLS call including PAT-bearing API
+  calls to the workspace.
+- **No mirror allow-listing.** `GITHUB_RELEASE_MIRROR`, `NPM_REGISTRY`,
+  `CLAUDE_INSTALLER_URL` etc. accept any URL. The shell-safety regex in
+  `enterprise_config._validate_url()` rejects values containing shell
+  metacharacters, but it does not restrict by domain.
+- **No fail-closed on mirror unreachability at runtime.** `bootstrap()`
+  validates URL shape and logs a banner, but does not probe mirror
+  reachability. Run `make enterprise-doctor` before deploy to surface
+  reachability failures early.
+
+### Open questions for security review
+
+If you are filing a Security Design Review (SDR) for a CoDA deployment,
+these are the questions worth raising with ProdSec:
+
+1. **Should mirror-served binaries require SHA256 verification?** Today the
+   enterprise mode trusts the mirror entirely. Adding verification would
+   require customers to publish a manifest alongside their mirror.
+2. **Should we add mirror allow-listing** (e.g., reject URLs whose host
+   isn't under `*.jfrog.io` / the operator-declared internal domains)?
+3. **Should the CA bundle be pinned to a known fingerprint** rather than
+   accepting whatever the operator provides?
+4. **Should the Hermes git pin be enforced in CI** (e.g., reject PRs that
+   bump the SHA without a security review note)?
+5. **Should the content-filter proxy at localhost:4000 use an auth token
+   or Unix socket** rather than being unauthenticated?
+
+These are deliberate trade-offs, not bugs — but they are limits of the
+current threat model and worth surfacing to anyone who has to sign off on
+an enterprise deployment.
