@@ -14,6 +14,11 @@
 #
 # To rebuild: `docker build -f tests/integration/Dockerfile.apps-like -t coda-apps-test .`
 
+# Note: builds + runs must use `--platform linux/amd64`. The install_*.sh
+# scripts hardcode `linux_amd64` in GitHub release URLs and Databricks
+# Apps runtime is amd64. The pytest driver (test_setup_pipeline.py) passes
+# `--platform linux/amd64` to both `docker build` and `docker run`. Don't
+# pin it in `FROM` here — `docker build` warns against const platforms.
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive

@@ -59,18 +59,8 @@ pip install --no-cache-dir --upgrade pip setuptools wheel
 pip install --no-cache-dir --no-build-isolation -r requirements.txt
 echo
 
-# Stage 2: install_*.sh — three GitHub-release downloaders
-echo ">>> Stage 2: install_micro.sh"
-bash install_micro.sh && mv micro $HOME/.local/bin/ 2>/dev/null || true
-echo ">>> Stage 2: install_gh.sh"
-bash install_gh.sh
-echo ">>> Stage 2: install_databricks_cli.sh"
-bash install_databricks_cli.sh
-echo
-
-# Stage 3: setup_*.py — agent CLI installs.
-# Use fake creds — Codex/Gemini/OpenCode/Hermes install regardless of
-# token (it's only the config-write step that needs auth).
+# Stage 2: setup-script credentials so subsequent stages have something
+# to bind to (these are fake, used only for the install/config writes).
 export DATABRICKS_HOST="https://fake.databricks.com"
 export DATABRICKS_TOKEN="dapifake0000000000000000000000000000"
 export ANTHROPIC_MODEL="databricks-claude-opus-4-7"
@@ -80,15 +70,30 @@ export HERMES_MODEL="databricks-claude-opus-4-6"
 export HERMES_FALLBACK_MODEL="databricks-claude-opus-4-6"
 export ENABLE_HERMES="true"
 
-# enterprise_config.bootstrap() runs from app.py at startup; in tests we
-# invoke it directly so its side effects (npmrc write, env var push,
-# URL validation) happen before any setup script tries to install.
-echo ">>> Stage 3a: enterprise_config.bootstrap()"
+# Stage 3a (BEFORE the install scripts): enterprise_config.bootstrap() runs
+# the same URL validation app.py does at startup — including refusing to
+# proceed if GITHUB_API_BASE / GITHUB_RELEASE_MIRROR / CLAUDE_INSTALLER_URL
+# / HERMES_PIP_URL contain shell metacharacters. Must run BEFORE install_*.sh
+# because those scripts interpolate GITHUB_API_BASE / GITHUB_RELEASE_MIRROR
+# into curl/eval contexts.
+echo ">>> Stage 3a: enterprise_config.bootstrap() (validates env first)"
 # Don't kill the pipeline if bootstrap raises (e.g. UnsafeUrlError under the
 # malicious-mirror test) — we want the error message to surface in stdout
 # for the test driver to assert on.
 python3 -c "import enterprise_config; enterprise_config.bootstrap()" || \
     echo "(bootstrap raised — see above)"
+echo
+
+# Stage 3b: install_*.sh — three GitHub-release downloaders. All wrapped
+# with || true so a single failure (e.g. invalid GITHUB_API_BASE) doesn't
+# kill the rest of the pipeline; verify.sh checks the resulting state.
+echo ">>> Stage 3b: install_micro.sh"
+bash install_micro.sh && mv micro $HOME/.local/bin/ 2>/dev/null || echo "(install_micro.sh failed)"
+echo ">>> Stage 3b: install_gh.sh"
+bash install_gh.sh || echo "(install_gh.sh failed)"
+echo ">>> Stage 3b: install_databricks_cli.sh"
+bash install_databricks_cli.sh || echo "(install_databricks_cli.sh failed)"
+echo
 
 echo ">>> Stage 3b: setup_claude.py"
 uv run python setup_claude.py || echo "(setup_claude.py exited non-zero — checking what landed anyway)"
