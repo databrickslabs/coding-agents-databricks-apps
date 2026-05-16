@@ -162,6 +162,52 @@ def _run_step(step_id, command):
         _update_step(step_id, status="error", completed_at=time.time(), error=str(e))
 
 
+def _build_terminal_shell_env(base_env: dict) -> dict:
+    """Build the env dict for a user terminal PTY.
+
+    Starts from ``base_env`` (typically ``os.environ``) and strips the
+    credentials and CLI-state vars that should never reach a user shell:
+
+    - ``CLAUDECODE`` / ``CLAUDE_CODE_SESSION`` — would mark the terminal as
+      a nested-Claude session.
+    - ``DATABRICKS_TOKEN`` / ``DATABRICKS_HOST`` — forces CLIs to read
+      ``~/.databrickscfg`` per-request so they pick up rotated PATs without
+      an env-snapshot rewrite.
+    - ``GEMINI_API_KEY`` — same pattern, read from config file instead.
+    - ``NPM_TOKEN`` / ``UV_DEFAULT_INDEX`` / ``UV_INDEX_*_PASSWORD`` /
+      ``UV_INDEX_*_USERNAME`` / ``npm_config_//host/:_authToken`` —
+      deployer-level credentials from app.yaml that must not be readable
+      via ``env`` inside the user terminal. The user's npm/uv operations
+      still work because ``~/.npmrc`` (written by
+      ``enterprise_config.bootstrap``) holds the registry config — they
+      just can't see the bearer token in plaintext. (F-01)
+    """
+    shell_env = base_env.copy()
+    shell_env["TERM"] = "xterm-256color"
+
+    # Always-strip fixed names
+    for key in (
+        "CLAUDECODE", "CLAUDE_CODE_SESSION",
+        "DATABRICKS_TOKEN", "DATABRICKS_HOST",
+        "GEMINI_API_KEY",
+        "NPM_TOKEN", "UV_DEFAULT_INDEX",
+    ):
+        shell_env.pop(key, None)
+
+    # Pattern-strip operator-named registry credentials
+    for key in list(shell_env.keys()):
+        if (
+            key.startswith("npm_config_//")  # derived registry-auth tokens
+            or (
+                key.startswith("UV_INDEX_")
+                and (key.endswith("_PASSWORD") or key.endswith("_USERNAME"))
+            )
+        ):
+            shell_env.pop(key, None)
+
+    return shell_env
+
+
 def _setup_git_config():
     """Configure git identity and hooks by writing files directly (no subprocess)."""
     home = os.environ.get("HOME", "/app/python/source_code")
@@ -1044,21 +1090,11 @@ def create_session():
     label = data.get("label", "")
     try:
         master_fd, slave_fd = pty.openpty()
-        # Set up environment for the shell
-        shell_env = os.environ.copy()
-        shell_env["TERM"] = "xterm-256color"
-        # Remove Claude Code env vars so the browser terminal isn't seen as nested
-        shell_env.pop("CLAUDECODE", None)
-        shell_env.pop("CLAUDE_CODE_SESSION", None)
-        # Remove DATABRICKS_TOKEN and DATABRICKS_HOST so CLI/SDK reads from
-        # ~/.databrickscfg (always current after rotation) instead of inheriting
-        # a stale env var snapshot. The SDK skips config file loading when
-        # DATABRICKS_HOST is set in env (even without credentials).
-        shell_env.pop("DATABRICKS_TOKEN", None)
-        shell_env.pop("DATABRICKS_HOST", None)
-        # Also strip CLI-specific API keys so they read from config files
-        # (always current after rotation) instead of stale env snapshots.
-        shell_env.pop("GEMINI_API_KEY", None)
+        # Set up environment for the shell — strips PAT, SP creds, registry
+        # tokens, and other secrets that must not be readable from the
+        # user's terminal. See _build_terminal_shell_env docstring for the
+        # full list.
+        shell_env = _build_terminal_shell_env(os.environ)
         # Ensure HOME is set correctly
         if not shell_env.get("HOME") or shell_env["HOME"] == "/":
             shell_env["HOME"] = "/app/python/source_code"
