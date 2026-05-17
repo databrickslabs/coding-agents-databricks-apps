@@ -47,7 +47,7 @@ cryptography==46.0.7
     #   coda (pyproject.toml)
     #   google-auth
     #   pyjwt
-databricks-sdk==0.103.0
+databricks-sdk==0.106.0
     # via
     #   coda (pyproject.toml)
     #   mlflow-skinny
