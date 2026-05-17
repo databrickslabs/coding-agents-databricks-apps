@@ -951,6 +951,18 @@ def pat_status():
 @app.route("/api/configure-pat", methods=["POST"])
 def configure_pat():
     """Accept a user-provided PAT, validate it, and start rotation."""
+    # Hotfix: only the resolved owner may (re-)configure the PAT. Without this,
+    # any workspace-SSO'd user who reaches the app can submit their own valid
+    # PAT and persistently impersonate the owner — every CLI call would then
+    # run under the submitter's identity. app_owner is set in initialize_app()
+    # before gunicorn binds, so it's reliably populated by request time on
+    # Databricks Apps; this guard short-circuits to "allow" only when owner
+    # resolution failed (matches the rest of the auth surface's behaviour).
+    if _is_databricks_apps() and app_owner:
+        if get_request_user() != app_owner:
+            logger.warning(f"Rejected configure-pat from non-owner {get_request_user()} (owner: {app_owner})")
+            return jsonify({"error": "Forbidden"}), 403
+
     data = request.json
     token = data.get("token", "").strip()
     if not token:
