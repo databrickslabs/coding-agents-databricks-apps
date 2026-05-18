@@ -173,6 +173,41 @@
       animation: pulse 1s infinite; flex-shrink: 0;
     }
 
+    /* First-run consent gate (must layer above everything else) */
+    #consent-overlay {
+      display: none; position: fixed; inset: 0; z-index: 3000;
+      background: rgba(0,0,0,0.65); backdrop-filter: blur(6px);
+      align-items: center; justify-content: center;
+    }
+    #consent-overlay.visible { display: flex; }
+    #consent-modal {
+      width: min(92vw, 560px); max-height: 86vh; overflow-y: auto;
+      border-radius: 14px; padding: 28px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(18,20,26,0.94);
+      backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+      box-shadow: 0 16px 56px rgba(0,0,0,0.5);
+      color: #e3e6ee;
+    }
+    #consent-modal h2 { margin: 0 0 12px; font-size: 18px; font-weight: 600; }
+    #consent-modal p { font-size: 13px; line-height: 1.55; margin: 0 0 14px; opacity: 0.88; }
+    #consent-modal ul { margin: 0 0 18px; padding-left: 18px; }
+    #consent-modal li { font-size: 13px; line-height: 1.55; margin-bottom: 9px; opacity: 0.92; }
+    #consent-modal li strong { color: #fff; opacity: 1; }
+    #consent-modal a { color: #6cb6ff; text-decoration: underline; }
+    #consent-modal code { font-family: monospace; font-size: 12px;
+      background: rgba(255,255,255,0.08); padding: 1px 5px; border-radius: 3px; }
+    #consent-modal .consent-fineprint { font-size: 11px; opacity: 0.55; line-height: 1.5; }
+    #consent-accept {
+      width: 100%; padding: 10px 16px; margin-top: 4px;
+      background: rgba(100,150,255,0.18);
+      border: 1px solid rgba(100,150,255,0.45);
+      border-radius: 8px; color: #fff; font-size: 14px; font-weight: 600;
+      cursor: pointer; transition: background 0.15s;
+    }
+    #consent-accept:hover { background: rgba(100,150,255,0.28); }
+    #consent-accept:focus-visible { outline: 2px solid rgba(100,150,255,0.7); outline-offset: 2px; }
+
     /* Shortcuts help modal */
     #shortcuts-overlay {
       display: none; position: fixed; inset: 0; z-index: 2000;
@@ -349,6 +384,25 @@
   </div>
 
   <!-- Keyboard shortcuts modal -->
+  <!-- First-run risk-acceptance gate. Hidden by default; CSS class .visible
+       toggled by ensureConsent() in init() if localStorage flag is unset. -->
+  <div id="consent-overlay" role="dialog" aria-modal="true" aria-labelledby="consent-title">
+    <div id="consent-modal">
+      <h2 id="consent-title">Before you start</h2>
+      <p>CoDA gives you and the AI agents inside it real authority over your Databricks workspace. By continuing, you confirm you understand:</p>
+      <ul>
+        <li><strong>Full workspace authority.</strong> Commands you run and AI agents you invoke act with your Databricks credentials.</li>
+        <li><strong>AI agents take real actions.</strong> Claude, Codex, OpenCode, Gemini, and Hermes can read, write, and delete data on your behalf. Review their proposed actions before approving.</li>
+        <li><strong>Actions are irreversible.</strong> There is no staging or undo — destructive commands run immediately.</li>
+        <li><strong>You are accountable.</strong> Every API call is logged under your identity in the workspace audit log.</li>
+        <li><strong>This app is for you alone.</strong> Do not share the URL, your screen, or your session with anyone you wouldn't hand your Databricks credentials to.</li>
+        <li><strong>You are responsible.</strong> Code suggested by AI agents, scripts you paste, and commands you execute are your responsibility — including their effects on production data.</li>
+      </ul>
+      <p class="consent-fineprint">CoDA is provided AS-IS under the <a href="https://github.com/databrickslabs/coding-agents-databricks-apps/blob/main/LICENSE.md" target="_blank" rel="noopener">Databricks License</a>. See <a href="https://github.com/databrickslabs/coding-agents-databricks-apps#-project-support" target="_blank" rel="noopener">project support</a> notes. Anonymous event pings are sent to Databricks; opt out with <code>CODA_TELEMETRY_DISABLED=true</code> in <code>app.yaml</code>.</p>
+      <button id="consent-accept" type="button">I understand and accept</button>
+    </div>
+  </div>
+
   <div id="shortcuts-overlay">
     <div id="shortcuts-modal">
       <h2>Keyboard Shortcuts <button id="shortcuts-close" title="Close">&times;</button></h2>
@@ -1471,6 +1525,58 @@
         });
       }
 
+      // Live progress helpers shared by both the PAT-bootstrap path and the
+      // already-configured-on-load path. \r\x1b[K rewrites the current line
+      // in place (CR + clear-to-end), so successive calls produce a single
+      // animated status line rather than scrolling output. Without these,
+      // the setup screen can sit silent for 30-60s and look broken.
+      const SPINNER = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
+      let spinFrame = 0;
+      let spinTimer = null;
+      const startSpinner = (label) => {
+        stopSpinner();
+        term.write('\r\x1b[K\x1b[36m  ' + SPINNER[0] + '\x1b[0m \x1b[90m' + label + '\x1b[0m');
+        spinTimer = setInterval(() => {
+          spinFrame = (spinFrame + 1) % SPINNER.length;
+          term.write('\r\x1b[K\x1b[36m  ' + SPINNER[spinFrame] + '\x1b[0m \x1b[90m' + label + '\x1b[0m');
+        }, 100);
+      };
+      const stopSpinner = () => {
+        if (spinTimer) { clearInterval(spinTimer); spinTimer = null; }
+      };
+      const finishLine = (emoji, color, msg) => {
+        stopSpinner();
+        term.write('\r\x1b[K' + color + '  ' + emoji + '\x1b[0m ' + msg + '\r\n');
+      };
+      // Polls /api/setup-status and rewrites the spinner line with the
+      // currently-running step + completion count. Returns when setup is
+      // complete or errored. Used by both bootstrap paths.
+      const waitForSetup = async () => {
+        startSpinner('Setting up CLI tools…');
+        while (true) {
+          await new Promise(r => setTimeout(r, 1500));
+          const pollResp = await fetch('/api/setup-status');
+          const pollData = await pollResp.json();
+
+          if (pollData.status === 'complete') {
+            finishLine('✓', '\x1b[1;32m', 'Setup complete');
+            term.write('\r\n');
+            return;
+          } else if (pollData.status === 'error') {
+            finishLine('!', '\x1b[1;33m', 'Setup completed with warnings');
+            term.write('\r\n');
+            return;
+          }
+          const steps = pollData.steps || [];
+          const running = steps.find(s => s.status === 'running');
+          const done = steps.filter(s => s.status === 'complete' || s.status === 'error').length;
+          const total = steps.length;
+          startSpinner(
+            (running ? running.label : 'Setting up CLI tools…') + ' (' + done + '/' + total + ')'
+          );
+        }
+      };
+
       // Check if PAT is configured and valid before creating session
       const patResp = await fetch('/api/pat-status');
       const patData = await patResp.json();
@@ -1538,8 +1644,7 @@
           return pane;
         }
 
-        term.write('\x1b[90m  Validating token...\x1b[0m\r\n');
-
+        startSpinner('Validating token…');
         const configResp = await fetch('/api/configure-pat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -1548,7 +1653,7 @@
         const configData = await configResp.json();
 
         if (configData.error) {
-          term.write('\x1b[1;31m  Error: ' + configData.error + '\x1b[0m\r\n');
+          finishLine('✗', '\x1b[1;31m', 'Error: ' + configData.error);
           term.write('\x1b[90m  Reload to try again.\x1b[0m\r\n');
           const pane = { id, element, term, fitAddon, searchAddon, sessionId: null };
           element.addEventListener('mousedown', () => focusPane(id));
@@ -1557,29 +1662,14 @@
           return pane;
         }
 
-        term.write('\x1b[1;32m  Token configured for ' + configData.user + '\x1b[0m\r\n');
-        term.write('\x1b[90m  Auto-rotation started. This token will be rotated out in 10 minutes.\x1b[0m\r\n');
+        finishLine('✓', '\x1b[1;32m', 'Token configured for ' + configData.user);
+        term.write('\x1b[90m  Auto-rotation started. Token will rotate in 10 minutes.\x1b[0m\r\n');
         term.write('\r\n');
 
-        // Wait for setup if not already complete
         const setupCheckResp = await fetch('/api/setup-status');
         const setupCheckData = await setupCheckResp.json();
-
         if (setupCheckData.status !== 'complete') {
-            term.write('\x1b[90m  Setting up CLI tools...\x1b[0m\r\n');
-            while (true) {
-                await new Promise(r => setTimeout(r, 2000));
-                const pollResp = await fetch('/api/setup-status');
-                const pollData = await pollResp.json();
-                if (pollData.status === 'complete' || pollData.status === 'error') {
-                    if (pollData.status === 'complete') {
-                        term.write('\x1b[1;32m  Setup complete!\x1b[0m\r\n\r\n');
-                    } else {
-                        term.write('\x1b[1;33m  Setup completed with warnings.\x1b[0m\r\n\r\n');
-                    }
-                    break;
-                }
-            }
+          await waitForSetup();
         }
         var { sid, reattached } = await getOrPromptSession(term, tab.label, opts.skipPrompt);
       } else if (!opts.newSession) {
@@ -1587,20 +1677,7 @@
         const setupResp2 = await fetch('/api/setup-status');
         const setupData2 = await setupResp2.json();
         if (setupData2.status !== 'complete' && setupData2.status !== 'error') {
-          term.write('\x1b[90m  Setting up CLI tools...\x1b[0m\r\n');
-          while (true) {
-            await new Promise(r => setTimeout(r, 2000));
-            const pollResp2 = await fetch('/api/setup-status');
-            const pollData2 = await pollResp2.json();
-            if (pollData2.status === 'complete' || pollData2.status === 'error') {
-              if (pollData2.status === 'complete') {
-                term.write('\x1b[1;32m  Setup complete!\x1b[0m\r\n\r\n');
-              } else {
-                term.write('\x1b[1;33m  Setup completed with warnings.\x1b[0m\r\n\r\n');
-              }
-              break;
-            }
-          }
+          await waitForSetup();
         }
         var { sid, reattached } = await getOrPromptSession(term, tab.label, opts.skipPrompt);
       } else {
@@ -2137,9 +2214,35 @@
     // ── Version ──────────────────────────────────────────────────────
     let appVersion = '0.0.0';
 
+    // ── First-run consent gate ─────────────────────────────────────
+    // Blocks init() on first load until the user acknowledges the trust
+    // model. Bump the '-v1' suffix on the key to re-prompt all users when
+    // the modal's content materially changes (new risk disclosures, new
+    // AI agents added, etc.) — old localStorage flags become invalid.
+    const CONSENT_KEY = 'coda:risks-accepted-v1';
+    function ensureConsent() {
+      if (localStorage.getItem(CONSENT_KEY) === 'true') return Promise.resolve();
+      return new Promise(resolve => {
+        const overlay = document.getElementById('consent-overlay');
+        const acceptBtn = document.getElementById('consent-accept');
+        overlay.classList.add('visible');
+        acceptBtn.focus();
+        acceptBtn.addEventListener('click', () => {
+          localStorage.setItem(CONSENT_KEY, 'true');
+          overlay.classList.remove('visible');
+          resolve();
+        }, { once: true });
+      });
+    }
+
     // ── Init ───────────────────────────────────────────────────────
     async function init() {
       try {
+        // Block on first-run consent acceptance before any network calls,
+        // session creation, or PAT prompts. Resolves immediately on
+        // subsequent loads (localStorage flag set).
+        await ensureConsent();
+
         // Fetch version inside async init() to avoid top-level await
         try {
           const vResp = await fetch('/api/version');
@@ -2154,11 +2257,14 @@
         // Initialize WebSocket connection (falls back to HTTP polling if unavailable)
         initWebSocket();
 
+        // Hide the global loading indicator BEFORE the terminal renders.
+        // createTab() may block for minutes during PAT prompt; leaving the
+        // status visible causes it to overlap the tab bar at top-left.
+        // The element is kept in the DOM for error reporting (see catch below).
+        status.style.display = 'none';
+
         await createTab();
         updateSessionBadge();
-
-        status.textContent = 'Connected!';
-        setTimeout(() => { status.style.display = 'none'; }, 1000);
 
         let resizeTimer;
         window.addEventListener('resize', () => {
@@ -2168,6 +2274,9 @@
         window.addEventListener('beforeunload', () => cleanupAllPanes());
 
       } catch (e) {
+        // We hid status before createTab() to avoid overlapping the tab bar
+        // during the PAT prompt. Re-show it here so the error is visible.
+        status.style.display = '';
         status.textContent = 'Error: ' + e.message;
         status.style.color = '#ff5555';
         console.error(e);
