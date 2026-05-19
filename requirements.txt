@@ -102,7 +102,7 @@ markupsafe==3.0.3
     #   flask
     #   jinja2
     #   werkzeug
-mcp==1.27.0
+mcp==1.27.1
     # via claude-agent-sdk
 mlflow-skinny==3.12.0
     # via coda (pyproject.toml)
