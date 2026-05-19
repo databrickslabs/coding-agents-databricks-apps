@@ -85,6 +85,7 @@ idna==3.13
     #   requests
 importlib-metadata==8.7.1
     # via
+    #   coda (pyproject.toml)
     #   mlflow-skinny
     #   opentelemetry-api
 itsdangerous==2.2.0
@@ -179,10 +180,11 @@ sqlparse==0.5.5
     # via mlflow-skinny
 sse-starlette==3.3.4
     # via mcp
-starlette==1.0.0
+starlette==0.52.1
     # via
     #   fastapi
     #   mcp
+    #   mlflow-skinny
     #   sse-starlette
 typing-extensions==4.15.0
     # via
