@@ -437,3 +437,50 @@ class TestLogging:
 
         combined = " ".join(caplog.messages)
         assert "PAT rotation complete" in combined
+
+
+class TestRotationOnNearExpiry:
+    """When sessions are idle but the in-process token is near expiry, the loop
+    must rotate anyway. Otherwise our own auth dies during idle periods and the
+    rotator deadlocks on subsequent token/create attempts."""
+
+    def test_skip_when_token_fresh_and_no_sessions(self, caplog):
+        import time as _time
+        rotator = _make_rotator(
+            session_count_fn=lambda: 0,
+            rotation_interval=1,
+            token_lifetime=3600,
+        )
+        rotator._current_token = "dapi-fresh"
+        rotator._current_token_id = "tid-fresh"
+        rotator._last_rotation_time = _time.time()  # just minted
+
+        with mock.patch.object(rotator, "_rotate_once") as mr:
+            t = threading.Thread(target=rotator._rotation_loop, daemon=True)
+            t.start()
+            _time.sleep(1.5)
+            rotator.stop()
+            t.join(timeout=2)
+
+        assert mr.call_count == 0
+
+    def test_rotate_when_token_near_expiry_even_with_no_sessions(self):
+        import time as _time
+        rotator = _make_rotator(
+            session_count_fn=lambda: 0,
+            rotation_interval=1,
+            token_lifetime=10,
+        )
+        rotator._current_token = "dapi-near-expiry"
+        rotator._current_token_id = "tid-near-expiry"
+        # Token is 9s old of a 10s lifetime — within the rotation interval of expiry.
+        rotator._last_rotation_time = _time.time() - 9
+
+        with mock.patch.object(rotator, "_rotate_once", return_value=True) as mr:
+            t = threading.Thread(target=rotator._rotation_loop, daemon=True)
+            t.start()
+            _time.sleep(1.5)
+            rotator.stop()
+            t.join(timeout=2)
+
+        assert mr.call_count >= 1

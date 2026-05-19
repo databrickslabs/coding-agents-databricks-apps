@@ -82,16 +82,35 @@ class PATRotator:
         self._stop_event.set()
 
     def _rotation_loop(self):
-        """Background loop: sleep, rotate if sessions exist, repeat."""
+        """Background loop: sleep, then rotate if sessions exist OR if the
+        in-process token is about to expire. Always-rotating-near-expiry
+        prevents the rotator from deadlocking when an idle skip outruns the
+        token's lifetime — at that point our own auth would be dead and we
+        could never mint a replacement.
+        """
+        # Force a refresh once we're inside one rotation interval of expiry.
+        # That window is the maximum time we can afford to skip a rotation and
+        # still be sure the next attempt can authenticate.
+        expiry_grace = max(self._rotation_interval, 60)
         while not self._stop_event.is_set():
             self._stop_event.wait(timeout=self._rotation_interval)
             if self._stop_event.is_set():
                 break
             try:
                 session_count = self._session_count_fn()
-                if session_count == 0:
+                token_age = (
+                    time.time() - self._last_rotation_time
+                    if self._last_rotation_time else float("inf")
+                )
+                token_near_expiry = token_age > (self._token_lifetime - expiry_grace)
+                if session_count == 0 and not token_near_expiry:
                     logger.info("PAT rotation: no active sessions — skipping rotation")
                     continue
+                if session_count == 0 and token_near_expiry:
+                    logger.info(
+                        "PAT rotation: no active sessions, but token approaching "
+                        f"expiry (age={int(token_age)}s, lifetime={self._token_lifetime}s) — rotating anyway"
+                    )
                 self._rotate_once()
             except Exception as e:
                 logger.error(f"PAT rotation failed unexpectedly: {e}")
