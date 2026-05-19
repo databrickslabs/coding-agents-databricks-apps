@@ -8,7 +8,7 @@ dependencies = [
     "flask-socketio>=5.0",
     "simple-websocket>=1.0",
     "claude-agent-sdk",
-    "databricks-sdk>=0.20.0",
+    "databricks-sdk>=0.106.0",
     "mlflow-skinny==3.12.0",
     "requests",
     "cryptography>=46.0.7",
