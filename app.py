@@ -963,6 +963,22 @@ def configure_pat():
             logger.warning(f"Rejected configure-pat from non-owner {get_request_user()} (owner: {app_owner})")
             return jsonify({"error": "Forbidden"}), 403
 
+    # Idempotency / defence-in-depth: bootstrap is single-shot. Once a PAT
+    # is configured and the rotator is alive, refuse re-submission. Without
+    # this, an XSS or session-hijack vector inside the owner's browser could
+    # drive a swap to an attacker-controlled PAT — the owner-gate above
+    # would let it through because the request truly does come from the
+    # owner's session. The expired-token escape hatch preserves the legitimate
+    # re-bootstrap path (rotator timed out while idle, owner needs to refresh).
+    if pat_rotator.token and not pat_rotator.is_token_expired:
+        logger.warning(
+            f"Rejected configure-pat: PAT already active "
+            f"(user={get_request_user()}, source={request.remote_addr})"
+        )
+        return jsonify({
+            "error": "PAT already configured. Restart the app to reconfigure."
+        }), 409
+
     data = request.json
     token = data.get("token", "").strip()
     if not token:

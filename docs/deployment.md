@@ -11,7 +11,7 @@ The simplest way — no CLI, no cloning, everything stays in the Databricks UI.
 1. Go to **Databricks → Apps → Create App**
 2. Choose **Custom App** and connect this Git repo:
    ```
-   https://github.com/datasciencemonkey/coding-agents-databricks-apps.git
+   https://github.com/databrickslabs/coding-agents-databricks-apps.git
    ```
 3. Click **Deploy**
 4. Open the app — on first terminal session, paste a short-lived PAT when prompted
