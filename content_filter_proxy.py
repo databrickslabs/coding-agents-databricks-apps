@@ -38,8 +38,12 @@ LISTEN_PORT = int(os.environ.get("PROXY_PORT", "4000"))
 # OpenCode (and this proxy) are separate processes with frozen env snapshots,
 # so we read the file on-demand instead of trusting os.environ.
 
-_TOKEN_CACHE: dict = {"token": None, "read_at": 0.0}
-_TOKEN_CACHE_TTL = 30  # seconds — short enough to pick up rotations quickly
+_TOKEN_CACHE: dict = {"token": None, "read_at": 0.0, "mtime": 0.0}
+# Hard ceiling on cache age. With mtime invalidation below, the cache normally
+# refreshes the instant the rotator rewrites the file, so this is just a
+# defence against an mtime that stops advancing (e.g. clock skew, watched fs
+# tools that touch the file without updating contents).
+_TOKEN_CACHE_TTL = 30
 
 _HOME = os.environ.get("HOME", "/app/python/source_code")
 if not _HOME or _HOME == "/":
@@ -50,10 +54,21 @@ _DATABRICKSCFG_PATH = os.path.join(_HOME, ".databrickscfg")
 def _get_fresh_token() -> str | None:
     """Read current token from ~/.databrickscfg (updated by PAT rotator).
 
-    Returns cached value if read within the last _TOKEN_CACHE_TTL seconds.
+    Cache invalidates on file mtime change so a rotation produces a near-zero
+    window of stale tokens. The TTL is a backstop; mtime is authoritative.
     """
     now = time.time()
-    if _TOKEN_CACHE["token"] and (now - _TOKEN_CACHE["read_at"]) < _TOKEN_CACHE_TTL:
+    try:
+        mtime = os.stat(_DATABRICKSCFG_PATH).st_mtime
+    except OSError:
+        mtime = 0.0
+
+    cache_hot = (
+        _TOKEN_CACHE["token"]
+        and mtime <= _TOKEN_CACHE["mtime"]
+        and (now - _TOKEN_CACHE["read_at"]) < _TOKEN_CACHE_TTL
+    )
+    if cache_hot:
         return _TOKEN_CACHE["token"]
 
     try:
@@ -63,6 +78,7 @@ def _get_fresh_token() -> str | None:
         if token:
             _TOKEN_CACHE["token"] = token
             _TOKEN_CACHE["read_at"] = now
+            _TOKEN_CACHE["mtime"] = mtime
             return token
     except Exception as e:
         log.warning(f"Could not read fresh token from {_DATABRICKSCFG_PATH}: {e}")
