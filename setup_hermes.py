@@ -113,14 +113,26 @@ if gateway_host and not gateway_token:
     print("Warning: AI Gateway resolved but DATABRICKS_TOKEN missing, falling back to DATABRICKS_HOST")
     gateway_host = ""
 
+# Route Hermes through the local content-filter proxy (127.0.0.1:4000) so
+# PAT rotation is transparent: the proxy reads ~/.databrickscfg on every
+# request and injects a fresh Bearer token, overriding whatever literal
+# api_key is cached in Hermes's in-memory config. Without this, the
+# long-running `hermes chat` process holds the startup token and gets
+# revoked-token 403s once the rotator swaps PATs (~10 min cadence).
+# OpenCode uses the same trick.
+#
+# upstream_base is recorded for the diagnostic banner below; the proxy
+# itself decides the actual upstream from PROXY_UPSTREAM_BASE.
 if gateway_host:
-    base_url = f"{gateway_host}/mlflow/v1"
+    upstream_base = f"{gateway_host}/mlflow/v1"
     auth_token = gateway_token
-    print(f"Using Databricks AI Gateway: {gateway_host}")
+    print(f"Hermes will route via content-filter proxy -> AI Gateway: {gateway_host}")
 else:
-    base_url = f"{host}/serving-endpoints"
+    upstream_base = f"{host}/serving-endpoints"
     auth_token = token
-    print(f"Using Databricks Host: {host}")
+    print(f"Hermes will route via content-filter proxy -> {host}/serving-endpoints")
+
+base_url = "http://127.0.0.1:4000"
 
 # 4. Write ~/.hermes/config.yaml
 config_path = hermes_home / "config.yaml"
@@ -250,7 +262,7 @@ print("  hermes --tui chat              # Rich Ink TUI")
 print("  hermes model                   # Select default model")
 print("  hermes setup                   # Reconfigure wizard")
 print("  hermes mcp add <name> <url>    # Add MCP server")
-print(f"\nEndpoint:       {base_url}")
+print(f"\nEndpoint:       {base_url}  (forwards to {upstream_base})")
 print(f"Primary model:  {hermes_model}")
 print(f"Fallback model: {hermes_fallback_model} (auto-activates on 429/529/503)")
 print(f"Install:        minimal  (add extras: uv pip install \"hermes-agent[mcp,messaging,...]\")")

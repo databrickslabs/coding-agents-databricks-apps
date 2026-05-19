@@ -18,8 +18,10 @@ from utils import ensure_https, read_non_default_databrickscfg_sections
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_TOKEN_LIFETIME = 900        # 15 minutes
-DEFAULT_ROTATION_INTERVAL = 600     # 10 minutes
+# Env overrides exist so e2e tests can compress the cycle to seconds without
+# a code change. Production defaults: 15-min tokens rotated every 10 min.
+DEFAULT_TOKEN_LIFETIME = int(os.environ.get("PAT_TOKEN_LIFETIME", "900"))
+DEFAULT_ROTATION_INTERVAL = int(os.environ.get("PAT_ROTATION_INTERVAL", "600"))
 
 
 class PATRotator:
