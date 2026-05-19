@@ -68,12 +68,10 @@ sessions_lock = threading.Lock()
 
 # PAT auto-rotation (short-lived tokens, background refresh)
 # Only rotates while active sessions exist — stops when all sessions are reaped.
-# Interval/lifetime are env-overridable for shared, time-boxed deployments
-# (e.g. workshops) that want fewer rotations; defaults keep the secure
-# single-user boxes at 10-minute rotation / 15-minute lifetime.
+# Interval/lifetime are env-overridable (PAT_ROTATION_INTERVAL / PAT_TOKEN_LIFETIME)
+# via the module-level defaults in pat_rotator.py; the workshop overlay sets them
+# for the shared box, while secure boxes keep 10-minute rotation / 15-minute lifetime.
 pat_rotator = PATRotator(
-    rotation_interval=int(os.environ.get("PAT_ROTATION_INTERVAL", "600")),
-    token_lifetime=int(os.environ.get("PAT_TOKEN_LIFETIME", "900")),
     session_count_fn=lambda: len(sessions),
 )
 
