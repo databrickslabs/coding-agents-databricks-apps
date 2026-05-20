@@ -1,8 +1,5 @@
 # Coding Agents on Databricks Apps
 
-NOTE:
-This project has moved from my personal handle into Datbaricks Labs. We will continue to work on it under Databricks Labs
-[THIS PROJECT IS NOW A PART OF DATABRICKS LABS](https://github.com/databrickslabs/coding-agents-databricks-apps)
 
 [![Use this template](https://img.shields.io/badge/Use%20this%20template-2ea44f?logo=github)](https://github.com/datasciencemonkey/coding-agents-databricks-apps/generate)
 [![Deploy to Databricks](https://img.shields.io/badge/Deploy-Databricks%20Apps-FF3621?logo=databricks&logoColor=white)](docs/deployment.md)
