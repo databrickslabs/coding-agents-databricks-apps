@@ -11,7 +11,7 @@ dependencies = [
     "databricks-sdk>=0.106.0",
     "mlflow-skinny==3.12.0",
     "requests",
-    "cryptography>=46.0.7",
+    "cryptography>=48.0.0",
     # Security floors — make CVE-driven minimums explicit so future resolves
     # can't silently downgrade. See PR description for advisory IDs.
     "gitpython>=3.1.49",
