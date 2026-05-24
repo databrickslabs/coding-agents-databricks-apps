@@ -139,7 +139,7 @@ pydantic==2.13.3
     #   pydantic-settings
 pydantic-core==2.46.3
     # via pydantic
-pydantic-settings==2.14.0
+pydantic-settings==2.14.1
     # via mcp
 pyjwt==2.12.1
     # via mcp
