@@ -28,6 +28,47 @@ class TestUpdateClaude:
         assert result["env"]["ANTHROPIC_AUTH_TOKEN"] == "new-token"
         assert result["env"]["OTHER"] == "keep"
 
+    def test_updates_claude_otel_header_tokens(self, isolated_home):
+        from cli_auth import update_cli_tokens
+        claude_dir = isolated_home / ".claude"
+        claude_dir.mkdir()
+        settings = {
+            "env": {
+                "ANTHROPIC_AUTH_TOKEN": "old-token",
+                "OTEL_EXPORTER_OTLP_TRACES_HEADERS": (
+                    "content-type=application/x-protobuf,"
+                    "Authorization=Bearer old-token,"
+                    "X-Databricks-UC-Table-Name=cat.sch.claude_otel_spans"
+                ),
+                "OTEL_EXPORTER_OTLP_LOGS_HEADERS": (
+                    "content-type=application/x-protobuf,"
+                    "Authorization=Bearer old-token,"
+                    "X-Databricks-UC-Table-Name=cat.sch.claude_otel_logs"
+                ),
+                "OTEL_EXPORTER_OTLP_METRICS_HEADERS": (
+                    "content-type=application/x-protobuf,"
+                    "Authorization=Bearer old-token,"
+                    "X-Databricks-UC-Table-Name=cat.sch.claude_otel_metrics"
+                ),
+            }
+        }
+        (claude_dir / "settings.json").write_text(json.dumps(settings))
+
+        update_cli_tokens("new-token")
+
+        result = json.loads((claude_dir / "settings.json").read_text())
+        assert result["env"]["ANTHROPIC_AUTH_TOKEN"] == "new-token"
+        for key in [
+            "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+            "OTEL_EXPORTER_OTLP_LOGS_HEADERS",
+            "OTEL_EXPORTER_OTLP_METRICS_HEADERS",
+        ]:
+            assert "Authorization=Bearer new-token" in result["env"][key]
+            assert "old-token" not in result["env"][key]
+        assert "cat.sch.claude_otel_spans" in result["env"]["OTEL_EXPORTER_OTLP_TRACES_HEADERS"]
+        assert "cat.sch.claude_otel_logs" in result["env"]["OTEL_EXPORTER_OTLP_LOGS_HEADERS"]
+        assert "cat.sch.claude_otel_metrics" in result["env"]["OTEL_EXPORTER_OTLP_METRICS_HEADERS"]
+
     def test_skips_missing_file(self, isolated_home):
         from cli_auth import update_cli_tokens
         update_cli_tokens("new-token")  # should not raise

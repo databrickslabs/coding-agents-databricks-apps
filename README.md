@@ -74,6 +74,8 @@ This isn't just a terminal in the cloud. Running coding agents on Databricks giv
 
 Claude Code and Codex sessions can both be **automatically traced** to a single Databricks MLflow experiment — flip one switch to turn them on.
 
+Claude Code can also export native OpenTelemetry signals to Unity Catalog tables. Set `CLAUDE_CODE_OTEL_ENABLED=true` and `CLAUDE_CODE_OTEL_CATALOG_SCHEMA=<catalog>.<schema>` to send spans, logs, and metrics to `claude_otel_spans`, `claude_otel_logs`, and `claude_otel_metrics` in that schema. Create those three target tables before enabling the flag.
+
 ### Turning it on
 
 Set **`MLFLOW_TRACING_ENABLED=true`** in `app.yaml` (or your shell for local dev). That single variable enables tracing for both CLIs. Tracing is **off by default** to keep deploys lightweight — opt in when you want it.
@@ -288,6 +290,8 @@ This template repo opens that vision up for every Databricks user — no IDE set
 | `GEMINI_MODEL` | No | Gemini model name (default: `databricks-gemini-2-5-pro`) |
 | `DATABRICKS_GATEWAY_HOST` | No | AI Gateway URL override. Auto-discovered from `DATABRICKS_WORKSPACE_ID` if unset |
 | `MLFLOW_TRACING_ENABLED` | No | Set to `"true"` to enable MLflow tracing for Claude and Codex in one switch (default `"false"`) |
+| `CLAUDE_CODE_OTEL_ENABLED` | No | Set to `"true"` to enable Claude Code OTEL export to Unity Catalog (default `"false"`) |
+| `CLAUDE_CODE_OTEL_CATALOG_SCHEMA` | No | Target `<catalog>.<schema>` for `claude_otel_spans`, `claude_otel_logs`, and `claude_otel_metrics` |
 
 ### Security Model
 

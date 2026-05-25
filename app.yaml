@@ -19,5 +19,10 @@ env:
     value: "true"
   - name: CLAUDE_CODE_DISABLE_AUTO_MEMORY
     value: 0
+  # Set CLAUDE_CODE_OTEL_ENABLED=true to send Claude Code OTEL signals to Unity Catalog.
+  - name: CLAUDE_CODE_OTEL_ENABLED
+    value: "false"
+  - name: CLAUDE_CODE_OTEL_CATALOG_SCHEMA
+    value: davidokeeffe_standard_demo_catalog.default
   - name: MAX_CONCURRENT_SESSIONS
     value: "5"

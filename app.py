@@ -21,6 +21,7 @@ import tomllib
 import requests
 
 import app_state
+from claude_otel import apply_claude_otel_env
 from utils import ensure_https, get_gateway_host
 from pat_rotator import PATRotator
 from telemetry import log_telemetry, set_product_info
@@ -310,6 +311,8 @@ def _configure_all_cli_auth(token):
     settings["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = "databricks-claude-haiku-4-5"
     settings["env"]["ANTHROPIC_CUSTOM_HEADERS"] = "x-databricks-use-coding-agent-mode: true"
     settings["env"]["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] = "1"
+    if apply_claude_otel_env(settings, token, databricks_host):
+        logger.info("Claude Code OTEL export configured")
 
     with open(settings_path, "w") as f:
         json.dump(settings, f, indent=2)

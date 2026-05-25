@@ -9,6 +9,8 @@ import os
 import re
 import logging
 
+from claude_otel import refresh_claude_otel_token
+
 logger = logging.getLogger(__name__)
 
 _HOME = os.environ.get("HOME", "/app/python/source_code")
@@ -26,13 +28,18 @@ def update_cli_tokens(token):
 
 
 def _update_claude(token):
-    """Update ANTHROPIC_AUTH_TOKEN in ~/.claude/settings.json."""
+    """Update Claude tokens in ~/.claude/settings.json."""
     path = os.path.join(_HOME, ".claude", "settings.json")
     try:
         with open(path) as f:
             settings = json.load(f)
+        changed = False
         if "env" in settings and "ANTHROPIC_AUTH_TOKEN" in settings["env"]:
             settings["env"]["ANTHROPIC_AUTH_TOKEN"] = token
+            changed = True
+        if refresh_claude_otel_token(settings, token):
+            changed = True
+        if changed:
             with open(path, "w") as f:
                 json.dump(settings, f, indent=2)
     except (OSError, json.JSONDecodeError):

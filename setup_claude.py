@@ -4,6 +4,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from claude_otel import apply_claude_otel_env
 from utils import discover_serving_endpoints, ensure_https, get_gateway_host, pick_in_geo_model
 
 # Set HOME if not properly set
@@ -82,6 +83,8 @@ if token:
     settings["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = haiku_model
     settings["env"]["ANTHROPIC_CUSTOM_HEADERS"] = "x-databricks-use-coding-agent-mode: true"
     settings["env"]["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] = "1"
+    if apply_claude_otel_env(settings, token, databricks_host):
+        print("Claude Code OTEL export enabled")
 
     settings_path.write_text(json.dumps(settings, indent=2))
     print(f"Claude configured: {settings_path}")
