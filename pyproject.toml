@@ -27,6 +27,12 @@ dependencies = [
     # Explicit ceiling so the bot won't try again until databricks-sdk lifts
     # its <7.0 cap.
     "protobuf<7",
+    # Upper bound is forced by mlflow-skinny: 3.12.0 declares `starlette<1`.
+    # Dependabot tried to bump to starlette 1.0.0 (PR #59) — the pin worked
+    # with `uv pip sync` but `uv pip compile pyproject.toml` rejected it via
+    # mlflow-skinny's transitive cap. Explicit ceiling so the bot won't try
+    # again until mlflow-skinny lifts its <1 cap.
+    "starlette<1",
 ]
 
 [dependency-groups]
