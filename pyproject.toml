@@ -21,6 +21,12 @@ dependencies = [
     # to bump it to 9.0.0 (PR #3) and broke every deploy — explicit ceiling so
     # the bot won't try again until upstream widens its caps.
     "importlib-metadata<8.8",
+    # Upper bound is forced by databricks-sdk: 0.106.0 declares
+    # `protobuf!=5.26.*,...,<7.0,>=4.25.8`. Dependabot tried to bump to
+    # protobuf 7.34.1 (PR #60) and broke `pip install -r requirements.txt`.
+    # Explicit ceiling so the bot won't try again until databricks-sdk lifts
+    # its <7.0 cap.
+    "protobuf<7",
 ]
 
 [dependency-groups]
