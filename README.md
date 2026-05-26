@@ -24,7 +24,7 @@
   <img src="docs/screenshots/coda-architecture.png" width="900" alt="CoDA architecture — always-on coding agents inside the customer's Databricks tenancy, governed by Unity Catalog and audited by MLflow"/>
 </div>
 
-CoDA runs as a hosted Databricks App inside your tenancy. Developers brief the agents through the browser; Claude Code, Codex, Gemini CLI, and OpenCode execute alongside the Hermes orchestrator. Every model call routes through Foundation Model APIs (no third-party egress) and every tool call routes through Governed MCP Servers (Unity Catalog ACLs + MLflow trace + named human identity). The result: agentic coding for legacy migration, application development, multi-repo refactor, production monitoring, code modernisation, and CI/CD deployments — all governed like any other workload.
+CoDA runs as a hosted Databricks App inside your tenancy, alongside **Genie Code** — Databricks' in-product AI coding agent that lives in notebooks, the SQL editor, and dashboards. Genie Code is the interactive in-product surface; CoDA is the always-on hosted-app surface where Developers brief the agents through the browser and Claude Code, Codex, Gemini CLI, and OpenCode execute alongside the Hermes orchestrator. Both surfaces share the same access plane: every model call routes through Foundation Model APIs (no third-party egress) and every tool call routes through Governed MCP Servers (Unity Catalog ACLs + MLflow trace + named human identity). The result: agentic coding for legacy migration, application development, multi-repo refactor, production monitoring, code modernisation, and CI/CD deployments — all governed like any other workload.
 
 ---
 
