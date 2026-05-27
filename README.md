@@ -13,7 +13,7 @@
 ## 🎬 Watch the demo
 
 <div align="center">
-  <video src="docs/videos/CoDAFunkyPromo.mp4" controls width="900">
+  <video src="https://github.com/user-attachments/assets/2f5dda3c-84ab-414f-8091-2aaca512d22d" controls width="900">
     Your browser doesn't render embedded MP4s here — <a href="docs/videos/CoDAFunkyPromo.mp4">download or open the video directly</a>.
   </video>
 </div>
