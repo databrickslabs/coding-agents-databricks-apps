@@ -9,6 +9,14 @@
 
 ---
 
+## 🎬 Watch the demo
+
+<div align="center">
+  <video src="docs/videos/CoDAFunkyPromo.mp4" controls width="900">
+    Your browser doesn't render embedded MP4s here — <a href="docs/videos/CoDAFunkyPromo.mp4">download or open the video directly</a>.
+  </video>
+</div>
+
 ## Screenshots
 
 <div align="center">
