@@ -108,6 +108,25 @@ else:
 opencode_config_dir = home / ".config" / "opencode"
 opencode_config_dir.mkdir(parents=True, exist_ok=True)
 
+# Build the MCP server dict once, honouring enterprise overrides — empty
+# DEEPWIKI_MCP_URL / EXA_MCP_URL drops the corresponding server (F-04).
+from enterprise_config import deepwiki_mcp_url, exa_mcp_url
+
+_mcp_servers = {}
+if dw_url := deepwiki_mcp_url():
+    _mcp_servers["deepwiki"] = {
+        "type": "remote",
+        "url": dw_url,
+        "enabled": True,
+        "oauth": False,
+    }
+if exa_url := exa_mcp_url():
+    _mcp_servers["exa"] = {
+        "type": "remote",
+        "url": exa_url,
+        "enabled": True,
+    }
+
 if gateway_host:
     # Gateway mode: route through content-filter proxy proxy for content block sanitization
     # content-filter proxy forwards clean requests to Databricks AI Gateway
@@ -186,19 +205,7 @@ if gateway_host:
                 }
             }
         },
-        "mcp": {
-            "deepwiki": {
-                "type": "remote",
-                "url": "https://mcp.deepwiki.com/mcp",
-                "enabled": True,
-                "oauth": False
-            },
-            "exa": {
-                "type": "remote",
-                "url": "https://mcp.exa.ai/mcp",
-                "enabled": True
-            }
-        },
+        "mcp": _mcp_servers,
         "model": f"databricks/{anthropic_model}"
     }
 else:
@@ -253,19 +260,7 @@ else:
                 }
             }
         },
-        "mcp": {
-            "deepwiki": {
-                "type": "remote",
-                "url": "https://mcp.deepwiki.com/mcp",
-                "enabled": True,
-                "oauth": False
-            },
-            "exa": {
-                "type": "remote",
-                "url": "https://mcp.exa.ai/mcp",
-                "enabled": True
-            }
-        },
+        "mcp": _mcp_servers,
         "model": f"databricks/{anthropic_model}"
     }
 

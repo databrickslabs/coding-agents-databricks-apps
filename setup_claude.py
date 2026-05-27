@@ -89,16 +89,16 @@ else:
     print("No DATABRICKS_TOKEN — skipping settings.json (will be configured after PAT setup)")
 
 # 2. Write ~/.claude.json with onboarding skip AND MCP servers
-mcp_servers = {
-    "deepwiki": {
-        "type": "http",
-        "url": "https://mcp.deepwiki.com/mcp"
-    },
-    "exa": {
-        "type": "http",
-        "url": "https://mcp.exa.ai/mcp"
-    }
-}
+# Honour DEEPWIKI_MCP_URL / EXA_MCP_URL from enterprise_config — operators in
+# locked-down envs can set these to empty string to omit the public MCP
+# servers entirely. Default behaviour (no env vars) remains unchanged.
+from enterprise_config import deepwiki_mcp_url, exa_mcp_url
+
+mcp_servers = {}
+if dw_url := deepwiki_mcp_url():
+    mcp_servers["deepwiki"] = {"type": "http", "url": dw_url}
+if exa_url := exa_mcp_url():
+    mcp_servers["exa"] = {"type": "http", "url": exa_url}
 
 # Auto-configure team-memory MCP if URL is provided
 team_memory_url = os.environ.get("TEAM_MEMORY_MCP_URL", "").strip().rstrip("/")
@@ -109,27 +109,51 @@ if team_memory_url:
     }
     print(f"Team memory MCP configured: {team_memory_url}/mcp")
 
-claude_json = {
-    "hasCompletedOnboarding": True,
-    "mcpServers": mcp_servers
-}
-
+# Read-merge-write rather than overwrite — preserves any keys the user (or
+# claude itself) wrote into ~/.claude.json between setups (F-09).
 claude_json_path = home / ".claude.json"
-claude_json_path.write_text(json.dumps(claude_json, indent=2))
+if claude_json_path.exists():
+    try:
+        existing = json.loads(claude_json_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        existing = {}
+else:
+    existing = {}
+existing["hasCompletedOnboarding"] = True
+existing["mcpServers"] = mcp_servers  # ours wins — these are the agent CLIs we manage
+claude_json_path.write_text(json.dumps(existing, indent=2))
 
-print(f"Onboarding skipped + MCPs configured: {claude_json_path}")
+print(f"Onboarding skipped + MCPs configured ({len(mcp_servers)} servers): {claude_json_path}")
 
 # 3. Install Claude Code CLI if not present
 local_bin = home / ".local" / "bin"
 claude_bin = local_bin / "claude"
 
-print("Installing/upgrading Claude Code CLI...")
+# Honour CLAUDE_INSTALLER_URL for enterprise environments where claude.ai is
+# firewalled — defaults to the public installer when unset. The URL is
+# validated by enterprise_config to reject shell metacharacters before it
+# reaches subprocess. Additionally, we avoid embedding the URL in a shell
+# string by piping curl's output into bash via positional args — even if a
+# malicious URL somehow slipped through validation, it would land as a curl
+# argument, not as shell.
+from enterprise_config import claude_installer_url
+
+installer_url = claude_installer_url()
+print(f"Installing/upgrading Claude Code CLI from {installer_url}...")
+curl_proc = subprocess.Popen(
+    ["curl", "-fsSL", installer_url],
+    stdout=subprocess.PIPE,
+    env={**os.environ, "HOME": str(home)},
+)
 result = subprocess.run(
-    ["bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash"],
+    ["bash"],
+    stdin=curl_proc.stdout,
     env={**os.environ, "HOME": str(home)},
     capture_output=True,
-    text=True
+    text=True,
 )
+curl_proc.stdout.close()
+curl_proc.wait()
 if result.returncode == 0:
     print("Claude Code CLI installed successfully")
 else:

@@ -50,7 +50,13 @@ hermes_bin = home / ".local" / "bin" / "hermes"
 # httpx, pyyaml, pydantic) cover chat + Databricks model serving. Not on PyPI,
 # so we install directly from GitHub. uv tool install handles venv + binary.
 # The mcp package is needed for HTTP transport (DeepWiki, Exa MCP servers).
-HERMES_PKG = "hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git"
+# Honour HERMES_PIP_URL for enterprise environments where the upstream git
+# URL is firewalled — customers can point at a mirrored git URL or, once
+# Hermes is mirrored in their internal PyPI, a pinned spec like
+# `hermes-agent==1.2.3`.
+from enterprise_config import hermes_pip_url
+
+HERMES_PKG = hermes_pip_url()
 HERMES_EXTRA_DEPS = ["mcp>=1.2.0"]
 
 # 1. Install Hermes Agent (always, even without token).
@@ -160,21 +166,30 @@ if external_skills:
 else:
     lines.append("  external_dirs: []")
 lines.append("")
-lines.append("# Native MCP servers — DeepWiki (GitHub wiki lookup) + Exa (web search)")
-lines.append("mcp_servers:")
-lines.append("  deepwiki:")
-lines.append("    url: https://mcp.deepwiki.com/mcp")
-lines.append("    timeout: 60")
-lines.append("  exa:")
-lines.append("    url: https://mcp.exa.ai/mcp")
-lines.append("    timeout: 60")
+# Native MCP servers — DeepWiki (GitHub wiki lookup) + Exa (web search) + an
+# optional team-memory server. Honour enterprise overrides: empty
+# DEEPWIKI_MCP_URL / EXA_MCP_URL drops the corresponding entry (F-04).
+from enterprise_config import deepwiki_mcp_url, exa_mcp_url
+
+_hermes_mcp_urls = {}
+if dw_url := deepwiki_mcp_url():
+    _hermes_mcp_urls["deepwiki"] = dw_url
+if exa_url := exa_mcp_url():
+    _hermes_mcp_urls["exa"] = exa_url
 
 team_memory_url = os.environ.get("TEAM_MEMORY_MCP_URL", "").strip().rstrip("/")
 if team_memory_url:
-    lines.append("  team-memory:")
-    lines.append(f"    url: {team_memory_url}/mcp")
-    lines.append("    timeout: 60")
+    _hermes_mcp_urls["team-memory"] = f"{team_memory_url}/mcp"
     print(f"Team memory MCP configured: {team_memory_url}/mcp")
+
+if _hermes_mcp_urls:
+    lines.append("mcp_servers:")
+    for _name, _url in _hermes_mcp_urls.items():
+        lines.append(f"  {_name}:")
+        lines.append(f"    url: {_url}")
+        lines.append("    timeout: 60")
+else:
+    lines.append("mcp_servers: {}")
 
 lines.append("")
 lines.append("# Model catalog hint — users can `/model` switch inside chat")
@@ -193,6 +208,16 @@ if config_path.exists():
 
 if should_write:
     config_path.write_text("\n".join(lines))
+    # 0o600 — the file contains the plaintext PAT in `api_key:`. Without an
+    # explicit chmod the file inherits umask-derived perms (often 0o644 on
+    # container filesystems) which makes the token world-readable for any
+    # other process under the same UID. Matches setup_opencode.py's auth.json
+    # handling. (F-05)
+    try:
+        config_path.chmod(0o600)
+    except OSError:
+        # Best effort — chmod can fail on some workspace filesystems.
+        pass
     print(f"Hermes config written: {config_path}")
 
 # 5. Adapt CLAUDE.md -> ~/.hermes/HERMES.md for first-run context

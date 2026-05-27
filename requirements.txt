@@ -42,7 +42,7 @@ click==8.3.3
     #   uvicorn
 cloudpickle==3.1.2
     # via mlflow-skinny
-cryptography==46.0.7
+cryptography==48.0.0
     # via
     #   coda (pyproject.toml)
     #   google-auth
@@ -122,6 +122,7 @@ packaging==26.2
     # via mlflow-skinny
 protobuf==6.33.6
     # via
+    #   coda (pyproject.toml)
     #   databricks-sdk
     #   mlflow-skinny
     #   opentelemetry-proto
@@ -139,7 +140,7 @@ pydantic==2.13.3
     #   pydantic-settings
 pydantic-core==2.46.3
     # via pydantic
-pydantic-settings==2.14.0
+pydantic-settings==2.14.1
     # via mcp
 pyjwt==2.12.1
     # via mcp
@@ -149,7 +150,7 @@ python-dotenv==1.2.2
     #   pydantic-settings
 python-engineio==4.13.1
     # via python-socketio
-python-multipart==0.0.27
+python-multipart==0.0.29
     # via
     #   coda (pyproject.toml)
     #   mcp
@@ -182,6 +183,7 @@ sse-starlette==3.3.4
     # via mcp
 starlette==0.52.1
     # via
+    #   coda (pyproject.toml)
     #   fastapi
     #   mcp
     #   mlflow-skinny

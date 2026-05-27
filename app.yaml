@@ -21,3 +21,54 @@ env:
     value: 0
   - name: MAX_CONCURRENT_SESSIONS
     value: "5"
+
+  # ─── Enterprise mode (proxy / registry redirects) ────────────────────────
+  # Uncomment and set the env vars below to run CoDA in locked-down enterprise
+  # networks. All are optional — set only what your environment requires.
+  # See docs/enterprise.md for the full contract, JFrog mirror conventions,
+  # and troubleshooting.
+  #
+  # Master switch — when true, logs a startup banner and warns on missing
+  # recommended mirrors. Behavioural overrides are still driven by the
+  # individual vars below.
+  # - name: ENTERPRISE_MODE
+  #   value: "true"
+  #
+  # Corporate egress proxy + TLS root CA.
+  # - name: HTTPS_PROXY
+  #   value: http://proxy.corp.example.com:3128
+  # - name: NO_PROXY
+  #   value: localhost,127.0.0.1,.corp.example.com
+  # - name: REQUESTS_CA_BUNDLE
+  #   value: /etc/ssl/certs/corp-root.pem
+  # - name: NODE_EXTRA_CA_CERTS
+  #   value: /etc/ssl/certs/corp-root.pem
+  #
+  # Internal PyPI proxy (e.g. JFrog pypi-virtual).
+  # - name: UV_DEFAULT_INDEX
+  #   value: https://jfrog.example.com/api/pypi/pypi-virtual/simple/
+  #
+  # Internal npm registry. NPM_TOKEN should be a Databricks secret reference.
+  # - name: NPM_REGISTRY
+  #   value: https://jfrog.example.com/api/npm/npm-virtual/
+  # - name: NPM_TOKEN
+  #   valueFrom: <secret>
+  #
+  # GitHub release mirror — must serve the same path tail as github.com.
+  # - name: GITHUB_RELEASE_MIRROR
+  #   value: https://jfrog.example.com/artifactory/github-mirror
+  # - name: GITHUB_API_BASE
+  #   value: https://ghe.example.com/api/v3
+  #
+  # Claude installer + Hermes package spec — override when the upstream URLs
+  # are firewalled.
+  # - name: CLAUDE_INSTALLER_URL
+  #   value: https://mirror.example.com/claude-install.sh
+  # - name: HERMES_PIP_URL
+  #   value: hermes-agent==1.2.3
+  #
+  # Drop public MCP servers (DeepWiki, Exa) entirely by setting these to "".
+  # - name: DEEPWIKI_MCP_URL
+  #   value: ""
+  # - name: EXA_MCP_URL
+  #   value: ""

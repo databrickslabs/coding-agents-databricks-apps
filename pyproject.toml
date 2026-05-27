@@ -1,6 +1,6 @@
 [project]
 name = "coda"
-version = "0.18.2"
+version = "0.18.3"
 description = "CoDA - Coding Agents on Databricks Apps"
 requires-python = ">=3.10"
 dependencies = [
@@ -11,16 +11,41 @@ dependencies = [
     "databricks-sdk>=0.106.0",
     "mlflow-skinny==3.12.0",
     "requests",
-    "cryptography>=46.0.7",
+    "cryptography>=48.0.0",
     # Security floors — make CVE-driven minimums explicit so future resolves
     # can't silently downgrade. See PR description for advisory IDs.
     "gitpython>=3.1.49",
-    "python-multipart>=0.0.27",
+    "python-multipart>=0.0.29",
     # Upper bound is forced by our transitive ecosystem: both mlflow-skinny 3.11.x
     # AND opentelemetry-api 1.41.x cap importlib-metadata<8.8. Dependabot tried
     # to bump it to 9.0.0 (PR #3) and broke every deploy — explicit ceiling so
     # the bot won't try again until upstream widens its caps.
     "importlib-metadata<8.8",
+    # Upper bound is forced by databricks-sdk: 0.106.0 declares
+    # `protobuf!=5.26.*,...,<7.0,>=4.25.8`. Dependabot tried to bump to
+    # protobuf 7.34.1 (PR #60) and broke `pip install -r requirements.txt`.
+    # Explicit ceiling so the bot won't try again until databricks-sdk lifts
+    # its <7.0 cap.
+    "protobuf<7",
+    # Upper bound is forced by mlflow-skinny: 3.12.0 declares `starlette<1`.
+    # Dependabot tried to bump to starlette 1.0.0 (PR #59) — the pin worked
+    # with `uv pip sync` but `uv pip compile pyproject.toml` rejected it via
+    # mlflow-skinny's transitive cap. Explicit ceiling so the bot won't try
+    # again until mlflow-skinny lifts its <1 cap.
+    "starlette<1",
+]
+
+[dependency-groups]
+# Dev/test-only deps — not shipped to the app container. Install with
+# `uv sync --group dev` or `uv pip install --group dev`.
+dev = [
+    "pytest>=8.0",
+    "pytest-timeout>=2.4",
+    # Playwright for the e2e suite (tests/e2e/) — drives a real browser
+    # against the deployed app to verify SSO + setup pipeline + security
+    # fixes end-to-end. Optional: tests skip cleanly when not installed.
+    "playwright>=1.40",
+    "pytest-playwright>=0.5",
 ]
 
 [tool.uv]
