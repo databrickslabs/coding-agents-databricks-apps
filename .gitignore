@@ -43,6 +43,4 @@ uv.lock
 # Agent-plane reference clone
 agent-plane-ref/
 
-# Promo video working files (Remotion project, raw GIFs, audio, narration script).
-# Only the rendered MP4 is checked in under docs/videos/.
 video/
