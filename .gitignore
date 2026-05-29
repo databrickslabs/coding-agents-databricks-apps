@@ -43,6 +43,8 @@ uv.lock
 # Agent-plane reference clone
 agent-plane-ref/
 
+video/
+
 # Playwright e2e SSO session state (workspace cookies — DO NOT commit)
 tests/e2e/auth.json
 tests/e2e/.cache/

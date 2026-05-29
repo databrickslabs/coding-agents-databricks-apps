@@ -10,6 +10,12 @@
 
 ---
 
+<div align="center">
+  <video src="https://github.com/user-attachments/assets/40405b46-532a-4f14-82e3-414cb3744684" controls width="900">
+    Your browser doesn't render embedded MP4s here — <a href="docs/videos/CoDAFunkyPromo.mp4">download or open the video directly</a>.
+  </video>
+</div>
+
 ## Screenshots
 
 <div align="center">
@@ -41,6 +47,16 @@ CoDA runs as a hosted Databricks App inside your tenancy, alongside **Genie Code
 🟢 **OpenCode** — Open-source agent with multi-provider support
 
 Every agent installs at boot and connects to your **Databricks AI Gateway** — on first terminal session, paste a short-lived PAT and all CLIs are configured automatically. Token auto-rotates every 10 minutes.
+
+### 📺 Setup walkthrough (6 min)
+
+Want to see CoDA installed and running end-to-end? Click the thumbnail to watch the full walkthrough on YouTube.
+
+<div align="center">
+  <a href="https://youtu.be/YqDq4LBljGM">
+    <img src="docs/screenshots/setup-walkthrough-poster.jpg" width="900" alt="Getting Started with CoDA — 6-minute setup walkthrough (click to watch on YouTube)"/>
+  </a>
+</div>
 
 ---
 
