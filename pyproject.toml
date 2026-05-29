@@ -14,8 +14,16 @@ dependencies = [
     "cryptography>=48.0.0",
     # Security floors — make CVE-driven minimums explicit so future resolves
     # can't silently downgrade. See PR description for advisory IDs.
-    "gitpython>=3.1.49",
+    "gitpython>=3.1.50",
     "python-multipart>=0.0.29",
+    # GHSA-qccp-gfcp-xxvc + GHSA-mf9v-mfxr-j63j — urllib3 < 2.7.0 leaks
+    # sensitive headers across proxied redirects and bypasses the
+    # decompression-bomb safeguard. urllib3 is transitive; pin a floor
+    # so dependency resolves don't drift back.
+    "urllib3>=2.7.0",
+    # GHSA-65pc-fj4g-8rjx — idna < 3.15 lets crafted inputs bypass the
+    # CVE-2024-3651 fix in idna.encode(). idna is transitive; pin a floor.
+    "idna>=3.15",
     # Upper bound is forced by our transitive ecosystem: both mlflow-skinny 3.11.x
     # AND opentelemetry-api 1.41.x cap importlib-metadata<8.8. Dependabot tried
     # to bump it to 9.0.0 (PR #3) and broke every deploy — explicit ceiling so

@@ -61,7 +61,7 @@ flask-socketio==5.6.1
     # via coda (pyproject.toml)
 gitdb==4.0.12
     # via gitpython
-gitpython==3.1.49
+gitpython==3.1.50
     # via
     #   coda (pyproject.toml)
     #   mlflow-skinny
@@ -78,8 +78,9 @@ httpx==0.28.1
     # via mcp
 httpx-sse==0.4.3
     # via mcp
-idna==3.13
+idna==3.16
     # via
+    #   coda (pyproject.toml)
     #   anyio
     #   httpx
     #   requests
@@ -208,8 +209,10 @@ typing-inspection==0.4.2
     #   mcp
     #   pydantic
     #   pydantic-settings
-urllib3==2.6.3
-    # via requests
+urllib3==2.7.0
+    # via
+    #   coda (pyproject.toml)
+    #   requests
 uvicorn==0.46.0
     # via
     #   mcp
