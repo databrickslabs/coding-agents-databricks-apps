@@ -18,6 +18,16 @@
   </video>
 </div>
 
+### 📺 Setup walkthrough (6 min)
+
+Want to see CoDA installed and running end-to-end? Click the thumbnail to watch the full walkthrough on YouTube.
+
+<div align="center">
+  <a href="https://youtu.be/YqDq4LBljGM">
+    <img src="docs/screenshots/setup-walkthrough-poster.jpg" width="900" alt="Getting Started with CoDA — 6-minute setup walkthrough (click to watch on YouTube)"/>
+  </a>
+</div>
+
 ## Screenshots
 
 <div align="center">
