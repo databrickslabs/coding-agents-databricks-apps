@@ -23,7 +23,7 @@ blinker==1.9.0
     #   flask-socketio
 cachetools==7.0.6
     # via mlflow-skinny
-certifi==2026.4.22
+certifi==2026.5.20
     # via
     #   httpcore
     #   httpx
