@@ -53,7 +53,7 @@ Every agent installs at boot and connects to your **Databricks AI Gateway** — 
 Want to see CoDA installed and running end-to-end? Click the thumbnail to watch the full walkthrough on YouTube.
 
 <div align="center">
-  <a href="https://youtu.be/YqDq4LBljGM">
+  <a href="https://youtu.be/ofqBQ26_e9o">
     <img src="docs/screenshots/setup-walkthrough-poster.jpg" width="900" alt="Getting Started with CoDA — 6-minute setup walkthrough (click to watch on YouTube)"/>
   </a>
 </div>
@@ -184,16 +184,6 @@ Open [http://localhost:8000](http://localhost:8000) — type `claude`, `codex`, 
 
 ---
 
-## Why This Exists
-
-On Jan 26, 2026, Andrej Karpathy made [this viral tweet](https://x.com/karpathy/status/2015883857489522876?s=46&t=tEsLJXJnGFIkaWs-Bhs1yA) about the future of coding. Boris Cherny, the creator of Claude Code, responded:
-
-![Boris Cherny's response](image.png)
-
-This template repo opens that vision up for every Databricks user — no IDE setup, no local installs. Click "Use this template", deploy to Databricks Apps, and start coding with AI in your browser.
-
----
-
 <details>
 <summary><strong>🧠 All 39 Skills</strong></summary>
 
@@ -274,8 +264,13 @@ This template repo opens that vision up for every Databricks user — no IDE set
 | `/` | GET | Terminal UI with inline setup progress |
 | `/health` | GET | Health check with session count and setup status |
 | `/api/setup-status` | GET | Setup progress for the UI |
+| `/api/app-state` | GET | Persisted app state (owner, last rotation) |
 | `/api/version` | GET | App version |
+| `/api/sessions` | GET | List active (non-exited) sessions with metadata |
+| `/api/pat-status` | GET | Whether a valid, usable PAT is currently configured |
+| `/api/configure-pat` | POST | Interactive first-session PAT setup |
 | `/api/session` | POST | Create new terminal session |
+| `/api/session/attach` | POST | Reattach to an existing session (replays buffered output) |
 | `/api/input` | POST | Send input to terminal |
 | `/api/output` | POST | Poll for terminal output (single session) |
 | `/api/output-batch` | POST | Batch poll output for multiple sessions |
@@ -307,13 +302,22 @@ This template repo opens that vision up for every Databricks user — no IDE set
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `DATABRICKS_TOKEN` | No | Optional. If not set, the app prompts for a token on first session. Auto-rotated every 10 minutes |
 | `HOME` | Yes | Set to `/app/python/source_code` in app.yaml |
+| `DATABRICKS_TOKEN` | No | Optional. If not set, the app prompts for a token on first session. Auto-rotated every 10 minutes |
+| `DATABRICKS_GATEWAY_HOST` | No | AI Gateway URL override. Auto-discovered from `DATABRICKS_WORKSPACE_ID` if unset |
 | `ANTHROPIC_MODEL` | No | Claude model name (default: `databricks-claude-opus-4-7`) |
 | `CODEX_MODEL` | No | Codex model name (default: `databricks-gpt-5-5`) |
 | `GEMINI_MODEL` | No | Gemini model name (default: `databricks-gemini-2-5-pro`) |
-| `DATABRICKS_GATEWAY_HOST` | No | AI Gateway URL override. Auto-discovered from `DATABRICKS_WORKSPACE_ID` if unset |
-| `MLFLOW_TRACING_ENABLED` | No | Set to `"true"` to enable MLflow tracing for Claude and Codex in one switch (default `"false"`) |
+| `HERMES_MODEL` | No | Hermes model name (default: `databricks-claude-opus-4-6`) |
+| `HERMES_FALLBACK_MODEL` | No | Fallback model if `HERMES_MODEL` is unavailable in this workspace's geo |
+| `ENABLE_HERMES` | No | Set to `"false"` to skip Hermes Agent install. Other CLIs are unaffected. Default `"true"` |
+| `MAX_CONCURRENT_SESSIONS` | No | Cap on simultaneous PTY sessions per worker (default `5`) |
+| `CLAUDE_CODE_DISABLE_AUTO_MEMORY` | No | Pass-through to Claude Code's auto-memory feature (default `0`) |
+| `MLFLOW_TRACING_ENABLED` | No | Set to `"true"` to enable MLflow tracing for Claude, Codex, and Gemini in one switch (default `"false"`) |
+| `DEEPWIKI_MCP_URL` | No | Override or disable the DeepWiki MCP server (set to `""` to remove) |
+| `EXA_MCP_URL` | No | Override or disable the Exa MCP server (set to `""` to remove) |
+| `TEAM_MEMORY_MCP_URL` | No | Optional shared-org-memory MCP server URL |
+| `ENTERPRISE_MODE` | No | When `"true"`, logs a banner and warns on missing recommended mirrors. See [enterprise docs](docs/enterprise.md) for the full enterprise contract (JFrog mirrors, custom CA bundle, corporate proxy, etc.) |
 
 ### Security Model
 
