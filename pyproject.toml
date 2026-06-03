@@ -61,8 +61,3 @@ dev = [
 # This gives the community time to catch supply-chain issues before they land here.
 # Bump this date when you intentionally need a newer release.
 exclude-newer = "7 days"
-
-[tool.uv.sources]
-# Direct GitHub installs — workaround for Databricks internal PyPI proxy gaps.
-# Remove these once the proxy has current versions.
-requests = { git = "https://github.com/psf/requests", rev = "v2.33.0" }
