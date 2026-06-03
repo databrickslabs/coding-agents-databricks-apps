@@ -163,7 +163,7 @@ referencing==0.37.0
     # via
     #   jsonschema
     #   jsonschema-specifications
-requests @ git+https://github.com/psf/requests@bc04dfd6dad4cb02cd92f5daa81eb562d280a761
+requests==2.33.0
     # via
     #   coda (pyproject.toml)
     #   databricks-sdk
