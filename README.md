@@ -11,9 +11,7 @@
 ---
 
 <div align="center">
-  <video src="https://github.com/user-attachments/assets/40405b46-532a-4f14-82e3-414cb3744684" controls width="900">
-    Your browser doesn't render embedded MP4s here — <a href="docs/videos/CoDAFunkyPromo.mp4">download or open the video directly</a>.
-  </video>
+  <video src="https://github.com/user-attachments/assets/40405b46-532a-4f14-82e3-414cb3744684" controls width="900"></video>
 </div>
 
 ## Screenshots
