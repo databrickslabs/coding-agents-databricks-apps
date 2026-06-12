@@ -151,9 +151,13 @@ config_path = codex_dir / "config.toml"
 config_path.write_text(config_content)
 print(f"Codex CLI configured: {config_path}")
 
-# 4. Write OPENAI_API_KEY to shell profile for Codex to pick up
-# Codex reads from env_key specified in config (OPENAI_API_KEY)
-# We set this via the environment, but also write a .env file as backup
+# 4. Write OPENAI_API_KEY to ~/.codex/.env — the ONLY token source for Codex.
+# config.toml's env_key points Codex at OPENAI_API_KEY, and Codex loads this
+# file at process start. cli_auth._update_codex() rewrites the line on every
+# PAT rotation (10-min cycle, old token revoked), so each new Codex session
+# reads the current token. Do NOT export OPENAI_API_KEY from a shell profile
+# or app.yaml: a frozen env copy would shadow this file and pin Codex to a
+# dead token after the next rotation.
 env_lines = [
     "# Databricks token for Codex CLI (OpenAI-compatible endpoint)",
     f"OPENAI_API_KEY={auth_token}",
