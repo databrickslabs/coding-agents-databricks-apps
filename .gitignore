@@ -50,3 +50,5 @@ tests/e2e/.cache/
 # Playwright browser snapshots / traces from failed runs
 tests/e2e/test-results/
 tests/e2e/playwright-report/
+.gstack/
+.omc/
