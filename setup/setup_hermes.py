@@ -129,13 +129,13 @@ claude_skills_dir = Path("/app/python/source_code/.claude/skills")
 external_skills = [str(claude_skills_dir)] if claude_skills_dir.exists() else []
 
 model_catalog = [
+    "databricks-claude-opus-4-7",
     "databricks-claude-opus-4-6",
     "databricks-claude-sonnet-4-6",
     "databricks-claude-haiku-4-5",
     "databricks-gpt-5-3-codex",
     "databricks-gpt-5-1-codex-max",
     "databricks-gemini-2-5-flash",
-    "databricks-gemini-2-5-pro",
     "databricks-gemini-2-5-pro",
 ]
 

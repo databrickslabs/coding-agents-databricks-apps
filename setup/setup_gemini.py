@@ -9,6 +9,13 @@ PR #11893 (by Databricks engineer AarushiShah) added auto-detection of *.databri
 URLs, switching to Bearer token auth automatically.
 
 Auth: GEMINI_API_KEY_AUTH_MECHANISM=bearer sends Databricks PAT as Bearer token.
+
+Routing: Gemini CLI points at the local content-filter proxy (started by
+setup_proxy.py), which forwards /gemini/* to the Databricks Gemini route.
+Newer gemini-cli releases attach `id` to functionCall/functionResponse
+history parts; the Databricks route rejects unknown proto fields with
+400 BAD_REQUEST ('Unknown name "id" ... Cannot find field') — the proxy
+strips them, and also re-injects a fresh PAT after token rotation.
 """
 import os
 import json
@@ -16,6 +23,10 @@ import subprocess
 from pathlib import Path
 
 from utils import adapt_instructions_file, ensure_https, get_gateway_host, get_npm_version
+
+# Local content-filter proxy — strips request fields the Databricks Gemini
+# route rejects (see module docstring). Same proxy OpenCode routes through.
+CONTENT_FILTER_PROXY_URL = "http://127.0.0.1:4000"
 
 # Set HOME if not properly set
 if not os.environ.get("HOME") or os.environ["HOME"] == "/":
@@ -82,13 +93,15 @@ if gateway_host and not gateway_token:
     gateway_host = ""
 
 if gateway_host:
-    gemini_base_url = f"{gateway_host}/gemini"
     auth_token = gateway_token
-    print(f"Using Databricks AI Gateway: {gateway_host}")
+    print(f"Using Databricks AI Gateway: {gateway_host} (via content-filter proxy)")
 else:
-    gemini_base_url = f"{host}/serving-endpoints/google"
     auth_token = token
-    print(f"Using Databricks Host: {host}")
+    print(f"Using Databricks Host: {host} (via content-filter proxy)")
+
+# All Gemini CLI traffic goes through the local proxy; setup_proxy.py wires
+# the matching upstream (gateway /gemini or /serving-endpoints/google).
+gemini_base_url = f"{CONTENT_FILTER_PROXY_URL}/gemini"
 
 # 3. Create ~/.gemini directory and configure environment
 gemini_dir = home / ".gemini"

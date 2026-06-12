@@ -1,11 +1,15 @@
 #!/usr/bin/env python
-"""Start the content-filter proxy between OpenCode and Databricks.
+"""Start the content-filter proxy between local coding agents and Databricks.
 
-Fixes known OpenCode bugs by sanitizing requests and responses:
+OpenCode (OpenAI-compatible traffic) and Gemini CLI (Gemini-native traffic
+under /gemini/*) both route through it. Fixes known agent/endpoint
+incompatibilities by sanitizing requests and responses:
   - Empty text content blocks (OpenCode #5028)
   - Orphaned tool_result blocks with no matching tool_use
   - Databricks 'databricks-tool-call' name mangling
   - Incorrect finish_reason on tool call responses
+  - OpenAI reasoning-era params Databricks rejects (reasoning_effort et al.)
+  - Gemini functionCall/functionResponse `id` fields the /gemini route rejects
 
 See docs/plans/2026-03-11-litellm-empty-content-blocks-design.md
 """
@@ -26,13 +30,25 @@ HEALTH_TIMEOUT = 15
 HEALTH_POLL_INTERVAL = 0.5
 
 
+def resolve_upstream_bases(gateway_host, host):
+    """Upstream base pair (openai_compatible, gemini_native) for the proxy.
+
+    Mirrors the direct base URLs the agent setups pointed at before routing
+    through the proxy: setup_opencode used mlflow/v1 | serving-endpoints and
+    setup_gemini used gemini | serving-endpoints/google.
+    """
+    if gateway_host:
+        return f"{gateway_host}/mlflow/v1", f"{gateway_host}/gemini"
+    return f"{host}/serving-endpoints", f"{host}/serving-endpoints/google"
+
+
 def resolve_proxy_script_path():
     """Absolute path to the content_filter_proxy.py server this launcher runs.
 
     content_filter_proxy.py lives at the REPO ROOT, not in this setup/ directory.
     This file (setup_proxy.py) was moved into setup/ in git fec2152 without
     updating the lookup; resolving from setup/ pointed Popen at a nonexistent
-    file, so the proxy never started and OpenCode (the only agent that routes
+    file, so the proxy never started and OpenCode (then the only agent routing
     through 127.0.0.1:4000) failed with "Cannot connect to API". Resolve from
     the parent of setup/ so the path tracks the proxy's real location.
     """
@@ -87,13 +103,13 @@ def main():
         print("Warning: DATABRICKS_TOKEN not set, skipping proxy setup")
         sys.exit(0)
 
-    # Determine the upstream base URL
+    # Determine the upstream base URLs (OpenAI-compatible + Gemini-native)
+    upstream_base, gemini_upstream_base = resolve_upstream_bases(gateway_host, host)
     if gateway_host:
-        upstream_base = f"{gateway_host}/mlflow/v1"
         print(f"Content-filter proxy will forward to AI Gateway: {gateway_host}")
     else:
-        upstream_base = f"{host}/serving-endpoints"
         print(f"Content-filter proxy will forward to: {host}/serving-endpoints")
+    print(f"Gemini-native requests (/gemini/*) will forward to: {gemini_upstream_base}")
 
     # Start proxy as a background process
     proxy_script = resolve_proxy_script_path()
@@ -102,6 +118,7 @@ def main():
 
     env = os.environ.copy()
     env["PROXY_UPSTREAM_BASE"] = upstream_base
+    env["PROXY_GEMINI_UPSTREAM_BASE"] = gemini_upstream_base
     env["PROXY_HOST"] = PROXY_HOST
     env["PROXY_PORT"] = str(PROXY_PORT)
 

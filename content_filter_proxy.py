@@ -1,10 +1,15 @@
 #!/usr/bin/env python
-"""Lightweight HTTP proxy that sanitizes requests and responses between OpenCode and Databricks.
+"""Lightweight HTTP proxy that sanitizes requests and responses between local
+coding agents (OpenCode, Gemini CLI) and Databricks.
 
 Request-side fixes:
   - Strips empty/whitespace-only text content blocks (OpenCode #5028)
   - Strips orphaned tool_result blocks with no matching tool_use
   - Removes empty messages after filtering
+  - Strips OpenAI reasoning-era params Databricks rejects with 400
+    (reasoning_effort et al. — sent by OpenCode after a model switch)
+  - Strips `id` from Gemini functionCall/functionResponse parts, which the
+    Databricks /gemini route rejects with 400 'Unknown name "id"'
 
 Response-side fixes:
   - Remaps 'databricks-tool-call' back to real tool names
@@ -28,6 +33,10 @@ from socketserver import ThreadingMixIn
 import requests
 
 UPSTREAM_BASE = os.environ.get("PROXY_UPSTREAM_BASE", "")
+# Gemini-native upstream (the gateway /gemini route). Requests arriving under
+# /gemini/* are forwarded here; everything else goes to UPSTREAM_BASE.
+GEMINI_UPSTREAM_BASE = os.environ.get("PROXY_GEMINI_UPSTREAM_BASE", "")
+GEMINI_PATH_PREFIX = "/gemini"
 LISTEN_HOST = os.environ.get("PROXY_HOST", "127.0.0.1")
 LISTEN_PORT = int(os.environ.get("PROXY_PORT", "4000"))
 
@@ -88,6 +97,15 @@ GEMINI_UNSUPPORTED_REQUEST_KEYS = {
     "stream_options",
 }
 
+# OpenAI reasoning-era params that Databricks chat-completions rejects with
+# 400 "Extra inputs are not permitted" (strict request validation). OpenCode
+# sends reasoning_effort after a model switch.
+DATABRICKS_UNSUPPORTED_OPENAI_PARAMS = {
+    "reasoning_effort",
+    "reasoning",
+    "verbosity",
+}
+
 
 # ---------------------------------------------------------------------------
 # Gemini compatibility
@@ -132,6 +150,73 @@ def sanitize_tool_schemas(data):
     data.pop("$schema", None)
 
     return data
+
+
+def strip_unsupported_openai_params(data):
+    """Drop OpenAI-only params the Databricks chat-completions route rejects."""
+    for key in DATABRICKS_UNSUPPORTED_OPENAI_PARAMS:
+        if key in data:
+            log.info(f"  Stripped unsupported param: {key}")
+            del data[key]
+    return data
+
+
+_GEMINI_FUNCTION_PART_KEYS = (
+    "functionCall", "function_call", "functionResponse", "function_response",
+)
+
+
+def sanitize_gemini_contents(data):
+    """Strip `id` from functionCall/functionResponse parts in Gemini-native bodies.
+
+    gemini-cli attaches tool-call ids to conversation-history parts; the
+    Databricks /gemini route validates against a proto without that field and
+    400s with 'Unknown name "id" ... Cannot find field'. The ids are client-
+    side bookkeeping only — dropping them on the wire is safe.
+    """
+    contents = data.get("contents")
+    if not isinstance(contents, list):
+        return data
+    for content in contents:
+        if not isinstance(content, dict):
+            continue
+        parts = content.get("parts")
+        if not isinstance(parts, list):
+            continue
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            for key in _GEMINI_FUNCTION_PART_KEYS:
+                func = part.get(key)
+                if isinstance(func, dict) and "id" in func:
+                    del func["id"]
+                    log.info(f"  Stripped id from {key} part")
+    return data
+
+
+def resolve_upstream_url(path):
+    """Map an incoming request path to its upstream URL.
+
+    /gemini/* forwards to the Gemini-native upstream with the prefix
+    stripped; everything else (OpenCode's OpenAI-compatible traffic) keeps
+    the original UPSTREAM_BASE + path mapping.
+    """
+    if path == GEMINI_PATH_PREFIX or path.startswith(GEMINI_PATH_PREFIX + "/"):
+        if GEMINI_UPSTREAM_BASE:
+            return GEMINI_UPSTREAM_BASE + path[len(GEMINI_PATH_PREFIX):]
+        log.warning("PROXY_GEMINI_UPSTREAM_BASE not set; forwarding /gemini path to default upstream")
+    return UPSTREAM_BASE + path
+
+
+def _is_streaming_request(path, data):
+    """True when the response will be SSE.
+
+    Gemini signals streaming in the URL (:streamGenerateContent), not via a
+    "stream" body field like chat-completions.
+    """
+    if isinstance(data, dict) and data.get("stream", False):
+        return True
+    return "streamGenerateContent" in path
 
 
 # ---------------------------------------------------------------------------
@@ -525,14 +610,20 @@ class ProxyHandler(BaseHTTPRequestHandler):
         log.info(f"POST {self.path} ({content_length} bytes)")
 
         # --- Sanitize request ---
+        parsed_body = None
         try:
             data = json.loads(body)
+            parsed_body = data
             if "messages" in data:
                 before = len(data["messages"])
                 data["messages"] = sanitize_messages(data["messages"])
                 after = len(data["messages"])
                 if before != after:
                     log.info(f"Messages: {before} -> {after}")
+                data = strip_unsupported_openai_params(data)
+            if "contents" in data:
+                # Gemini-native body (gemini-cli)
+                data = sanitize_gemini_contents(data)
             # Strip unsupported schema keys from tool definitions (all models)
             data = sanitize_tool_schemas(data)
             body = json.dumps(data).encode()
@@ -541,7 +632,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             pass  # Forward as-is if not valid JSON
 
         # Build upstream URL
-        upstream_url = UPSTREAM_BASE + self.path
+        upstream_url = resolve_upstream_url(self.path)
 
         # Forward headers (inject fresh token to survive PAT rotation)
         headers = {}
@@ -556,12 +647,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
         if fresh_token:
             headers["Authorization"] = f"Bearer {fresh_token}"
 
-        # Detect streaming
-        is_stream = False
-        try:
-            is_stream = json.loads(body).get("stream", False)
-        except Exception:
-            pass
+        # Detect streaming (Gemini signals it in the URL, not the body)
+        is_stream = bool(_is_streaming_request(self.path, parsed_body))
 
         try:
             resp = requests.post(
@@ -674,6 +761,9 @@ if __name__ == "__main__":
     server = ThreadedHTTPServer((LISTEN_HOST, LISTEN_PORT), ProxyHandler)
     print(f"Content-filter proxy listening on {LISTEN_HOST}:{LISTEN_PORT}")
     print(f"Forwarding to: {UPSTREAM_BASE}")
-    print(f"Fixes: empty text blocks, orphaned tool_results, tool name remapping, finish_reason")
+    if GEMINI_UPSTREAM_BASE:
+        print(f"Forwarding /gemini/* to: {GEMINI_UPSTREAM_BASE}")
+    print("Fixes: empty text blocks, orphaned tool_results, tool name remapping, "
+          "finish_reason, unsupported params (reasoning_effort), gemini part ids")
     sys.stdout.flush()
     server.serve_forever()

@@ -554,3 +554,162 @@ class TestGetFreshToken:
         with mock.patch("content_filter_proxy._DATABRICKSCFG_PATH", "/nonexistent"):
             token = _get_fresh_token()
         assert token is None
+
+
+# ---------------------------------------------------------------------------
+# strip_unsupported_openai_params — PR #67 review: OpenCode sends
+# reasoning_effort after a model switch; Databricks chat-completions rejects
+# unknown params with 400 "Extra inputs are not permitted".
+# ---------------------------------------------------------------------------
+
+class TestStripUnsupportedOpenAIParams:
+    def test_strips_reasoning_effort(self):
+        from content_filter_proxy import strip_unsupported_openai_params
+        data = {
+            "model": "databricks-claude-opus-4-7",
+            "messages": [{"role": "user", "content": "hi"}],
+            "reasoning_effort": "medium",
+        }
+        result = strip_unsupported_openai_params(data)
+        assert "reasoning_effort" not in result
+
+    def test_strips_reasoning_and_verbosity(self):
+        from content_filter_proxy import strip_unsupported_openai_params
+        data = {"model": "m", "messages": [], "reasoning": {"effort": "high"}, "verbosity": "low"}
+        result = strip_unsupported_openai_params(data)
+        assert "reasoning" not in result
+        assert "verbosity" not in result
+
+    def test_preserves_supported_params(self):
+        from content_filter_proxy import strip_unsupported_openai_params
+        data = {
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "temperature": 0.5,
+            "max_tokens": 100,
+            "stream": True,
+            "tools": [],
+            "tool_choice": "auto",
+        }
+        result = strip_unsupported_openai_params(dict(data))
+        assert result == data
+
+
+# ---------------------------------------------------------------------------
+# sanitize_gemini_contents — PR #67 review: gemini-cli >= 0.4x attaches `id`
+# to functionCall/functionResponse parts; the Databricks /gemini route rejects
+# them with 400 'Unknown name "id" at contents[].parts[].function_call'.
+# ---------------------------------------------------------------------------
+
+class TestSanitizeGeminiContents:
+    def test_strips_id_from_function_call_camel(self):
+        from content_filter_proxy import sanitize_gemini_contents
+        data = {
+            "contents": [
+                {"role": "model", "parts": [
+                    {"functionCall": {"id": "call_1", "name": "bash", "args": {"cmd": "ls"}}},
+                ]},
+            ],
+        }
+        result = sanitize_gemini_contents(data)
+        fc = result["contents"][0]["parts"][0]["functionCall"]
+        assert "id" not in fc
+        assert fc["name"] == "bash"
+        assert fc["args"] == {"cmd": "ls"}
+
+    def test_strips_id_from_function_response_camel(self):
+        from content_filter_proxy import sanitize_gemini_contents
+        data = {
+            "contents": [
+                {"role": "user", "parts": [
+                    {"functionResponse": {"id": "call_1", "name": "bash", "response": {"output": "ok"}}},
+                ]},
+            ],
+        }
+        result = sanitize_gemini_contents(data)
+        fr = result["contents"][0]["parts"][0]["functionResponse"]
+        assert "id" not in fr
+        assert fr["response"] == {"output": "ok"}
+
+    def test_strips_id_from_snake_case_keys(self):
+        from content_filter_proxy import sanitize_gemini_contents
+        data = {
+            "contents": [
+                {"role": "model", "parts": [{"function_call": {"id": "c1", "name": "f"}}]},
+                {"role": "user", "parts": [{"function_response": {"id": "c1", "name": "f", "response": {}}}]},
+            ],
+        }
+        result = sanitize_gemini_contents(data)
+        assert "id" not in result["contents"][0]["parts"][0]["function_call"]
+        assert "id" not in result["contents"][1]["parts"][0]["function_response"]
+
+    def test_tolerates_non_dict_contents_and_parts(self):
+        from content_filter_proxy import sanitize_gemini_contents
+        data = {"contents": ["plain", {"role": "user", "parts": ["text", {"text": "hi"}]}, {"role": "x"}]}
+        result = sanitize_gemini_contents(data)
+        assert result == data
+
+    def test_noop_without_contents(self):
+        from content_filter_proxy import sanitize_gemini_contents
+        data = {"messages": [{"role": "user", "content": "hi"}]}
+        assert sanitize_gemini_contents(data) == data
+
+
+# ---------------------------------------------------------------------------
+# resolve_upstream_url — /gemini/* requests forward to the gateway's Gemini
+# route; everything else keeps the original OpenAI-compatible upstream.
+# ---------------------------------------------------------------------------
+
+class TestResolveUpstreamUrl:
+    def test_gemini_path_routes_to_gemini_upstream(self):
+        import content_filter_proxy as cfp
+        with mock.patch.object(cfp, "UPSTREAM_BASE", "https://gw/mlflow/v1"), \
+             mock.patch.object(cfp, "GEMINI_UPSTREAM_BASE", "https://gw/gemini"):
+            url = cfp.resolve_upstream_url(
+                "/gemini/v1beta/models/databricks-gemini-2-5-pro:streamGenerateContent?alt=sse"
+            )
+        assert url == "https://gw/gemini/v1beta/models/databricks-gemini-2-5-pro:streamGenerateContent?alt=sse"
+
+    def test_non_gemini_path_routes_to_default_upstream(self):
+        import content_filter_proxy as cfp
+        with mock.patch.object(cfp, "UPSTREAM_BASE", "https://gw/mlflow/v1"), \
+             mock.patch.object(cfp, "GEMINI_UPSTREAM_BASE", "https://gw/gemini"):
+            url = cfp.resolve_upstream_url("/chat/completions")
+        assert url == "https://gw/mlflow/v1/chat/completions"
+
+    def test_gemini_path_without_gemini_base_falls_back(self):
+        import content_filter_proxy as cfp
+        with mock.patch.object(cfp, "UPSTREAM_BASE", "https://gw/mlflow/v1"), \
+             mock.patch.object(cfp, "GEMINI_UPSTREAM_BASE", ""):
+            url = cfp.resolve_upstream_url("/gemini/v1beta/models/m:generateContent")
+        assert url == "https://gw/mlflow/v1/gemini/v1beta/models/m:generateContent"
+
+
+# ---------------------------------------------------------------------------
+# _is_streaming_request — Gemini signals streaming in the URL
+# (:streamGenerateContent?alt=sse), not via a "stream" body field.
+# ---------------------------------------------------------------------------
+
+class TestIsStreamingRequest:
+    def test_openai_stream_flag(self):
+        from content_filter_proxy import _is_streaming_request
+        assert _is_streaming_request("/chat/completions", {"stream": True}) is True
+
+    def test_openai_non_streaming(self):
+        from content_filter_proxy import _is_streaming_request
+        assert _is_streaming_request("/chat/completions", {"stream": False}) is False
+        assert _is_streaming_request("/chat/completions", {}) is False
+
+    def test_gemini_stream_generate_content_path(self):
+        from content_filter_proxy import _is_streaming_request
+        assert _is_streaming_request(
+            "/gemini/v1beta/models/m:streamGenerateContent?alt=sse", {}
+        ) is True
+
+    def test_gemini_unary_generate_content_path(self):
+        from content_filter_proxy import _is_streaming_request
+        assert _is_streaming_request("/gemini/v1beta/models/m:generateContent", {}) is False
+
+    def test_tolerates_unparsed_body(self):
+        from content_filter_proxy import _is_streaming_request
+        assert _is_streaming_request("/chat/completions", None) is False
