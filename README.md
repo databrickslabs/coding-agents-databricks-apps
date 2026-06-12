@@ -422,7 +422,7 @@ coding-agents-databricks-apps/
 ├── app_state.py                 # Shared app state (setup progress, session registry)
 ├── app.yaml                     # Databricks Apps deployment config (uvicorn entrypoint)
 ├── cli_auth.py                  # Interactive PAT setup + CLI credential writer
-├── content_filter_proxy.py      # Proxy that sanitises OpenCode + Gemini CLI traffic for Databricks endpoints
+├── content_filter_proxy.py      # Proxy: sanitises OpenCode/Gemini traffic, transparently relays Codex, injects rotated PATs
 ├── gunicorn.conf.py             # Legacy WSGI-only config (unused in production; uvicorn is the entrypoint)
 ├── pat_rotator.py               # Background PAT auto-rotation (10-min cycle)
 ├── pyproject.toml               # Package metadata + uv config (supply-chain guardrails)

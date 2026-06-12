@@ -43,17 +43,19 @@ def _read_setup_source(name):
 class TestResolveUpstreamBases:
     def test_gateway_mode(self):
         mod = _load_setup_proxy()
-        upstream, gemini = mod.resolve_upstream_bases(
+        upstream, gemini, openai = mod.resolve_upstream_bases(
             "https://123.ai-gateway.cloud.databricks.com", "https://ws.cloud.databricks.com"
         )
         assert upstream == "https://123.ai-gateway.cloud.databricks.com/mlflow/v1"
         assert gemini == "https://123.ai-gateway.cloud.databricks.com/gemini"
+        assert openai == "https://123.ai-gateway.cloud.databricks.com/openai/v1"
 
     def test_host_fallback_mode(self):
         mod = _load_setup_proxy()
-        upstream, gemini = mod.resolve_upstream_bases("", "https://ws.cloud.databricks.com")
+        upstream, gemini, openai = mod.resolve_upstream_bases("", "https://ws.cloud.databricks.com")
         assert upstream == "https://ws.cloud.databricks.com/serving-endpoints"
         assert gemini == "https://ws.cloud.databricks.com/serving-endpoints/google"
+        assert openai == "https://ws.cloud.databricks.com/serving-endpoints"
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +74,25 @@ class TestGeminiRoutesThroughProxy:
         )
         assert 'CONTENT_FILTER_PROXY_URL = "http://127.0.0.1:4000"' in src, why
         assert '{CONTENT_FILTER_PROXY_URL}/gemini' in src, why
+
+
+# ---------------------------------------------------------------------------
+# setup_codex — must point Codex at the proxy's transparent /openai prefix so
+# long-running Codex sessions survive PAT rotation (fresh token per request)
+# without losing any Responses-API capability (the proxy does not munge
+# /openai traffic).
+# ---------------------------------------------------------------------------
+
+class TestCodexRoutesThroughProxy:
+    def test_base_url_is_proxy_openai_prefix(self):
+        src = _read_setup_source("setup_codex.py")
+        why = (
+            "setup_codex.py must point base_url at the content-filter proxy "
+            "(http://127.0.0.1:4000 + /openai prefix). The proxy relays "
+            "/openai/* verbatim with a fresh rotated PAT injected per request."
+        )
+        assert 'CONTENT_FILTER_PROXY_URL = "http://127.0.0.1:4000"' in src, why
+        assert '{CONTENT_FILTER_PROXY_URL}/openai' in src, why
 
 
 # ---------------------------------------------------------------------------
@@ -103,3 +124,23 @@ class TestHermesModelCatalog:
         assert "databricks-claude-opus-4-6" in catalog, (
             "Hermes fallback model missing from known_models"
         )
+
+
+# ---------------------------------------------------------------------------
+# Syntax gate — the source-pin tests above read setup scripts as TEXT and can
+# pass on syntactically broken files (observed live: a constant injected
+# inside a parenthesized import left setup_codex.py unimportable while every
+# substring assertion still passed). The setup scripts execute at import, so
+# they can't be imported here — but they must at least parse.
+# ---------------------------------------------------------------------------
+
+class TestSetupScriptsParse:
+    def test_all_setup_scripts_are_valid_python(self):
+        setup_dir = os.path.join(REPO_ROOT, "setup")
+        scripts = sorted(f for f in os.listdir(setup_dir) if f.endswith(".py"))
+        assert scripts, "no setup scripts found under setup/"
+        for name in scripts:
+            try:
+                ast.parse(_read_setup_source(name), filename=name)
+            except SyntaxError as e:
+                raise AssertionError(f"setup/{name} does not parse: {e}") from e

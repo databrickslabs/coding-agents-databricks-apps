@@ -31,15 +31,24 @@ HEALTH_POLL_INTERVAL = 0.5
 
 
 def resolve_upstream_bases(gateway_host, host):
-    """Upstream base pair (openai_compatible, gemini_native) for the proxy.
+    """Upstream base triple (openai_compatible, gemini_native, openai_native).
 
     Mirrors the direct base URLs the agent setups pointed at before routing
-    through the proxy: setup_opencode used mlflow/v1 | serving-endpoints and
-    setup_gemini used gemini | serving-endpoints/google.
+    through the proxy: setup_opencode used mlflow/v1 | serving-endpoints,
+    setup_gemini used gemini | serving-endpoints/google, and setup_codex
+    used openai/v1 | serving-endpoints (relayed transparently).
     """
     if gateway_host:
-        return f"{gateway_host}/mlflow/v1", f"{gateway_host}/gemini"
-    return f"{host}/serving-endpoints", f"{host}/serving-endpoints/google"
+        return (
+            f"{gateway_host}/mlflow/v1",
+            f"{gateway_host}/gemini",
+            f"{gateway_host}/openai/v1",
+        )
+    return (
+        f"{host}/serving-endpoints",
+        f"{host}/serving-endpoints/google",
+        f"{host}/serving-endpoints",
+    )
 
 
 def resolve_proxy_script_path():
@@ -103,13 +112,14 @@ def main():
         print("Warning: DATABRICKS_TOKEN not set, skipping proxy setup")
         sys.exit(0)
 
-    # Determine the upstream base URLs (OpenAI-compatible + Gemini-native)
-    upstream_base, gemini_upstream_base = resolve_upstream_bases(gateway_host, host)
+    # Determine the upstream base URLs (OpenAI-compat + Gemini-native + Codex)
+    upstream_base, gemini_upstream_base, openai_upstream_base = resolve_upstream_bases(gateway_host, host)
     if gateway_host:
         print(f"Content-filter proxy will forward to AI Gateway: {gateway_host}")
     else:
         print(f"Content-filter proxy will forward to: {host}/serving-endpoints")
     print(f"Gemini-native requests (/gemini/*) will forward to: {gemini_upstream_base}")
+    print(f"Codex requests (/openai/*) will relay transparently to: {openai_upstream_base}")
 
     # Start proxy as a background process
     proxy_script = resolve_proxy_script_path()
@@ -119,6 +129,7 @@ def main():
     env = os.environ.copy()
     env["PROXY_UPSTREAM_BASE"] = upstream_base
     env["PROXY_GEMINI_UPSTREAM_BASE"] = gemini_upstream_base
+    env["PROXY_OPENAI_UPSTREAM_BASE"] = openai_upstream_base
     env["PROXY_HOST"] = PROXY_HOST
     env["PROXY_PORT"] = str(PROXY_PORT)
 

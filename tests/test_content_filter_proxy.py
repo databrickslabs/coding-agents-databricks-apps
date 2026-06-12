@@ -713,3 +713,216 @@ class TestIsStreamingRequest:
     def test_tolerates_unparsed_body(self):
         from content_filter_proxy import _is_streaming_request
         assert _is_streaming_request("/chat/completions", None) is False
+
+
+# ---------------------------------------------------------------------------
+# Transparent relay for Codex (/openai/*) — token injection only, NO munging.
+# Codex uses the Responses API; its payloads (reasoning blocks, flat tools)
+# must pass through byte-identical so no capability is lost behind the proxy.
+# ---------------------------------------------------------------------------
+
+class TestIsTransparentPath:
+    def test_openai_paths_are_transparent(self):
+        from content_filter_proxy import is_transparent_path
+        assert is_transparent_path("/openai/responses") is True
+        assert is_transparent_path("/openai") is True
+
+    def test_sanitized_paths_are_not(self):
+        from content_filter_proxy import is_transparent_path
+        assert is_transparent_path("/chat/completions") is False
+        assert is_transparent_path("/gemini/v1beta/models/m:generateContent") is False
+        assert is_transparent_path("/openai-ish/other") is False
+
+
+class TestResolveUpstreamUrlOpenAI:
+    def test_openai_path_routes_to_openai_upstream(self):
+        import content_filter_proxy as cfp
+        with mock.patch.object(cfp, "UPSTREAM_BASE", "https://gw/mlflow/v1"), \
+             mock.patch.object(cfp, "OPENAI_UPSTREAM_BASE", "https://gw/openai/v1"):
+            url = cfp.resolve_upstream_url("/openai/responses")
+        assert url == "https://gw/openai/v1/responses"
+
+    def test_openai_path_without_base_falls_back(self):
+        import content_filter_proxy as cfp
+        with mock.patch.object(cfp, "UPSTREAM_BASE", "https://gw/mlflow/v1"), \
+             mock.patch.object(cfp, "OPENAI_UPSTREAM_BASE", ""):
+            url = cfp.resolve_upstream_url("/openai/responses")
+        assert url == "https://gw/mlflow/v1/openai/responses"
+
+
+class TestTransparentRelayLive:
+    """End-to-end through real sockets: fake upstream + live proxy server."""
+
+    @pytest.fixture()
+    def relay(self, tmp_path):
+        import http.server
+        import socketserver
+        import threading
+        import content_filter_proxy as cfp
+
+        upstream_state = {"requests": []}
+
+        class FakeUpstream(http.server.BaseHTTPRequestHandler):
+            def _record(self):
+                length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(length) if length else b""
+                upstream_state["requests"].append({
+                    "method": self.command,
+                    "path": self.path,
+                    "auth": self.headers.get("Authorization"),
+                    "body": body,
+                })
+
+            def do_POST(self):
+                self._record()
+                if "stream" in self.path:
+                    payload = (
+                        b'event: response.output_text.delta\r\n'
+                        b'data: {"response": {"big": 9007199254740993, "text": "hi"}}\r\n'
+                        b'\r\n'
+                    )
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.send_header("Content-Length", str(len(payload)))
+                    self.end_headers()
+                    self.wfile.write(payload)
+                else:
+                    body = b'{"ok": true}'
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+
+            def do_GET(self):
+                self._record()
+                body = b'{"data": []}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_DELETE(self):
+                self._record()
+                body = b'{"deleted": true}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *a):
+                pass
+
+        upstream = socketserver.ThreadingTCPServer(("127.0.0.1", 0), FakeUpstream)
+        upstream_port = upstream.server_address[1]
+        threading.Thread(target=upstream.serve_forever, daemon=True).start()
+
+        cfg = tmp_path / ".databrickscfg"
+        cfg.write_text("[DEFAULT]\nhost = https://x\ntoken = fresh-rotated-token\n")
+
+        patches = [
+            mock.patch.object(cfp, "UPSTREAM_BASE", f"http://127.0.0.1:{upstream_port}/chatbase"),
+            mock.patch.object(cfp, "OPENAI_UPSTREAM_BASE", f"http://127.0.0.1:{upstream_port}/openai/v1"),
+            mock.patch.object(cfp, "_DATABRICKSCFG_PATH", str(cfg)),
+        ]
+        for p in patches:
+            p.start()
+        cfp._TOKEN_CACHE["token"] = None
+        cfp._TOKEN_CACHE["read_at"] = 0.0
+
+        proxy = cfp.ThreadedHTTPServer(("127.0.0.1", 0), cfp.ProxyHandler)
+        proxy_port = proxy.server_address[1]
+        threading.Thread(target=proxy.serve_forever, daemon=True).start()
+
+        yield {"proxy_port": proxy_port, "upstream": upstream_state}
+
+        for p in patches:
+            p.stop()
+        cfp._TOKEN_CACHE["token"] = None
+        cfp._TOKEN_CACHE["read_at"] = 0.0
+        proxy.shutdown()
+        upstream.shutdown()
+        proxy.server_close()
+        upstream.server_close()
+
+    def test_post_body_passes_through_byte_identical(self, relay):
+        """Transparent mode must NOT strip reasoning/sanitize — Codex keeps
+        full Responses-API capability."""
+        import requests as rq
+        body = (
+            b'{"model": "databricks-gpt-5-3-codex", "input": [], '
+            b'"reasoning": {"effort": "high"}, "reasoning_effort": "high", '
+            b'"messages": [{"role": "user", "content": ""}]}'
+        )
+        resp = rq.post(
+            f"http://127.0.0.1:{relay['proxy_port']}/openai/responses",
+            data=body,
+            headers={"Authorization": "Bearer stale-startup-token",
+                     "Content-Type": "application/json"},
+            timeout=10,
+        )
+        assert resp.status_code == 200
+        seen = relay["upstream"]["requests"][-1]
+        assert seen["path"] == "/openai/v1/responses"
+        assert seen["body"] == body  # byte-identical — nothing stripped
+
+    def test_fresh_token_replaces_stale_client_token(self, relay):
+        import requests as rq
+        rq.post(
+            f"http://127.0.0.1:{relay['proxy_port']}/openai/responses",
+            data=b'{"input": []}',
+            headers={"Authorization": "Bearer stale-startup-token"},
+            timeout=10,
+        )
+        seen = relay["upstream"]["requests"][-1]
+        assert seen["auth"] == "Bearer fresh-rotated-token"
+
+    def test_get_is_forwarded(self, relay):
+        import requests as rq
+        resp = rq.get(
+            f"http://127.0.0.1:{relay['proxy_port']}/openai/models", timeout=10
+        )
+        assert resp.status_code == 200
+        assert resp.json() == {"data": []}
+        assert resp.raw.version == 11  # HTTP/1.1 — chunked framing is invalid on 1.0
+        seen = relay["upstream"]["requests"][-1]
+        assert seen["method"] == "GET"
+        assert seen["path"] == "/openai/v1/models"
+
+    def test_delete_is_forwarded(self, relay):
+        import requests as rq
+        resp = rq.delete(
+            f"http://127.0.0.1:{relay['proxy_port']}/openai/responses/resp_123",
+            timeout=10,
+        )
+        assert resp.status_code == 200
+        assert resp.json() == {"deleted": True}
+        seen = relay["upstream"]["requests"][-1]
+        assert seen["method"] == "DELETE"
+        assert seen["path"] == "/openai/v1/responses/resp_123"
+
+    def test_sse_stream_relayed_verbatim(self, relay):
+        import requests as rq
+        resp = rq.post(
+            f"http://127.0.0.1:{relay['proxy_port']}/openai/responses_stream",
+            data=b'{"input": [], "stream": true}',
+            timeout=10,
+        )
+        assert resp.status_code == 200
+        # Exact original data line — no JSON re-serialization (big int intact)
+        assert 'data: {"response": {"big": 9007199254740993, "text": "hi"}}' in resp.text
+
+    def test_sanitized_path_still_sanitizes(self, relay):
+        """Guard: transparent mode must not leak into the OpenCode path."""
+        import requests as rq
+        rq.post(
+            f"http://127.0.0.1:{relay['proxy_port']}/chat/completions",
+            json={"model": "m", "messages": [{"role": "user", "content": "hi"}],
+                  "reasoning_effort": "high"},
+            timeout=10,
+        )
+        seen = relay["upstream"]["requests"][-1]
+        assert seen["path"] == "/chatbase/chat/completions"
+        assert b"reasoning_effort" not in seen["body"]  # stripped as before

@@ -7,6 +7,13 @@ or via the AI Gateway at /openai/v1.
 
 Config: ~/.codex/config.toml with custom model_providers for Databricks.
 Auth: Bearer token via DATABRICKS_TOKEN environment variable.
+
+Routing: Codex points at the local content-filter proxy (started by
+setup_proxy.py), which relays /openai/* TRANSPARENTLY to the Databricks
+OpenAI route — no request/response munging, all HTTP methods. The proxy
+injects the freshest rotated PAT per request, so long-running Codex
+sessions survive the 10-minute PAT rotation (Codex itself reads
+OPENAI_API_KEY only once at process start).
 """
 import json
 import os
@@ -21,6 +28,10 @@ from utils import (
     get_npm_version,
     resolve_mlflow_experiment_id,
 )
+
+# Local content-filter proxy — transparent relay for /openai/* with fresh
+# rotated-PAT injection (see module docstring). Same proxy OpenCode/Gemini use.
+CONTENT_FILTER_PROXY_URL = "http://127.0.0.1:4000"
 
 
 def resolve_codex_catalog_src() -> Path:
@@ -100,13 +111,18 @@ if gateway_host and not gateway_token:
     gateway_host = ""
 
 if gateway_host:
-    codex_base_url = f"{gateway_host}/openai/v1"
     auth_token = gateway_token
-    print(f"Using Databricks AI Gateway: {gateway_host}")
+    print(f"Using Databricks AI Gateway: {gateway_host} (via content-filter proxy)")
 else:
-    codex_base_url = f"{host}/serving-endpoints"
     auth_token = token
-    print(f"Using Databricks Host: {host}")
+    print(f"Using Databricks Host: {host} (via content-filter proxy)")
+
+# All Codex traffic goes through the local proxy's transparent /openai
+# prefix; setup_proxy.py wires the matching upstream (gateway /openai/v1 or
+# /serving-endpoints). Transparent = byte-identical relay, so no
+# Responses-API capability is lost — only the Authorization header is
+# replaced with the freshest rotated PAT.
+codex_base_url = f"{CONTENT_FILTER_PROXY_URL}/openai"
 
 # 3. Create ~/.codex directory and write config.toml
 codex_dir = home / ".codex"
