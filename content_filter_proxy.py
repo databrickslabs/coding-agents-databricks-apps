@@ -1,10 +1,21 @@
 #!/usr/bin/env python
-"""Lightweight HTTP proxy that sanitizes requests and responses between OpenCode and Databricks.
+"""Lightweight HTTP proxy that sanitizes requests and responses between local
+coding agents (OpenCode, Gemini CLI) and Databricks.
 
 Request-side fixes:
   - Strips empty/whitespace-only text content blocks (OpenCode #5028)
   - Strips orphaned tool_result blocks with no matching tool_use
   - Removes empty messages after filtering
+  - Strips OpenAI reasoning-era params Databricks rejects with 400
+    (reasoning_effort et al. — sent by OpenCode after a model switch)
+  - Strips `id` from Gemini functionCall/functionResponse parts, which the
+    Databricks /gemini route rejects with 400 'Unknown name "id"'
+
+Transparent relay (/openai/*, used by Codex):
+  - NO munging at all — request and response bytes pass through verbatim so
+    the Responses API keeps full capability (reasoning blocks, flat tools,
+    future endpoints). The proxy only injects the freshest rotated PAT per
+    request, so long-running Codex sessions survive token rotation.
 
 Response-side fixes:
   - Remaps 'databricks-tool-call' back to real tool names
@@ -28,6 +39,14 @@ from socketserver import ThreadingMixIn
 import requests
 
 UPSTREAM_BASE = os.environ.get("PROXY_UPSTREAM_BASE", "")
+# Gemini-native upstream (the gateway /gemini route). Requests arriving under
+# /gemini/* are forwarded here; everything else goes to UPSTREAM_BASE.
+GEMINI_UPSTREAM_BASE = os.environ.get("PROXY_GEMINI_UPSTREAM_BASE", "")
+GEMINI_PATH_PREFIX = "/gemini"
+# OpenAI-native upstream (the gateway /openai/v1 route used by Codex).
+# Requests under /openai/* are relayed TRANSPARENTLY — token injection only.
+OPENAI_UPSTREAM_BASE = os.environ.get("PROXY_OPENAI_UPSTREAM_BASE", "")
+OPENAI_PATH_PREFIX = "/openai"
 LISTEN_HOST = os.environ.get("PROXY_HOST", "127.0.0.1")
 LISTEN_PORT = int(os.environ.get("PROXY_PORT", "4000"))
 
@@ -88,6 +107,15 @@ GEMINI_UNSUPPORTED_REQUEST_KEYS = {
     "stream_options",
 }
 
+# OpenAI reasoning-era params that Databricks chat-completions rejects with
+# 400 "Extra inputs are not permitted" (strict request validation). OpenCode
+# sends reasoning_effort after a model switch.
+DATABRICKS_UNSUPPORTED_OPENAI_PARAMS = {
+    "reasoning_effort",
+    "reasoning",
+    "verbosity",
+}
+
 
 # ---------------------------------------------------------------------------
 # Gemini compatibility
@@ -132,6 +160,83 @@ def sanitize_tool_schemas(data):
     data.pop("$schema", None)
 
     return data
+
+
+def strip_unsupported_openai_params(data):
+    """Drop OpenAI-only params the Databricks chat-completions route rejects."""
+    for key in DATABRICKS_UNSUPPORTED_OPENAI_PARAMS:
+        if key in data:
+            log.info(f"  Stripped unsupported param: {key}")
+            del data[key]
+    return data
+
+
+_GEMINI_FUNCTION_PART_KEYS = (
+    "functionCall", "function_call", "functionResponse", "function_response",
+)
+
+
+def sanitize_gemini_contents(data):
+    """Strip `id` from functionCall/functionResponse parts in Gemini-native bodies.
+
+    gemini-cli attaches tool-call ids to conversation-history parts; the
+    Databricks /gemini route validates against a proto without that field and
+    400s with 'Unknown name "id" ... Cannot find field'. The ids are client-
+    side bookkeeping only — dropping them on the wire is safe.
+    """
+    contents = data.get("contents")
+    if not isinstance(contents, list):
+        return data
+    for content in contents:
+        if not isinstance(content, dict):
+            continue
+        parts = content.get("parts")
+        if not isinstance(parts, list):
+            continue
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            for key in _GEMINI_FUNCTION_PART_KEYS:
+                func = part.get(key)
+                if isinstance(func, dict) and "id" in func:
+                    del func["id"]
+                    log.info(f"  Stripped id from {key} part")
+    return data
+
+
+def is_transparent_path(path):
+    """True for paths relayed verbatim (no sanitization) — Codex /openai/*."""
+    return path == OPENAI_PATH_PREFIX or path.startswith(OPENAI_PATH_PREFIX + "/")
+
+
+def resolve_upstream_url(path):
+    """Map an incoming request path to its upstream URL.
+
+    /gemini/* forwards to the Gemini-native upstream and /openai/* to the
+    OpenAI-native (Codex) upstream, each with the prefix stripped;
+    everything else (OpenCode's OpenAI-compatible traffic) keeps the
+    original UPSTREAM_BASE + path mapping.
+    """
+    if path == GEMINI_PATH_PREFIX or path.startswith(GEMINI_PATH_PREFIX + "/"):
+        if GEMINI_UPSTREAM_BASE:
+            return GEMINI_UPSTREAM_BASE + path[len(GEMINI_PATH_PREFIX):]
+        log.warning("PROXY_GEMINI_UPSTREAM_BASE not set; forwarding /gemini path to default upstream")
+    elif is_transparent_path(path):
+        if OPENAI_UPSTREAM_BASE:
+            return OPENAI_UPSTREAM_BASE + path[len(OPENAI_PATH_PREFIX):]
+        log.warning("PROXY_OPENAI_UPSTREAM_BASE not set; forwarding /openai path to default upstream")
+    return UPSTREAM_BASE + path
+
+
+def _is_streaming_request(path, data):
+    """True when the response will be SSE.
+
+    Gemini signals streaming in the URL (:streamGenerateContent), not via a
+    "stream" body field like chat-completions.
+    """
+    if isinstance(data, dict) and data.get("stream", False):
+        return True
+    return "streamGenerateContent" in path
 
 
 # ---------------------------------------------------------------------------
@@ -518,21 +623,124 @@ class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
 class ProxyHandler(BaseHTTPRequestHandler):
     """Proxy that sanitizes requests and fixes responses."""
 
+    # Chunked transfer encoding (used on every streamed response) is only
+    # valid HTTP/1.1 — strict clients (hyper, used by Codex) can read 1.0
+    # chunk framing straight into the body. 1.1 also enables keep-alive.
+    protocol_version = "HTTP/1.1"
+
+    def _forward_transparent(self, method):
+        """Relay a request verbatim — fresh-token injection only, no munging.
+
+        Used for Codex (/openai/*, Responses API): payloads must not be
+        altered or re-serialized, all HTTP methods forward, and there is no
+        read timeout (long silent reasoning stretches must not 504).
+        """
+        content_length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(content_length) if content_length else None
+
+        log.info(f"TRANSPARENT {method} {self.path} ({content_length} bytes)")
+
+        headers = {}
+        for key in self.headers:
+            if key.lower() not in ("host", "content-length", "transfer-encoding", "connection"):
+                headers[key] = self.headers[key]
+        if body is not None:
+            headers["Content-Length"] = str(len(body))
+        # identity: upstream bytes reach the client exactly as sent (no
+        # compress/decompress round-trip inside the proxy)
+        headers["Accept-Encoding"] = "identity"
+
+        fresh_token = _get_fresh_token()
+        if fresh_token:
+            headers["Authorization"] = f"Bearer {fresh_token}"
+
+        try:
+            resp = requests.request(
+                method,
+                resolve_upstream_url(self.path),
+                data=body,
+                headers=headers,
+                stream=True,
+                timeout=(15, None),  # connect timeout only — never cut a stream
+            )
+        except requests.exceptions.ConnectionError as e:
+            self.send_error(502, f"Upstream connection failed: {e}")
+            return
+        except requests.exceptions.Timeout:
+            self.send_error(504, "Upstream connect timeout")
+            return
+
+        if resp.status_code >= 400:
+            log.error(f"Upstream returned {resp.status_code} for {method} {self.path}")
+
+        try:
+            if resp.status_code in (204, 304):
+                # Bodyless by definition — chunked framing is illegal here
+                self.send_response(resp.status_code)
+                for key, value in resp.headers.items():
+                    if key.lower() not in ("transfer-encoding", "content-encoding",
+                                           "content-length", "connection"):
+                        self.send_header(key, value)
+                self.end_headers()
+                return
+
+            self.send_response(resp.status_code)
+            for key, value in resp.headers.items():
+                if key.lower() not in ("transfer-encoding", "content-encoding",
+                                       "content-length", "connection"):
+                    self.send_header(key, value)
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+
+            for chunk in resp.iter_content(chunk_size=None):
+                if chunk:
+                    self._write_chunk_strict(chunk)
+            self._write_chunk_strict(b"")
+        except (BrokenPipeError, ConnectionResetError):
+            # Client went away mid-stream — stop pulling from upstream so the
+            # request (and its tokens) is abandoned, not silently drained.
+            log.info(f"Client disconnected during {method} {self.path}")
+            self.close_connection = True
+        finally:
+            resp.close()
+
+    def _write_chunk_strict(self, data):
+        """Chunked-transfer write that PROPAGATES client-disconnect errors.
+
+        The transparent relay must notice a dead client and stop draining the
+        upstream stream — unlike _send_chunk, which swallows BrokenPipeError
+        for the sanitized OpenCode path.
+        """
+        if data:
+            self.wfile.write(f"{len(data):x}\r\n".encode() + data + b"\r\n")
+        else:
+            self.wfile.write(b"0\r\n\r\n")
+        self.wfile.flush()
+
     def do_POST(self):
+        if is_transparent_path(self.path):
+            return self._forward_transparent("POST")
+
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length)
 
         log.info(f"POST {self.path} ({content_length} bytes)")
 
         # --- Sanitize request ---
+        parsed_body = None
         try:
             data = json.loads(body)
+            parsed_body = data
             if "messages" in data:
                 before = len(data["messages"])
                 data["messages"] = sanitize_messages(data["messages"])
                 after = len(data["messages"])
                 if before != after:
                     log.info(f"Messages: {before} -> {after}")
+                data = strip_unsupported_openai_params(data)
+            if "contents" in data:
+                # Gemini-native body (gemini-cli)
+                data = sanitize_gemini_contents(data)
             # Strip unsupported schema keys from tool definitions (all models)
             data = sanitize_tool_schemas(data)
             body = json.dumps(data).encode()
@@ -541,7 +749,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             pass  # Forward as-is if not valid JSON
 
         # Build upstream URL
-        upstream_url = UPSTREAM_BASE + self.path
+        upstream_url = resolve_upstream_url(self.path)
 
         # Forward headers (inject fresh token to survive PAT rotation)
         headers = {}
@@ -556,12 +764,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
         if fresh_token:
             headers["Authorization"] = f"Bearer {fresh_token}"
 
-        # Detect streaming
-        is_stream = False
-        try:
-            is_stream = json.loads(body).get("stream", False)
-        except Exception:
-            pass
+        # Detect streaming (Gemini signals it in the URL, not the body)
+        is_stream = bool(_is_streaming_request(self.path, parsed_body))
 
         try:
             resp = requests.post(
@@ -646,7 +850,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             pass
 
     def do_GET(self):
-        """Health check endpoint."""
+        """Health check + transparent relay for /openai/*."""
         if self.path == "/health":
             body = json.dumps({"status": "ok", "upstream": UPSTREAM_BASE}).encode()
             self.send_response(200)
@@ -654,6 +858,14 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+        elif is_transparent_path(self.path):
+            self._forward_transparent("GET")
+        else:
+            self.send_error(404)
+
+    def do_DELETE(self):
+        if is_transparent_path(self.path):
+            self._forward_transparent("DELETE")
         else:
             self.send_error(404)
 
@@ -674,6 +886,11 @@ if __name__ == "__main__":
     server = ThreadedHTTPServer((LISTEN_HOST, LISTEN_PORT), ProxyHandler)
     print(f"Content-filter proxy listening on {LISTEN_HOST}:{LISTEN_PORT}")
     print(f"Forwarding to: {UPSTREAM_BASE}")
-    print(f"Fixes: empty text blocks, orphaned tool_results, tool name remapping, finish_reason")
+    if GEMINI_UPSTREAM_BASE:
+        print(f"Forwarding /gemini/* to: {GEMINI_UPSTREAM_BASE}")
+    if OPENAI_UPSTREAM_BASE:
+        print(f"Relaying /openai/* transparently to: {OPENAI_UPSTREAM_BASE}")
+    print("Fixes: empty text blocks, orphaned tool_results, tool name remapping, "
+          "finish_reason, unsupported params (reasoning_effort), gemini part ids")
     sys.stdout.flush()
     server.serve_forever()

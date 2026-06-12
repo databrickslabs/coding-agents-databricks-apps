@@ -35,6 +35,7 @@ def _update_claude(token):
             settings["env"]["ANTHROPIC_AUTH_TOKEN"] = token
             with open(path, "w") as f:
                 json.dump(settings, f, indent=2)
+            os.chmod(path, 0o600)
     except (OSError, json.JSONDecodeError):
         pass  # file doesn't exist yet — initial setup hasn't run
 
@@ -59,6 +60,7 @@ def _update_opencode(token):
         if changed:
             with open(path, "w") as f:
                 json.dump(auth, f, indent=2)
+            os.chmod(path, 0o600)
     except (OSError, json.JSONDecodeError):
         pass
 
@@ -84,6 +86,7 @@ def _update_hermes(token):
         if new_content != content:
             with open(path, "w") as f:
                 f.write(new_content)
+            os.chmod(path, 0o600)
     except OSError:
         pass
 
@@ -102,5 +105,6 @@ def _replace_dotenv_key(path, key, value):
         if new_content != content:
             with open(path, "w") as f:
                 f.write(new_content)
+            os.chmod(path, 0o600)
     except OSError:
         pass

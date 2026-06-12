@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>CoDA MCP Server — Overview &amp; Capabilities</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  /* ─── Databricks Light theme palette ─────────────────────────── */
+  :root {
+    --lava:        #FF3621;   /* Databricks primary */
+    --lava-700:    #EB1600;
+    --lava-tint:   #FFF0ED;
+    --navy:        #1B3139;   /* ink / text */
+    --navy-600:    #2D4550;
+    --slate:       #5A6B72;   /* muted text */
+    --oat-white:   #FFFFFF;
+    --oat-light:   #F9F7F4;   /* page bg */
+    --oat:         #EEEDE9;   /* panel bg */
+    --oat-line:    #DCDAD4;   /* borders */
+    --green:       #00A972;   /* accent: success / interactive */
+    --green-tint:  #E6F6F0;
+    --blue:        #2272B4;   /* accent: autonomous */
+    --blue-tint:   #E9F1F8;
+    --amber:       #B86E00;   /* accent: info_needed / caution */
+    --amber-tint:  #FBF1E0;
+    --maxw: 1080px;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: "DM Sans", system-ui, -apple-system, sans-serif;
+    color: var(--navy);
+    background: var(--oat-light);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    font-optical-sizing: auto;
+  }
+  code, .mono { font-family: "DM Mono", ui-monospace, "SF Mono", Menlo, monospace; }
+  a { color: var(--lava-700); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* ─── Top bar ─────────────────────────────────────────────────── */
+  .topbar {
+    background: var(--navy);
+    color: var(--oat-white);
+    padding: 14px 0;
+    border-bottom: 3px solid var(--lava);
+  }
+  .topbar .inner { max-width: var(--maxw); margin: 0 auto; padding: 0 28px;
+    display: flex; align-items: center; gap: 14px; }
+  .logo-mark { width: 26px; height: 26px; flex: none; }
+  .topbar .brand { font-weight: 700; letter-spacing: .2px; font-size: 1.02rem; }
+  .topbar .brand span { color: var(--lava); }
+  .topbar .tag { margin-left: auto; font-size: .8rem; color: #AFC0C6;
+    text-transform: uppercase; letter-spacing: .12em; }
+
+  /* ─── Hero ────────────────────────────────────────────────────── */
+  .hero { max-width: var(--maxw); margin: 0 auto; padding: 64px 28px 28px; }
+  .eyebrow { color: var(--lava-700); font-weight: 600; font-size: .82rem;
+    text-transform: uppercase; letter-spacing: .14em; margin: 0 0 14px; }
+  h1 { font-size: clamp(2.2rem, 4.6vw, 3.3rem); line-height: 1.08; margin: 0 0 18px;
+    font-weight: 700; letter-spacing: -0.02em; }
+  .hero .lead { font-size: 1.22rem; color: var(--navy-600); max-width: 60ch; margin: 0; }
+  .hero .meta { margin-top: 26px; display: flex; flex-wrap: wrap; gap: 10px; }
+  .pill { display: inline-flex; align-items: center; gap: 7px; background: var(--oat-white);
+    border: 1px solid var(--oat-line); border-radius: 999px; padding: 7px 15px;
+    font-size: .85rem; font-weight: 500; color: var(--navy-600); }
+  .pill b { color: var(--navy); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+
+  /* ─── Layout ──────────────────────────────────────────────────── */
+  section { max-width: var(--maxw); margin: 0 auto; padding: 30px 28px; }
+  .section-head { display: flex; align-items: baseline; gap: 14px; margin: 8px 0 22px;
+    border-bottom: 1px solid var(--oat-line); padding-bottom: 12px; }
+  .section-head h2 { font-size: 1.65rem; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
+  .section-head .num { font-family: "DM Mono", monospace; color: var(--lava);
+    font-size: 1.1rem; font-weight: 500; }
+  .section-head .sub { margin-left: auto; color: var(--slate); font-size: .9rem; }
+  p.intro { font-size: 1.06rem; color: var(--navy-600); max-width: 72ch; }
+
+  /* ─── Cards ───────────────────────────────────────────────────── */
+  .grid { display: grid; gap: 18px; }
+  .grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
+  .grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
+  .card { background: var(--oat-white); border: 1px solid var(--oat-line);
+    border-radius: 14px; padding: 22px 22px 20px; position: relative; }
+  .card.tool { border-top: 3px solid var(--lava); }
+  .card h3 { margin: 0 0 4px; font-size: 1.12rem; font-weight: 700; }
+  .card h3 .mono { font-size: 1rem; color: var(--lava-700); }
+  .card .role { font-size: .74rem; text-transform: uppercase; letter-spacing: .1em;
+    color: var(--slate); font-weight: 600; margin-bottom: 12px; }
+  .card p { margin: 0 0 12px; font-size: .95rem; color: var(--navy-600); }
+  .kv { font-size: .84rem; border-top: 1px solid var(--oat); padding-top: 10px; margin-top: 4px; }
+  .kv div { display: flex; gap: 8px; padding: 2px 0; }
+  .kv .k { color: var(--slate); min-width: 64px; font-weight: 500; }
+  .kv .v { color: var(--navy); }
+
+  /* ─── Mode banners ────────────────────────────────────────────── */
+  .modes { display: grid; grid-template-columns: repeat(3,1fr); gap: 18px; }
+  .mode { border-radius: 14px; padding: 22px; border: 1px solid var(--oat-line);
+    background: var(--oat-white); }
+  .mode .badge { display: inline-block; font-size: .72rem; font-weight: 700; letter-spacing: .08em;
+    text-transform: uppercase; padding: 4px 10px; border-radius: 6px; margin-bottom: 12px; }
+  .mode h3 { margin: 0 0 8px; font-size: 1.1rem; }
+  .mode p { margin: 0; font-size: .92rem; color: var(--navy-600); }
+  .mode .url { margin-top: 12px; font-size: .8rem; color: var(--slate); }
+  .m1 .badge { background: var(--oat); color: var(--navy); }
+  .m2 { border-top: 3px solid var(--green); }
+  .m2 .badge { background: var(--green-tint); color: #0a7a55; }
+  .m3 { border-top: 3px solid var(--blue); }
+  .m3 .badge { background: var(--blue-tint); color: #1a5a8f; }
+
+  /* ─── Flow diagram ────────────────────────────────────────────── */
+  .flow-wrap { background: var(--oat-white); border: 1px solid var(--oat-line);
+    border-radius: 16px; padding: 26px; margin-top: 8px; }
+  .flow-title { font-weight: 700; font-size: 1.05rem; margin: 0 0 4px; display: flex;
+    align-items: center; gap: 10px; }
+  .flow-title .chip { font-size: .72rem; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .07em; padding: 3px 9px; border-radius: 6px; }
+  .flow-title.green .chip { background: var(--green-tint); color: #0a7a55; }
+  .flow-title.blue .chip { background: var(--blue-tint); color: #1a5a8f; }
+  .flow-sub { color: var(--slate); font-size: .88rem; margin: 0 0 20px; }
+  .steps { display: flex; flex-wrap: wrap; gap: 0; align-items: stretch; }
+  .step { flex: 1 1 0; min-width: 150px; background: var(--oat-light);
+    border: 1px solid var(--oat-line); border-radius: 12px; padding: 14px 14px 13px;
+    position: relative; }
+  .step .n { width: 22px; height: 22px; border-radius: 50%; background: var(--navy);
+    color: #fff; font-size: .74rem; font-weight: 700; display: grid; place-items: center;
+    margin-bottom: 8px; font-family: "DM Mono", monospace; }
+  .green .step .n { background: var(--green); }
+  .blue .step .n { background: var(--blue); }
+  .step .t { font-weight: 600; font-size: .9rem; margin-bottom: 4px; }
+  .step .d { font-size: .8rem; color: var(--slate); line-height: 1.45; }
+  .step .d code { font-size: .75rem; background: var(--oat); padding: 1px 5px; border-radius: 4px;
+    color: var(--navy); overflow-wrap: anywhere; word-break: break-word; }
+  .step .d { overflow-wrap: anywhere; }
+  .arrow { flex: 0 0 30px; display: grid; place-items: center; color: var(--oat-line); }
+  .arrow svg { width: 26px; height: 26px; }
+  .green .arrow { color: #9fd9c4; }
+  .blue .arrow { color: #a8c8e2; }
+  .loopnote { margin-top: 16px; font-size: .82rem; color: var(--amber);
+    background: var(--amber-tint); border-radius: 8px; padding: 10px 14px;
+    border: 1px solid #ecd9b3; }
+  .loopnote b { color: #8a5400; }
+
+  /* ─── Protocol / phases ───────────────────────────────────────── */
+  .phases { display: grid; grid-template-columns: repeat(3,1fr); gap: 14px; }
+  .phase { background: var(--oat-white); border: 1px solid var(--oat-line); border-radius: 12px;
+    padding: 18px; }
+  .phase .ph { font-family: "DM Mono", monospace; font-size: .8rem; color: var(--blue);
+    font-weight: 500; margin-bottom: 6px; }
+  .phase h4 { margin: 0 0 6px; font-size: 1rem; }
+  .phase p { margin: 0; font-size: .86rem; color: var(--navy-600); }
+  .phase .crit { margin-top: 10px; font-size: .76rem; color: var(--slate);
+    border-top: 1px dashed var(--oat-line); padding-top: 8px; }
+
+  /* ─── Status table ────────────────────────────────────────────── */
+  table { width: 100%; border-collapse: collapse; font-size: .92rem;
+    background: var(--oat-white); border: 1px solid var(--oat-line); border-radius: 12px;
+    overflow: hidden; }
+  th, td { text-align: left; padding: 12px 16px; border-bottom: 1px solid var(--oat); }
+  th { background: var(--oat); font-size: .76rem; text-transform: uppercase; letter-spacing: .08em;
+    color: var(--slate); font-weight: 600; }
+  tr:last-child td { border-bottom: none; }
+  td .badge2 { font-family: "DM Mono", monospace; font-size: .82rem; font-weight: 500;
+    padding: 2px 9px; border-radius: 6px; display: inline-block; }
+  .s-ok { background: var(--green-tint); color: #0a7a55; }
+  .s-fail { background: var(--lava-tint); color: var(--lava-700); }
+  .s-info { background: var(--amber-tint); color: #8a5400; }
+  .s-appr { background: var(--blue-tint); color: #1a5a8f; }
+  .s-run { background: var(--oat); color: var(--navy); }
+
+  /* ─── Callout ─────────────────────────────────────────────────── */
+  .callout { background: var(--lava-tint); border: 1px solid #ffd2c9; border-left: 4px solid var(--lava);
+    border-radius: 10px; padding: 16px 20px; margin-top: 4px; }
+  .callout h4 { margin: 0 0 6px; font-size: 1rem; color: var(--lava-700); }
+  .callout p { margin: 0; font-size: .92rem; color: var(--navy-600); }
+  .callout code { background: #fff; padding: 1px 6px; border-radius: 4px; }
+
+  /* ─── Arch list ───────────────────────────────────────────────── */
+  .arch { display: grid; grid-template-columns: repeat(2,1fr); gap: 14px; }
+  .arch .item { background: var(--oat-white); border: 1px solid var(--oat-line); border-radius: 12px;
+    padding: 16px 18px; }
+  .arch .item .lbl { font-weight: 600; font-size: .92rem; margin-bottom: 3px; }
+  .arch .item .val { font-size: .85rem; color: var(--navy-600); }
+
+  /* ─── Footer ──────────────────────────────────────────────────── */
+  footer { background: var(--navy); color: #AFC0C6; margin-top: 40px; }
+  footer .inner { max-width: var(--maxw); margin: 0 auto; padding: 26px 28px;
+    display: flex; flex-wrap: wrap; gap: 12px; align-items: center; font-size: .85rem; }
+  footer .inner b { color: #fff; }
+  footer .inner .right { margin-left: auto; }
+
+  @media (max-width: 860px) {
+    .grid.cols-2, .grid.cols-3, .modes, .phases, .arch { grid-template-columns: 1fr; }
+    .steps { flex-direction: column; }
+    .arrow { flex-basis: auto; padding: 4px 0; transform: rotate(90deg); }
+  }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="inner">
+    <svg class="logo-mark" viewBox="0 0 32 32" aria-hidden="true">
+      <path fill="#FF3621" d="M16 2 3 9v5l13 7 10-5.4V20L16 25.5 6 20.1v2.4L16 28l13-7v-5l-13 7L6 18.1v-2.4L16 21l13-7V9L16 2z"/>
+    </svg>
+    <span class="brand">Databricks <span>·</span> CoDA</span>
+    <span class="tag">MCP Server</span>
+  </div>
+</div>
+
+<header class="hero">
+  <p class="eyebrow">Coding Agents on Databricks Apps</p>
+  <h1>The CoDA MCP Server</h1>
+  <p class="lead">A Model Context Protocol endpoint that lets any MCP client &mdash; Genie Code,
+  Claude Desktop, Cursor, or a local Claude Code / Codex &mdash; delegate coding work to AI agents
+  running inside CoDA on Databricks, then watch or drive them live.</p>
+  <div class="meta">
+    <span class="pill"><span class="dot" style="background:var(--lava)"></span> Endpoint <b class="mono">/mcp</b></span>
+    <span class="pill"><span class="dot" style="background:var(--navy)"></span> <b>4</b> tools</span>
+    <span class="pill"><span class="dot" style="background:var(--green)"></span> <b>3</b> usage modes</span>
+    <span class="pill"><span class="dot" style="background:var(--blue)"></span> FastMCP Streamable HTTP</span>
+  </div>
+</header>
+
+<!-- 1 · What it is -->
+<section>
+  <div class="section-head"><span class="num">01</span><h2>What it is</h2>
+    <span class="sub">one endpoint, many clients</span></div>
+  <p class="intro">CoDA (Coding agents on Databricks Apps) runs five AI coding agents &mdash; Claude Code,
+  Codex, Gemini CLI, OpenCode, and Hermes &mdash; inside a Databricks App, each in a real terminal (PTY)
+  with the Databricks CLI, 16 Databricks skills, and MCP servers (DeepWiki, Exa) pre-wired. The <b>CoDA MCP
+  server</b> exposes that capability over the Model Context Protocol at <code>/mcp</code>, so an upstream
+  agent can hand work off to CoDA &mdash; either as a fire-and-forget background task or as a live,
+  human-driven session &mdash; using the same Databricks identity that owns the app.</p>
+</section>
+
+<!-- 2 · The four tools -->
+<section>
+  <div class="section-head"><span class="num">02</span><h2>The four tools</h2>
+    <span class="sub">exposed natively &amp; via JSON-RPC</span></div>
+  <div class="grid cols-2">
+    <div class="card tool">
+      <h3><span class="mono">coda_run</span></h3>
+      <div class="role">Autonomous · fire-and-forget</div>
+      <p>Submit a coding task and return <b>immediately</b> with a <code>task_id</code>. The task runs to
+      completion in a background terminal under a structured workflow protocol. Don&rsquo;t poll &mdash; move on.</p>
+      <div class="kv">
+        <div><span class="k">key args</span><span class="v mono">prompt, context, previous_session_id, workflow_protocol</span></div>
+        <div><span class="k">returns</span><span class="v mono">task_id, session_id, status:"running"</span></div>
+        <div><span class="k">viewer</span><span class="v">replay-only URL (post-hoc review)</span></div>
+      </div>
+    </div>
+    <div class="card tool">
+      <h3><span class="mono">coda_interactive</span></h3>
+      <div class="role">Human handoff · live attach</div>
+      <p>Pull a Databricks Workspace folder onto a fresh session, launch the chosen agent (claude default)
+      in it with your prompt pre-seeded, and return a <b>live</b> viewer URL a human opens to drive it.</p>
+      <div class="kv">
+        <div><span class="k">key args</span><span class="v mono">prompt, workspace_path, agent</span></div>
+        <div><span class="k">returns</span><span class="v mono">status:"launched", viewer_url, project_dir</span></div>
+        <div><span class="k">viewer</span><span class="v">live, interactive (the only handle)</span></div>
+      </div>
+    </div>
+    <div class="card tool">
+      <h3><span class="mono">coda_inbox</span></h3>
+      <div class="role">Status · last 24h</div>
+      <p>List background tasks with live status counts. Call only when the user asks &mdash; never poll it
+      in a loop. Interactive sessions do not appear here.</p>
+      <div class="kv">
+        <div><span class="k">key args</span><span class="v mono">email?, status?</span></div>
+        <div><span class="k">returns</span><span class="v mono">tasks[], counts{running,completed,failed,info_needed,needs_approval}</span></div>
+      </div>
+    </div>
+    <div class="card tool">
+      <h3><span class="mono">coda_get_result</span></h3>
+      <div class="role">Retrieve · structured output</div>
+      <p>Fetch the full structured result of a finished task &mdash; what it did, what changed, and any
+      follow-up the caller must supply.</p>
+      <div class="kv">
+        <div><span class="k">key args</span><span class="v mono">task_id, session_id</span></div>
+        <div><span class="k">returns</span><span class="v mono">status, summary, files_changed, artifacts, errors, feedback?</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 3 · Three modes -->
+<section>
+  <div class="section-head"><span class="num">03</span><h2>Three ways to reach CoDA</h2>
+    <span class="sub">one platform, three postures</span></div>
+  <div class="modes">
+    <div class="mode m1">
+      <span class="badge">Mode 1</span>
+      <h3>Direct web UI</h3>
+      <p>Open the CoDA app in a browser and drive an agent terminal yourself. No MCP involved &mdash; the
+      hands-on baseline.</p>
+      <div class="url">entry: the app URL</div>
+    </div>
+    <div class="mode m2">
+      <span class="badge">Mode 2 · coda_interactive</span>
+      <h3>Live handoff</h3>
+      <p>An upstream agent stages files and launches a session; a <b>human</b> attaches via the viewer URL and
+      drives it interactively. Best when judgement or steering is needed.</p>
+      <div class="url">entry: live <span class="mono">viewer_url</span></div>
+    </div>
+    <div class="mode m3">
+      <span class="badge">Mode 3 · coda_run</span>
+      <h3>Autonomous task</h3>
+      <p>An upstream agent submits work that runs to completion unattended. The viewer URL is a <b>replay</b>
+      for after-the-fact review; results come back through the inbox.</p>
+      <div class="url">entry: replay <span class="mono">viewer_url</span> + inbox</div>
+    </div>
+  </div>
+</section>
+
+<!-- 4 · Flow diagrams -->
+<section>
+  <div class="section-head"><span class="num">04</span><h2>How the flows work</h2>
+    <span class="sub">end to end</span></div>
+
+  <!-- coda_interactive flow -->
+  <div class="flow-wrap">
+    <p class="flow-title green"><span class="chip">Mode 2</span> coda_interactive &mdash; live human handoff</p>
+    <p class="flow-sub">Files move <b>up</b> to the Workspace from the caller, then <b>down</b> into the CoDA
+    session &mdash; both as the same Databricks user, so access just works.</p>
+    <div class="steps green">
+      <div class="step"><div class="n">1</div><div class="t">Local agent</div>
+        <div class="d">Claude Code / Codex on the user&rsquo;s machine holds the project files locally.</div></div>
+      <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 12h14M13 6l6 6-6 6"/></svg></div>
+      <div class="step"><div class="n">2</div><div class="t">Upload to Workspace</div>
+        <div class="d"><code>databricks workspace import-dir</code> pushes files to <code>/Workspace/Users/&hellip;</code></div></div>
+      <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 12h14M13 6l6 6-6 6"/></svg></div>
+      <div class="step"><div class="n">3</div><div class="t">Call the tool</div>
+        <div class="d"><code>coda_interactive(workspace_path, prompt)</code> hits CoDA at <code>/mcp</code>.</div></div>
+      <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 12h14M13 6l6 6-6 6"/></svg></div>
+      <div class="step"><div class="n">4</div><div class="t">Pull into session</div>
+        <div class="d">CoDA&rsquo;s terminal runs <code>export-dir</code> into <code>~/.coda/projects/&lt;id&gt;/</code> &mdash; confirmed by a completion marker.</div></div>
+      <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 12h14M13 6l6 6-6 6"/></svg></div>
+      <div class="step"><div class="n">5</div><div class="t">Launch &amp; seed</div>
+        <div class="d"><code>claude --enable-auto-mode "&lt;prompt&gt;"</code> &mdash; no trust prompt, prompt pre-loaded.</div></div>
+      <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 12h14M13 6l6 6-6 6"/></svg></div>
+      <div class="step"><div class="n">6</div><div class="t">Human drives</div>
+        <div class="d">Returns a live <code>viewer_url</code>; the user opens it and steers the session to the end.</div></div>
+    </div>
+  </div>
+
+  <!-- coda_run flow -->
+  <div class="flow-wrap" style="margin-top:18px;">
+    <p class="flow-title blue"><span class="chip">Mode 3</span> coda_run &mdash; autonomous background task</p>
+    <p class="flow-sub">Submit and forget. The agent works under a disciplined protocol and reports back
+    through the inbox.</p>
+    <div class="steps blue">
+      <div class="step"><div class="n">1</div><div class="t">Submit</div>
+        <div class="d"><code>coda_run(prompt)</code> returns a <code>task_id</code> instantly &mdash; fire-and-forget.</div></div>
+      <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 12h14M13 6l6 6-6 6"/></svg></div>
+      <div class="step"><div class="n">2</div><div class="t">Background run</div>
+        <div class="d">A detached terminal runs the agent with a <b>CAPABILITIES</b> + <b>WORKFLOW PROTOCOL</b> envelope.</div></div>
+      <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 12h14M13 6l6 6-6 6"/></svg></div>
+      <div class="step"><div class="n">3</div><div class="t">Plan → Execute → Synthesize</div>
+        <div class="d">Three phases, each with a self-critique; max two iterations per phase.</div></div>
+      <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 12h14M13 6l6 6-6 6"/></svg></div>
+      <div class="step"><div class="n">4</div><div class="t">Write result</div>
+        <div class="d">Emits <code>result.json</code> &mdash; <code>completed</code>, <code>failed</code>, <code>info_needed</code>, or <code>needs_approval</code>.</div></div>
+      <div class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M4 12h14M13 6l6 6-6 6"/></svg></div>
+      <div class="step"><div class="n">5</div><div class="t">Retrieve</div>
+        <div class="d">Caller checks <code>coda_inbox</code> and pulls full output via <code>coda_get_result</code>.</div></div>
+    </div>
+    <div class="loopnote"><b>info_needed loop:</b> when the agent is blocked on missing context, it stops and returns
+    a precise <code>feedback</code> string. The caller adds the missing detail and resubmits with
+    <code>previous_session_id</code> &mdash; a structured iteration loop instead of a guess.</div>
+  </div>
+</section>
+
+<!-- 5 · Workflow protocol -->
+<section>
+  <div class="section-head"><span class="num">05</span><h2>The workflow protocol</h2>
+    <span class="sub">coda_run, on by default</span></div>
+  <p class="intro">Every <code>coda_run</code> prompt is wrapped with two sections so the background agent
+  acts deliberately: <b>CAPABILITIES</b> (the Databricks CLI, the 16 skills, and the DeepWiki / Exa / CoDA
+  MCP servers it can lean on) and <b>WORKFLOW PROTOCOL</b> &mdash; a three-phase pipeline with a critique
+  after each phase. Set <code>workflow_protocol=false</code> to opt out for non-Databricks tasks.</p>
+  <div class="phases">
+    <div class="phase"><div class="ph">phase 1</div><h4>Plan</h4>
+      <p>Write a step-by-step plan to the status log.</p>
+      <div class="crit">critique → APPROVE / BLOCK / fix · max 2 iterations</div></div>
+    <div class="phase"><div class="ph">phase 2</div><h4>Execute</h4>
+      <p>Work the plan step by step, emitting progress.</p>
+      <div class="crit">critique built vs planned · max 2 iterations</div></div>
+    <div class="phase"><div class="ph">phase 3</div><h4>Synthesize</h4>
+      <p>Write <code>result.json</code> against the original task.</p>
+      <div class="crit">final critique vs the ask · max 2 iterations</div></div>
+  </div>
+</section>
+
+<!-- 6 · Identity & files -->
+<section>
+  <div class="section-head"><span class="num">06</span><h2>Identity &amp; the file round-trip</h2>
+    <span class="sub">why it works</span></div>
+  <div class="callout">
+    <h4>The terminal is you; the server is not.</h4>
+    <p>The MCP server process runs as the app&rsquo;s <b>service principal</b>, which cannot read a user&rsquo;s
+    private Workspace folders. The agent <b>terminal</b>, however, is authenticated as the app owner. That&rsquo;s
+    why CoDA never reads your files server-side &mdash; it pulls them <i>in the terminal</i> with
+    <code>databricks workspace export-dir</code>, using the right identity. A local caller mirrors this from the
+    other side with <code>import-dir</code> to stage local files into the Workspace first.</p>
+  </div>
+</section>
+
+<!-- 7 · Status reference -->
+<section>
+  <div class="section-head"><span class="num">07</span><h2>Result statuses</h2>
+    <span class="sub">what coda_get_result returns</span></div>
+  <table>
+    <thead><tr><th>Status</th><th>Meaning</th><th>What the caller does</th></tr></thead>
+    <tbody>
+      <tr><td><span class="badge2 s-run">running</span></td><td>Task is still working in the background.</td><td>Wait; check the inbox later.</td></tr>
+      <tr><td><span class="badge2 s-ok">completed</span></td><td>Finished successfully.</td><td>Read <code>summary</code> + <code>files_changed</code>.</td></tr>
+      <tr><td><span class="badge2 s-fail">failed</span></td><td>Unrecoverable error (a command crashed, an API 500&rsquo;d).</td><td>Inspect <code>errors</code>.</td></tr>
+      <tr><td><span class="badge2 s-info">info_needed</span></td><td>Blocked on missing context the <b>caller</b> must supply.</td><td>Read <code>feedback</code>, resubmit with more context.</td></tr>
+      <tr><td><span class="badge2 s-appr">needs_approval</span></td><td>A destructive action is staged, awaiting explicit go-ahead.</td><td>Approve or decline; resubmit.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- 8 · Architecture -->
+<section>
+  <div class="section-head"><span class="num">08</span><h2>Architecture</h2>
+    <span class="sub">how it&rsquo;s served</span></div>
+  <div class="arch">
+    <div class="item"><div class="lbl">Transport</div><div class="val">FastMCP <code>streamable_http_app()</code> &mdash; native MCP Streamable HTTP, mounted at <code>/mcp</code>.</div></div>
+    <div class="item"><div class="lbl">Runtime</div><div class="val">uvicorn (ASGI); Flask + Socket.IO mounted via WSGI middleware for the terminal UI.</div></div>
+    <div class="item"><div class="lbl">Sessions</div><div class="val">Each agent runs in a real PTY; fds are process-local, so a single worker owns them.</div></div>
+    <div class="item"><div class="lbl">Identity</div><div class="val">App-owner credentials (PAT or service principal); the terminal CLI acts as the user.</div></div>
+    <div class="item"><div class="lbl">Dual surface</div><div class="val">The same four tools are exposed both natively and over a JSON-RPC compatibility path.</div></div>
+    <div class="item"><div class="lbl">Viewer</div><div class="val">A browser attaches to a session over WebSocket, with automatic HTTP-polling fallback.</div></div>
+  </div>
+</section>
+
+<footer>
+  <div class="inner">
+    <span>Databricks <b>·</b> CoDA MCP Server</span>
+    <span class="right">Coding Agents on Databricks Apps</span>
+  </div>
+</footer>
+
+</body>
+</html>

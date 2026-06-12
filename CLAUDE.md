@@ -1,17 +1,17 @@
 # Claude Code on Databricks
 
-Welcome! This environment comes pre-configured with 5 AI coding agents, 39 skills, and 2 MCP servers. Hermes Agent is available alongside Claude Code, Codex, Gemini CLI, and OpenCode — launch it with `hermes chat`.
+Welcome! This environment comes pre-configured with 5 AI coding agents, 50 skills, and 3 MCP servers. Hermes Agent is available alongside Claude Code, Codex, Gemini CLI, and OpenCode — launch it with `hermes chat`.
 
-## Skills (30 total)
+## Skills (50 total)
 
 ### Databricks Skills (16)
 
 | Category | Skills |
 |----------|--------|
-| AI & Agents | agent-bricks, databricks-genie, mlflow-evaluation, model-serving |
+| AI & Agents | agent-bricks, databricks-genie, databricks-ai-functions, mlflow-evaluation, model-serving |
 | Analytics | aibi-dashboards, databricks-unity-catalog |
-| Data Engineering | spark-declarative-pipelines, databricks-jobs, synthetic-data-generation |
-| Development | asset-bundles, databricks-app-apx, databricks-app-python, databricks-python-sdk, databricks-config |
+| Data Engineering | spark-declarative-pipelines, databricks-jobs, synthetic-data-gen |
+| Development | databricks-bundles, databricks-apps-python, databricks-python-sdk, databricks-config |
 | Reference | databricks-docs, unstructured-pdf-generation |
 
 ### Development Workflow Skills (14)
@@ -35,10 +35,52 @@ From [obra/superpowers](https://github.com/obra/superpowers):
 | writing-skills | Create new skills |
 | using-superpowers | Introduction to available skills |
 
+### Flutter Skills (10)
+
+From [flutter/skills](https://github.com/flutter/skills):
+
+| Skill | Purpose |
+|-------|---------|
+| flutter-add-integration-test | Add integration tests |
+| flutter-add-widget-preview | Add widget previews |
+| flutter-add-widget-test | Add widget tests |
+| flutter-apply-architecture-best-practices | Apply Flutter architecture best practices |
+| flutter-build-responsive-layout | Build adaptive/responsive layouts |
+| flutter-fix-layout-issues | Diagnose and fix layout issues |
+| flutter-implement-json-serialization | Implement JSON serialization |
+| flutter-setup-declarative-routing | Set up declarative routing (go_router) |
+| flutter-setup-localization | Set up localization (i18n) |
+| flutter-use-http-package | Networking with the http package |
+
+### Dart Skills (9)
+
+From [dart-lang/skills](https://github.com/dart-lang/skills):
+
+| Skill | Purpose |
+|-------|---------|
+| dart-add-unit-test | Add unit tests |
+| dart-build-cli-app | Build a Dart CLI app |
+| dart-collect-coverage | Collect test coverage |
+| dart-fix-runtime-errors | Diagnose and fix runtime errors |
+| dart-generate-test-mocks | Generate test mocks (mockito/mocktail) |
+| dart-migrate-to-checks-package | Migrate assertions to the checks package |
+| dart-resolve-package-conflicts | Resolve package version conflicts |
+| dart-run-static-analysis | Run static analysis |
+| dart-use-pattern-matching | Use Dart pattern matching |
+
+### Flutter UI Skills (1)
+
+From [nank1ro/flutter-shadcn-ui](https://github.com/nank1ro/flutter-shadcn-ui):
+
+| Skill | Purpose |
+|-------|---------|
+| shadcn-ui-flutter | Build Flutter UIs with shadcn_ui components |
+
 ## MCP Servers
 
 - **DeepWiki** - AI-powered documentation for any GitHub repository
 - **Exa** - Web search and code context retrieval
+- **CoDA** (exposed at `/mcp`) - Delegate coding tasks to AI agents via MCP. Any MCP client (Genie Code, Claude Desktop, Cursor) can call `coda_run`, `coda_inbox`, and `coda_get_result` to submit background tasks, check status, and retrieve results. See `docs/mcp-v2-background-execution.md`.
 
 ## Databricks CLI
 

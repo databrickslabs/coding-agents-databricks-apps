@@ -1,6 +1,17 @@
+# Production entrypoint is uvicorn (ASGI), not gunicorn. Required because
+# the MCP server at /mcp uses FastMCP.streamable_http_app(), a native ASGI
+# transport that cannot be served by gunicorn's WSGI workers. Flask is
+# mounted via WSGIMiddleware inside coda_mcp.mcp_asgi alongside MCP and
+# Socket.IO. WebSocket transport falls back to HTTP polling under uvicorn —
+# acceptable because static/poll-worker.js already implements the fallback.
+# gunicorn.conf.py is retained for legacy WSGI-only local dev; not used here.
 command:
-  - gunicorn
-  - app:app
+  - uvicorn
+  - coda_mcp.mcp_asgi:app
+  - --host
+  - 0.0.0.0
+  - --port
+  - "8000"
 env:
   - name: HOME
     value: /app/python/source_code

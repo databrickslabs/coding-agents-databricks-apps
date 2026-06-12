@@ -1010,7 +1010,10 @@
         return;
       }
 
-      socket = io({ transports: ['websocket', 'polling'] });
+      // Start with polling (HTTP) so Databricks proxy identity headers are present
+      // for auth, then upgrade to WebSocket transparently. Direct WebSocket-first
+      // fails because the proxy doesn't inject X-Forwarded-Email on WS upgrade.
+      socket = io({ transports: ['polling', 'websocket'] });
 
       socket.on('connect', () => {
         // Check actual transport — Socket.IO reports connected=true even on long-polling
@@ -1353,6 +1356,116 @@
       return sessionId;
     }
 
+    // ── Deep-link helpers ─────────────────────────────────────────────
+
+    async function _doReplay(term, sessionId, content) {
+      // Chunk the write to avoid main-thread jank on multi-MB transcripts.
+      const CHUNK = 64 * 1024;
+      for (let i = 0; i < content.length; i += CHUNK) {
+        term.write(content.slice(i, i + CHUNK));
+        await new Promise(r => requestAnimationFrame(r));
+      }
+      // Mount a static banner above the pane.
+      _showReplayBanner(term, sessionId);
+      // NOTE: do NOT wire term.onData → terminal_input; do NOT include in heartbeat
+      // session_ids list; do NOT emit join_session.
+      return sessionId;
+    }
+
+    function _showReplayBanner(term, sessionId) {
+      const pane = getAllPanes().find(p => p.sessionId === sessionId);
+      if (!pane || !pane.element) return;
+      const banner = document.createElement('div');
+      banner.className = 'replay-banner';
+      banner.textContent = 'Task completed — viewing replay';
+      banner.style.cssText = 'padding:4px 8px;background:#333;color:#aaa;font-size:12px;text-align:center;';
+      pane.element.insertBefore(banner, pane.element.firstChild);
+    }
+
+    function _renderExpiredPage(sessionId) {
+      // Use DOM construction instead of innerHTML interpolation to prevent XSS
+      // via crafted ?session= values. textContent escapes everything.
+      document.body.innerHTML = '';  // clear
+
+      const wrap = document.createElement('div');
+      wrap.style.cssText = 'font-family:monospace;padding:40px;text-align:center;color:#ccc;';
+
+      const heading = document.createElement('h2');
+      heading.textContent = 'Session expired';
+      wrap.appendChild(heading);
+
+      const intro = document.createElement('p');
+      intro.appendChild(document.createTextNode('Session '));
+      const code = document.createElement('code');
+      code.textContent = sessionId;  // textContent escapes <>"'`&
+      intro.appendChild(code);
+      intro.appendChild(document.createTextNode(' is gone, and no replay is available.'));
+      wrap.appendChild(intro);
+
+      const explain = document.createElement('p');
+      explain.textContent = 'The transcript may have aged out after the 24-hour retention window.';
+      wrap.appendChild(explain);
+
+      const link = document.createElement('a');
+      link.href = '/';
+      link.style.color = '#6cf';
+      link.textContent = '← Back to terminal';
+      const linkPara = document.createElement('p');
+      linkPara.appendChild(link);
+      wrap.appendChild(linkPara);
+
+      document.body.appendChild(wrap);
+    }
+
+    async function _initFromQueryString() {
+      const params = new URLSearchParams(location.search);
+      const sessionId = params.get('session');
+      if (!sessionId) return false;
+
+      try {
+        const resp = await fetch('/api/session/attach', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ session_id: sessionId })
+        });
+
+        if (resp.status === 404) {
+          _renderExpiredPage(sessionId);
+          return true;  // handled, skip picker
+        }
+
+        const data = await resp.json();
+
+        // Create a tab that skips the session picker and uses our known session id.
+        const tab = await createTab({ deepLinkSessionId: sessionId });
+        if (!tab || tab.panes.length === 0) return false;
+        const pane = tab.panes[0];
+        const term = pane.term;
+
+        if (data.replay) {
+          // Replay pane: static, read-only. createPane skipped onData/join_session
+          // wiring because of deepLinkSessionId, so we leave it that way. Keystrokes
+          // are ignored; nothing to clean up.
+          const content = (data.output || []).join('');
+          await _doReplay(term, sessionId, content);
+        } else {
+          // Live pane: createPane skipped the default wiring, so we own it here.
+          await _doAttach(term, sessionId);
+          term.onData(d => sendInput(d, pane.sessionId));
+          if (wsConnected && socket) {
+            socket.emit('join_session', { session_id: sessionId });
+          } else {
+            pollWorker.postMessage({ type: 'start_poll', paneId: pane.id, sessionId: sessionId });
+          }
+        }
+
+        return true;  // handled, skip picker
+      } catch (err) {
+        console.error('deep-link attach failed:', err);
+        return false;
+      }
+    }
+
     function _formatAge(timestamp) {
       const seconds = Math.floor((Date.now() / 1000) - timestamp);
       if (seconds < 60) return 'just now';
@@ -1672,6 +1785,10 @@
           await waitForSetup();
         }
         var { sid, reattached } = await getOrPromptSession(term, tab.label, opts.skipPrompt);
+      } else if (opts.deepLinkSessionId) {
+        // Deep-link boot — session id is already known; skip picker entirely.
+        var sid = opts.deepLinkSessionId;
+        var reattached = true;
       } else if (!opts.newSession) {
         // PAT is valid, initial page load — check for existing sessions first.
         const setupResp2 = await fetch('/api/setup-status');
@@ -1715,13 +1832,19 @@
 
       const pane = { id, element, term, fitAddon, searchAddon, sessionId: sid,
         batchWrite: createWriteBatcher(term) };
-      term.onData(data => sendInput(data, pane.sessionId));
 
-      // Join WebSocket room if connected; otherwise start HTTP polling (AC-11, AC-16)
-      if (wsConnected && socket) {
-        socket.emit('join_session', { session_id: sid });
-      } else {
-        pollWorker.postMessage({ type: 'start_poll', paneId: id, sessionId: sid });
+      // Deep-link panes own their own input wiring + transport joins from
+      // _initFromQueryString (so replay mode can stay read-only and live mode
+      // doesn't double-emit join_session). Skip the default wiring here.
+      if (!opts.deepLinkSessionId) {
+        term.onData(data => sendInput(data, pane.sessionId));
+
+        // Join WebSocket room if connected; otherwise start HTTP polling (AC-11, AC-16)
+        if (wsConnected && socket) {
+          socket.emit('join_session', { session_id: sid });
+        } else {
+          pollWorker.postMessage({ type: 'start_poll', paneId: id, sessionId: sid });
+        }
       }
 
       // Click to focus
@@ -1805,6 +1928,13 @@
         cleanupPane(p);
         p.term.dispose();
       });
+
+      // If the tab contained a deep-linked pane, drop ?session= from the URL.
+      const _ctParams = new URLSearchParams(location.search);
+      const _ctSid = _ctParams.get('session');
+      if (_ctSid && tab.panes.some(p => p.sessionId === _ctSid)) {
+        history.replaceState({}, '', '/');
+      }
 
       // Remove DOM
       tab.paneContainer.remove();
@@ -1959,7 +2089,17 @@
       const ap = tab.panes.find(p => p.id === tab.activePaneId) || tab.panes[0];
       if (!ap) return;
 
+      // Capture before cleanupPane() nulls pane.sessionId.
+      const _apSessionId = ap.sessionId;
       cleanupPane(ap);
+
+      // If this pane was opened via ?session=<id>, drop the query param so a
+      // refresh doesn't re-attach to a stale id.
+      const _cpParams = new URLSearchParams(location.search);
+      if (_apSessionId && _cpParams.get('session') === _apSessionId) {
+        history.replaceState({}, '', '/');
+      }
+
       ap.term.dispose();
       ap.element.remove();
 
@@ -2263,7 +2403,11 @@
         // The element is kept in the DOM for error reporting (see catch below).
         status.style.display = 'none';
 
-        await createTab();
+        // ── Deep-link: ?session=<pty_id> takes priority over the session picker ──
+        const deepLinkHandled = await _initFromQueryString();
+        if (!deepLinkHandled) {
+          await createTab();
+        }
         updateSessionBadge();
 
         let resizeTimer;

@@ -7,7 +7,6 @@ Covers:
 
 import os
 import subprocess
-import sys
 import threading
 import time
 from collections import deque
@@ -40,42 +39,23 @@ class TestGetSessionProcess:
         """When a shell has a child process, return the child's name."""
         app_mod = _get_app()
 
-        # Launch a shell (bash) with a child process (sleep)
-        shell = subprocess.Popen(
-            ["bash", "-c", "sleep 300"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        # Give the child time to spawn
-        time.sleep(0.5)
-
-        try:
-            result = app_mod._get_session_process(shell.pid)
-            assert result == "sleep", f"Expected 'sleep', got '{result}'"
-        finally:
-            shell.kill()
-            shell.wait()
+        # Mock pgrep returning a child PID, then ps resolving it to "sleep"
+        pgrep_result = mock.Mock(returncode=0, stdout="12345\n")
+        ps_result = mock.Mock(returncode=0, stdout="sleep\n")
+        with mock.patch("subprocess.run", side_effect=[pgrep_result, ps_result]):
+            result = app_mod._get_session_process(100)
+        assert result == "sleep", f"Expected 'sleep', got '{result}'"
 
     def test_returns_parent_process_name_when_no_children(self):
         """When a shell has no foreground children, return the shell name."""
         app_mod = _get_app()
 
-        # Launch a bare shell that just sleeps via bash built-in wait
-        # Use cat which will block on stdin with no children of its own
-        proc = subprocess.Popen(
-            ["cat"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-
-        try:
-            result = app_mod._get_session_process(proc.pid)
-            assert result == "cat", f"Expected 'cat', got '{result}'"
-        finally:
-            proc.kill()
-            proc.wait()
+        # Mock pgrep finding no children (exit 1), then ps resolving the process itself
+        pgrep_result = mock.Mock(returncode=1, stdout="")
+        ps_result = mock.Mock(returncode=0, stdout="cat\n")
+        with mock.patch("subprocess.run", side_effect=[pgrep_result, ps_result]):
+            result = app_mod._get_session_process(100)
+        assert result == "cat", f"Expected 'cat', got '{result}'"
 
     def test_returns_unknown_for_dead_pid(self):
         """Return 'unknown' when the PID does not exist."""
@@ -230,28 +210,31 @@ class TestEOFCleanup:
             app_module.sessions.clear()
 
     def test_exited_session_removed_from_dict(self):
-        import pty
-        master_fd, slave_fd = pty.openpty()
+        fake_master = 50
+        # Use a completed process so waitpid works
         proc = subprocess.Popen(
-            ["bash", "-c", "echo hello && exit 0"],
-            stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
-            preexec_fn=os.setsid
+            ["bash", "-c", "exit 0"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
-        os.close(slave_fd)
+        proc.wait()
 
         session_id = "sess-eof-test"
         with self.app_module.sessions_lock:
             self.app_module.sessions[session_id] = {
                 "pid": proc.pid,
-                "master_fd": master_fd,
+                "master_fd": fake_master,
                 "output_buffer": deque(maxlen=1000),
                 "lock": threading.Lock(),
                 "last_poll_time": time.time(),
                 "created_at": time.time(),
             }
 
-        # read_pty_output should detect EOF and call terminate_session
-        self.app_module.read_pty_output(session_id, master_fd)
+        # Simulate EOF: select says readable, os.read returns empty bytes
+        with mock.patch("select.select", return_value=([fake_master], [], [])), \
+             mock.patch("os.read", return_value=b""), \
+             mock.patch("os.close"), \
+             mock.patch("os.kill"):
+            self.app_module.read_pty_output(session_id, fake_master)
 
         with self.app_module.sessions_lock:
             assert session_id not in self.app_module.sessions

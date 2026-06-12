@@ -1,3 +1,4 @@
+import asyncio
 import os
 import pty
 import fcntl
@@ -46,6 +47,7 @@ SESSION_TIMEOUT_SECONDS = 86400      # No poll for 24 hours = dead session
 CLEANUP_INTERVAL_SECONDS = 900       # Check for stale sessions every 15 min
 GRACEFUL_SHUTDOWN_WAIT = 3          # Seconds to wait after SIGHUP before SIGKILL
 MAX_CONCURRENT_SESSIONS = int(os.environ.get("MAX_CONCURRENT_SESSIONS", "5"))
+TRANSCRIPT_CAP_BYTES = 10 * 1024 * 1024  # 10 MB soft cap per transcript
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -58,7 +60,45 @@ app.secret_key = os.urandom(24)
 app.config['MAX_CONTENT_LENGTH'] = 32 * 1024 * 1024  # 32 MB — aligned with Claude Code's 30 MB file limit
 
 # WebSocket support via Flask-SocketIO (simple-websocket transport, threading mode)
+# Used for local dev (python app.py). Under uvicorn/ASGI, the AsyncServer in
+# mcp_asgi.py intercepts /socket.io/ before WSGIMiddleware, so these handlers
+# are only active in WSGI mode.
 socketio = SocketIO(app, async_mode='threading', cors_allowed_origins=[], logger=False, engineio_logger=False)
+
+# ── ASGI WebSocket support (python-socketio AsyncServer) ─────────────
+# Set by mcp_asgi.py at startup. Background threads use _emit_from_thread()
+# which routes to the async server (ASGI) or Flask-SocketIO (WSGI) automatically.
+_async_sio = None
+_event_loop = None
+
+
+def set_async_sio(sio_instance, loop):
+    """Called by mcp_asgi.py to wire up the ASGI Socket.IO server."""
+    global _async_sio, _event_loop
+    _async_sio = sio_instance
+    _event_loop = loop
+
+
+def _emit_from_thread(event, data, room=None):
+    """Thread-safe emit for background threads (PTY reader, cleanup, SIGTERM).
+
+    Routes to AsyncServer (ASGI mode) or Flask-SocketIO (WSGI mode) automatically.
+    """
+    if _async_sio and _event_loop and _event_loop.is_running():
+        try:
+            asyncio.run_coroutine_threadsafe(
+                _async_sio.emit(event, data, room=room),
+                _event_loop,
+            )
+        except Exception:
+            pass
+    else:
+        # WSGI mode (local dev) — use Flask-SocketIO directly
+        try:
+            socketio.emit(event, data, room=room)
+        except Exception:
+            pass
+
 
 # Store sessions: {session_id: {"master_fd": fd, "pid": pid, "output_buffer": deque, "lock": Lock, ...}}
 # sessions_lock guards dict-level ops (add/remove/iterate); each session["lock"] guards per-session state
@@ -86,10 +126,7 @@ def handle_sigterm(signum, frame):
     shutting_down = True
     logger.info("SIGTERM received — setting shutting_down flag for clients")
     # Notify WS clients immediately (HTTP poll clients will see shutting_down on next poll)
-    try:
-        socketio.emit('shutting_down', {})
-    except Exception:
-        pass
+    _emit_from_thread('shutting_down', {})
 
 # NOTE: Do not register SIGTERM handler at module level.
 # It is installed in initialize_app() for gunicorn only.
@@ -149,6 +186,11 @@ def _run_step(step_id, command):
             env["PATH"] = f"{local_bin}:{env.get('PATH', '')}"
         env.pop("DATABRICKS_CLIENT_ID", None)
         env.pop("DATABRICKS_CLIENT_SECRET", None)
+
+        # Ensure setup scripts can still import from repo root (e.g. `from utils import ...`)
+        app_dir = os.path.dirname(os.path.abspath(__file__))
+        existing_pp = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = f"{app_dir}:{existing_pp}" if existing_pp else app_dir
 
         result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=300)
         if result.returncode == 0:
@@ -370,8 +412,14 @@ def _configure_all_cli_auth(token):
 
     # 3. Re-run Codex, OpenCode, Gemini setup scripts with token in env
     #    They are idempotent: detect CLI already installed, just write config files
-    env = {**os.environ, "DATABRICKS_TOKEN": token}
-    for script in ["setup_codex.py", "setup_opencode.py", "setup_gemini.py", "setup_hermes.py"]:
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    existing_pp = os.environ.get("PYTHONPATH", "")
+    env = {
+        **os.environ,
+        "DATABRICKS_TOKEN": token,
+        "PYTHONPATH": f"{app_dir}:{existing_pp}" if existing_pp else app_dir,
+    }
+    for script in ["setup/setup_codex.py", "setup/setup_opencode.py", "setup/setup_gemini.py", "setup/setup_hermes.py"]:
         try:
             result = subprocess.run(
                 ["uv", "run", "python", script],
@@ -410,26 +458,26 @@ def run_setup():
         _update_step("git", status="error", completed_at=time.time(), error=str(e))
 
     _run_step("micro", ["bash", "-c",
-        "mkdir -p ~/.local/bin && bash install_micro.sh && mv micro ~/.local/bin/ 2>/dev/null || true"])
+        "mkdir -p ~/.local/bin && bash scripts/install_micro.sh && mv micro ~/.local/bin/ 2>/dev/null || true"])
 
-    _run_step("gh", ["bash", "install_gh.sh"])
+    _run_step("gh", ["bash", "scripts/install_gh.sh"])
 
     # --- Upgrade Databricks CLI (runtime image ships an older version) ---
-    _run_step("dbcli", ["bash", "install_databricks_cli.sh"])
+    _run_step("dbcli", ["bash", "scripts/install_databricks_cli.sh"])
 
     # --- Content-filter proxy (must be running before OpenCode starts) ---
     # Sanitizes requests/responses between OpenCode and Databricks
     # (see OpenCode #5028, docs/plans/2026-03-11-litellm-empty-content-blocks-design.md)
-    _run_step("proxy", ["uv", "run", "python", "setup_proxy.py"])
+    _run_step("proxy", ["uv", "run", "python", "setup/setup_proxy.py"])
 
     # --- Parallel agent setup (all independent of each other) ---
     parallel_steps = [
-        ("claude",     ["uv", "run", "python", "setup_claude.py"]),
-        ("codex",      ["uv", "run", "python", "setup_codex.py"]),
-        ("opencode",   ["uv", "run", "python", "setup_opencode.py"]),
-        ("gemini",     ["uv", "run", "python", "setup_gemini.py"]),
-        ("hermes",     ["uv", "run", "python", "setup_hermes.py"]),
-        ("databricks", ["uv", "run", "python", "setup_databricks.py"]),
+        ("claude",     ["uv", "run", "python", "setup/setup_claude.py"]),
+        ("codex",      ["uv", "run", "python", "setup/setup_codex.py"]),
+        ("opencode",   ["uv", "run", "python", "setup/setup_opencode.py"]),
+        ("gemini",     ["uv", "run", "python", "setup/setup_gemini.py"]),
+        ("hermes",     ["uv", "run", "python", "setup/setup_hermes.py"]),
+        ("databricks", ["uv", "run", "python", "setup/setup_databricks.py"]),
     ]
 
     with ThreadPoolExecutor(max_workers=len(parallel_steps)) as executor:
@@ -442,7 +490,7 @@ def run_setup():
     # --- MLflow setup runs AFTER claude setup to avoid settings.json race ---
     # setup_mlflow.py merges env vars into ~/.claude/settings.json which
     # setup_claude.py also writes; running sequentially prevents clobbering.
-    _run_step("mlflow", ["uv", "run", "python", "setup_mlflow.py"])
+    _run_step("mlflow", ["uv", "run", "python", "setup/setup_mlflow.py"])
 
     # Sync latest token into all CLI configs — covers the race where PAT
     # rotation happened while a setup script was still installing (the
@@ -580,7 +628,132 @@ def _check_ws_authorization():
     return True
 
 
-# ── WebSocket Event Handlers ──────────────────────────────────────────────
+def _check_ws_authorization_from_environ(environ):
+    """Check authorization from WSGI environ dict (for ASGI WebSocket via python-socketio).
+
+    Same logic as _check_ws_authorization() but reads headers from the environ
+    dict instead of Flask's request context. WSGI environ stores HTTP headers as
+    HTTP_X_FORWARDED_EMAIL (uppercase, underscores, HTTP_ prefix).
+    """
+    if not app_owner:
+        if _is_databricks_apps():
+            logger.error("SECURITY: app_owner not resolved — denying WebSocket (fail-closed)")
+            return False
+        return True  # Local dev only
+
+    raw_user = (
+        environ.get("HTTP_X_FORWARDED_EMAIL")
+        or environ.get("HTTP_X_FORWARDED_USER")
+        or environ.get("HTTP_X_DATABRICKS_USER_EMAIL")
+    )
+    current_user = raw_user.lower() if raw_user else raw_user
+
+    if not current_user:
+        if _is_databricks_apps():
+            logger.warning("No user identity in WebSocket request on Databricks Apps — denying")
+            return False
+        return True  # Local dev only
+
+    if current_user != app_owner:
+        logger.warning(f"WebSocket unauthorized: {current_user} (owner: {app_owner})")
+        return False
+    return True
+
+
+def register_sio_handlers(sio):
+    """Register Socket.IO event handlers on an AsyncServer for ASGI mode.
+
+    Called by mcp_asgi.py. The handlers mirror the Flask-SocketIO handlers below
+    but use python-socketio's async API (explicit sid, enter_room/leave_room,
+    async def, ConnectionRefusedError for auth denial).
+    """
+
+    @sio.on('connect')
+    async def handle_connect(sid, environ, auth):
+        # Capture event loop on first connection for _emit_from_thread()
+        set_async_sio(sio, asyncio.get_running_loop())
+
+        # Diagnostic: log transport and header presence for debugging proxy behavior
+        transport = environ.get('QUERY_STRING', '')
+        has_email = bool(environ.get('HTTP_X_FORWARDED_EMAIL'))
+        has_user = bool(environ.get('HTTP_X_FORWARDED_USER'))
+        logger.info(f"WS connect: sid={sid}, qs={transport}, "
+                     f"has_email={has_email}, has_user={has_user}")
+
+        if not _check_ws_authorization_from_environ(environ):
+            raise ConnectionRefusedError('unauthorized')
+        logger.info("WebSocket client connected (ASGI)")
+
+    @sio.on('join_session')
+    async def handle_join_session(sid, data):
+        session_id = data.get('session_id')
+        if not session_id:
+            return {'status': 'error', 'message': 'session_id required'}
+        sess = _get_session(session_id)
+        if not sess:
+            return {'status': 'error', 'message': 'Session not found'}
+        with sess["lock"]:
+            sess["last_poll_time"] = time.time()
+            sess["output_buffer"].clear()
+        await sio.enter_room(sid, session_id)
+        logger.info(f"WebSocket client joined session room {session_id}")
+        return {'status': 'ok'}
+
+    @sio.on('leave_session')
+    async def handle_leave_session(sid, data):
+        session_id = data.get('session_id')
+        if session_id:
+            await sio.leave_room(sid, session_id)
+            logger.info(f"WebSocket client left session room {session_id}")
+
+    @sio.on('terminal_input')
+    async def handle_terminal_input(sid, data):
+        session_id = data.get('session_id')
+        input_data = data.get('input', '')
+        sess = _get_session(session_id)
+        if not sess:
+            return
+        with sess["lock"]:
+            sess["last_poll_time"] = time.time()
+        fd = sess["master_fd"]
+        try:
+            os.write(fd, input_data.encode())
+        except OSError as e:
+            logger.warning(f"WebSocket input write error for {session_id}: {e}")
+
+    @sio.on('terminal_resize')
+    async def handle_terminal_resize(sid, data):
+        session_id = data.get('session_id')
+        cols = data.get('cols', 80)
+        rows = data.get('rows', 24)
+        sess = _get_session(session_id)
+        if not sess:
+            return
+        with sess["lock"]:
+            sess["last_poll_time"] = time.time()
+        fd = sess["master_fd"]
+        try:
+            winsize = struct.pack("HHHH", rows, cols, 0, 0)
+            fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
+        except OSError as e:
+            logger.warning(f"WebSocket resize error for {session_id}: {e}")
+
+    @sio.on('heartbeat')
+    async def handle_heartbeat(sid, data):
+        session_ids = data.get('session_ids', [])
+        now = time.time()
+        for s_id in session_ids:
+            sess = _get_session(s_id)
+            if sess:
+                with sess["lock"]:
+                    sess["last_poll_time"] = now
+
+    @sio.on('disconnect')
+    async def handle_disconnect(sid):
+        logger.info("WebSocket client disconnected (ASGI)")
+
+
+# ── WebSocket Event Handlers (Flask-SocketIO — WSGI/local dev only) ──────
 
 @socketio.on('connect')
 def handle_ws_connect():
@@ -686,6 +859,42 @@ def _get_session(session_id):
         return sessions.get(session_id)
 
 
+def _tee_transcript_chunk(session, output: bytes, cap: int = TRANSCRIPT_CAP_BYTES) -> None:
+    """Append PTY output to the transcript file. Single-writer (read_pty_output).
+
+    All file-handle access is under ``session["lock"]`` so we never race the
+    Timer-driven close path in ``terminate_session``. The ``ValueError`` catch
+    is belt-and-suspenders for the tiny window where the handle is closed
+    between the ``is not None`` check and the actual ``write`` call (the lock
+    prevents this, but be defensive).
+    """
+    with session["lock"]:
+        fh = session.get("transcript_fh")
+        written = session.get("transcript_bytes", 0)
+        if fh is None:
+            return
+        remaining = cap - written
+        if remaining <= 0:
+            return
+        chunk = output[:remaining]
+        try:
+            fh.write(chunk)
+            fh.flush()
+            session["transcript_bytes"] = written + len(chunk)
+            if len(chunk) < len(output):
+                fh.write(b"\n[transcript truncated at %d bytes]\n" % cap)
+                fh.flush()
+                fh.close()
+                session["transcript_fh"] = None
+        except (OSError, ValueError) as exc:
+            logger.warning("transcript write failed: %s", exc)
+            try:
+                fh.close()
+            except Exception:
+                pass
+            session["transcript_fh"] = None
+
+
 def read_pty_output(session_id, fd):
     """Background thread to read PTY output into buffer and push via WebSocket."""
     session = _get_session(session_id)
@@ -711,12 +920,11 @@ def read_pty_output(session_id, fd):
                     session["output_buffer"].append(decoded)
                     session["last_poll_time"] = time.time()  # Keep session alive during WS output
                 # Push via WebSocket to the session room (AC-8)
-                try:
-                    socketio.emit('terminal_output',
+                _emit_from_thread('terminal_output',
                                   {'session_id': session_id, 'output': decoded},
                                   room=session_id)
-                except Exception:
-                    pass  # No WebSocket clients — HTTP polling handles it
+                # Tee to transcript file if enabled for this session
+                _tee_transcript_chunk(session, output)
             else:
                 # select timed out — check if process is still alive
                 try:
@@ -731,10 +939,7 @@ def read_pty_output(session_id, fd):
             break
 
     # Process exited or fd closed — notify WebSocket clients (AC-9)
-    try:
-        socketio.emit('session_exited', {'session_id': session_id}, room=session_id)
-    except Exception:
-        pass
+    _emit_from_thread('session_exited', {'session_id': session_id}, room=session_id)
 
     logger.info(f"Session {session_id} process exited")
 
@@ -744,14 +949,38 @@ def read_pty_output(session_id, fd):
 
 
 def terminate_session(session_id, pid, master_fd):
-    """Gracefully terminate a session: SIGHUP -> wait -> SIGKILL -> cleanup."""
+    """Gracefully terminate a session: SIGHUP -> wait -> SIGKILL -> cleanup.
+
+    Idempotent. Both the explicit close path (``mcp_close_pty_session``) and the
+    read-thread exit path (``read_pty_output``) call this for the same session.
+    We atomically *claim* the session by popping it from ``sessions`` — only the
+    caller that wins the pop kills the process and closes ``master_fd``. This
+    guarantees ``os.close()`` runs exactly once: a second close could land on a
+    since-reused fd (e.g. an asyncio event loop's self-pipe allocated by a later
+    test) and corrupt unrelated I/O, surfacing as intermittent EBADF.
+    """
+    # Atomically claim the session. If it's already gone, the other teardown
+    # path handled it — bail out WITHOUT touching the (possibly reused) fd.
+    with sessions_lock:
+        sess = sessions.pop(session_id, None)
+    if sess is None:
+        return
+
     logger.info(f"Terminating stale session {session_id} (pid={pid})")
 
     # Notify WebSocket clients that the session is closed
-    try:
-        socketio.emit('session_closed', {'session_id': session_id}, room=session_id)
-    except Exception:
-        pass
+    _emit_from_thread('session_closed', {'session_id': session_id}, room=session_id)
+
+    # Close transcript handle (if any) under per-session lock; swap-then-close
+    # outside the lock to avoid blocking on slow filesystems.
+    with sess["lock"]:
+        transcript_fh = sess.get("transcript_fh")
+        sess["transcript_fh"] = None
+    if transcript_fh is not None:
+        try:
+            transcript_fh.close()
+        except Exception:
+            pass
 
     try:
         os.kill(pid, signal.SIGHUP)
@@ -769,8 +998,21 @@ def terminate_session(session_id, pid, master_fd):
     except OSError:
         pass  # Process or fd already gone
 
-    with sessions_lock:
-        sessions.pop(session_id, None)
+    # Clean up the project dir if coda_interactive created one.
+    # Done here (not in mcp_close_pty_session) so BOTH the graceful close
+    # path AND the idle reaper (which calls terminate_session directly) hit
+    # this cleanup. Safe for HTTP-created sessions too — they never planted
+    # a dir at this path, so os.path.isdir short-circuits.
+    import shutil
+    project_dir = os.path.join(
+        os.path.expanduser("~/.coda/projects"),
+        session_id,
+    )
+    if os.path.isdir(project_dir):
+        try:
+            shutil.rmtree(project_dir)
+        except OSError as e:
+            logger.warning("Failed to clean up project dir %s: %s", project_dir, e)
 
 
 def _get_session_process(pid):
@@ -858,7 +1100,7 @@ def cleanup_stale_sessions():
 def authorize_request():
     """Check authorization before processing any request."""
     # Skip auth for health check, setup status, and Socket.IO (has own auth via connect event)
-    if request.path in ("/health", "/api/setup-status", "/api/pat-status", "/api/configure-pat", "/api/app-state") or request.path.startswith("/socket.io"):
+    if request.path in ("/health", "/api/setup-status", "/api/pat-status", "/api/configure-pat", "/api/app-state") or request.path.startswith("/socket.io") or request.path.startswith("/mcp"):
         return None
 
     authorized, user = check_authorization()
@@ -873,6 +1115,10 @@ def authorize_request():
 
 @app.after_request
 def set_security_headers(response):
+    # MCP endpoint handles its own CORS/headers — skip security headers
+    # that might interfere (CSP connect-src, X-Frame-Options, etc.)
+    if request.path.startswith("/mcp"):
+        return response
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-XSS-Protection"] = "1; mode=block"
@@ -934,17 +1180,58 @@ def list_sessions():
     return jsonify(result)
 
 
+def _serve_transcript_replay(session_id: str):
+    """Serve the on-disk transcript for a PTY session as a replay response.
+
+    Used by attach_session() in two cases:
+      1. The PTY is gone (transcript-fallback path).
+      2. The PTY exists but is replay_only=True (no live attach allowed).
+
+    Returns either a Flask JSON response with replay=True, or a 404 if no
+    transcript exists for this pty_session_id.
+    """
+    from coda_mcp import task_manager as _tm
+    tdir = _tm.find_task_dir_by_pty_session(session_id)
+    if tdir:
+        transcript = os.path.join(tdir, "transcript.log")
+        if os.path.isfile(transcript):
+            try:
+                with open(transcript, "rb") as f:
+                    content = f.read()
+                return jsonify({
+                    "session_id": session_id,
+                    "label": "hermes-mcp (replay)",
+                    "output": [content.decode("utf-8", errors="replace")],
+                    "replay": True,
+                    "process": None,
+                    "created_at": None,
+                })
+            except OSError:
+                pass
+    return jsonify({"error": "Session not found or exited"}), 404
+
+
 @app.route("/api/session/attach", methods=["POST"])
 def attach_session():
-    """Reattach to an existing session — returns buffered output for replay."""
+    """Reattach to an existing session — returns buffered output for replay.
+
+    If the live PTY is gone but an on-disk transcript exists for this
+    pty_session_id, return the transcript as ``output`` with ``replay: True``.
+    """
     data = request.get_json(silent=True) or {}
     session_id = data.get("session_id", "")
 
     sess = _get_session(session_id)
-    if not sess or sess.get("exited"):
-        return jsonify({"error": "Session not found or exited"}), 404
 
-    # Reset idle clock so the 24h reaper starts fresh
+    # Replay-only sessions (e.g. those created by coda_run) always serve the
+    # transcript-from-disk, even when the PTY is still alive.
+    if sess and sess.get("replay_only"):
+        return _serve_transcript_replay(session_id)
+
+    if not sess or sess.get("exited"):
+        return _serve_transcript_replay(session_id)
+
+    # Existing live-attach path
     sess["last_poll_time"] = time.time()
 
     return jsonify({
@@ -1083,7 +1370,8 @@ def create_session():
     """Create a new terminal session."""
     # Quick reject before forking a PTY (approximate — authoritative check below)
     with sessions_lock:
-        if len(sessions) >= MAX_CONCURRENT_SESSIONS:
+        active = len(sessions)
+        if active >= MAX_CONCURRENT_SESSIONS:
             return jsonify({"error": f"Maximum {MAX_CONCURRENT_SESSIONS} concurrent sessions reached. Close an existing session first."}), 429
 
     data = request.get_json(silent=True) or {}
@@ -1122,7 +1410,8 @@ def create_session():
         with sessions_lock:
             # Authoritative check under the same lock as insertion — prevents
             # TOCTOU race where two concurrent requests both pass the early check.
-            if len(sessions) >= MAX_CONCURRENT_SESSIONS:
+            active = len(sessions)
+            if active >= MAX_CONCURRENT_SESSIONS:
                 os.close(master_fd)
                 try:
                     os.kill(pid, signal.SIGKILL)
@@ -1149,6 +1438,133 @@ def create_session():
         return jsonify({"session_id": session_id})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+# ── MCP Integration Helpers ──────────────────────────────────────────
+
+
+def mcp_create_pty_session(
+    label: str = "hermes-mcp",
+    transcript_path: str | None = None,
+    replay_only: bool = False,
+    cwd: str | None = None,
+) -> str:
+    """Create a PTY session for MCP use. Returns the PTY session_id."""
+    with sessions_lock:
+        active = len(sessions)
+        if active >= MAX_CONCURRENT_SESSIONS:
+            raise RuntimeError(
+                f"Maximum {MAX_CONCURRENT_SESSIONS} concurrent sessions reached."
+            )
+
+    master_fd, slave_fd = pty.openpty()
+
+    # Strip PAT, SP creds, registry tokens, and other secrets that must not be
+    # readable from the agent's PTY. See _build_terminal_shell_env docstring
+    # for the full list. (F-01)
+    shell_env = _build_terminal_shell_env(os.environ)
+    if not shell_env.get("HOME") or shell_env["HOME"] == "/":
+        shell_env["HOME"] = "/app/python/source_code"
+    local_bin = f"{shell_env['HOME']}/.local/bin"
+    shell_env["PATH"] = f"{local_bin}:{shell_env.get('PATH', '')}"
+
+    projects_dir = os.path.join(shell_env["HOME"], "projects")
+    os.makedirs(projects_dir, exist_ok=True)
+
+    # When caller passes cwd, use it; otherwise fall back to projects_dir
+    # (preserves current behavior for existing callers that don't pass cwd).
+    spawn_cwd = cwd if cwd is not None else projects_dir
+
+    pid = subprocess.Popen(
+        ["/bin/bash"],
+        stdin=slave_fd,
+        stdout=slave_fd,
+        stderr=slave_fd,
+        preexec_fn=os.setsid,
+        env=shell_env,
+        cwd=spawn_cwd,
+    ).pid
+    os.close(slave_fd)
+
+    # Open transcript file (if requested) before locking the session dict.
+    transcript_fh = None
+    if transcript_path:
+        try:
+            parent_dir = os.path.dirname(transcript_path)
+            if parent_dir:
+                os.makedirs(parent_dir, exist_ok=True)
+            transcript_fh = open(transcript_path, "ab", buffering=0)
+            os.fchmod(transcript_fh.fileno(), 0o600)
+        except OSError as exc:
+            logger.warning("Could not open transcript at %s: %s", transcript_path, exc)
+            transcript_fh = None
+
+    session_id = str(uuid.uuid4())
+
+    try:
+        with sessions_lock:
+            active = len(sessions)
+            if active >= MAX_CONCURRENT_SESSIONS:
+                os.close(master_fd)
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except OSError:
+                    pass
+                raise RuntimeError(
+                    f"Maximum {MAX_CONCURRENT_SESSIONS} concurrent sessions reached."
+                )
+            sessions[session_id] = {
+                "master_fd": master_fd,
+                "pid": pid,
+                "output_buffer": deque(maxlen=1000),
+                "lock": threading.Lock(),
+                "last_poll_time": time.time(),
+                "created_at": time.time(),
+                "label": label,
+                "transcript_path": transcript_path if transcript_fh else None,
+                "transcript_fh": transcript_fh,
+                "transcript_bytes": 0,
+                "replay_only": replay_only,
+                "cwd": cwd,
+            }
+
+        thread = threading.Thread(
+            target=read_pty_output, args=(session_id, master_fd), daemon=True
+        )
+        thread.start()
+    except BaseException:
+        # Roll back transcript open if anything below it raises before the
+        # session is fully wired. The PTY itself is cleaned up by existing
+        # error paths; this is just the transcript handle.
+        if transcript_fh is not None:
+            try:
+                transcript_fh.close()
+            except Exception:
+                pass
+        raise
+
+    return session_id
+
+
+def mcp_send_input(session_id: str, data: str):
+    """Send input to a PTY session."""
+    session = _get_session(session_id)
+    if not session:
+        raise RuntimeError(f"Session {session_id} not found")
+    with session["lock"]:
+        os.write(session["master_fd"], data.encode())
+
+
+def mcp_close_pty_session(session_id: str):
+    """Close a PTY session.
+
+    Project-dir cleanup (for coda_interactive sessions) lives inside
+    terminate_session so the idle reaper hits it too.
+    """
+    session = _get_session(session_id)
+    if not session:
+        return
+    terminate_session(session_id, session["pid"], session["master_fd"])
 
 
 @app.route("/api/input", methods=["POST"])
@@ -1366,6 +1782,20 @@ def initialize_app(local_dev=False):
     cleanup_thread = threading.Thread(target=cleanup_stale_sessions, daemon=True)
     cleanup_thread.start()
     logger.info(f"Started session cleanup thread (timeout={SESSION_TIMEOUT_SECONDS}s, interval={CLEANUP_INTERVAL_SECONDS}s)")
+
+
+# ── MCP Endpoint ─────────────────────────────────────────────────────
+from coda_mcp.mcp_endpoint import mcp_bp
+from coda_mcp.mcp_server import set_app_hooks
+
+app.register_blueprint(mcp_bp)
+
+# Wire MCP tools to PTY infrastructure
+set_app_hooks(
+    create_session_fn=mcp_create_pty_session,
+    send_input_fn=mcp_send_input,
+    close_session_fn=mcp_close_pty_session,
+)
 
 
 if __name__ == "__main__":

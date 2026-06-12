@@ -14,7 +14,7 @@ import pytest
 # Helpers
 # ---------------------------------------------------------------------------
 
-SETUP_MLFLOW = Path(__file__).parent.parent / "setup_mlflow.py"
+SETUP_MLFLOW = Path(__file__).parent.parent / "setup" / "setup_mlflow.py"
 
 
 def run_setup_mlflow(tmp_path, env_overrides=None):
