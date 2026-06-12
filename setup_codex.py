@@ -88,9 +88,14 @@ if gateway_host and not gateway_token:
     gateway_host = ""
 
 if gateway_host:
-    codex_base_url = f"{gateway_host}/openai/v1"
+    # Route through the local token-injection proxy (setup_proxy.py port 4001)
+    # so long-lived Codex sessions survive PAT rotation. The proxy re-reads
+    # the rotated token from ~/.databrickscfg on every request and overrides
+    # Authorization, so the OPENAI_API_KEY snapshotted at Codex startup no
+    # longer matters once a rotation happens.
+    codex_base_url = "http://127.0.0.1:4001/v1"
     auth_token = gateway_token
-    print(f"Using Databricks AI Gateway: {gateway_host}")
+    print(f"Using Databricks AI Gateway via local proxy: {gateway_host} -> 127.0.0.1:4001")
 else:
     codex_base_url = f"{host}/serving-endpoints"
     auth_token = token

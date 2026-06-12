@@ -31,6 +31,11 @@ UPSTREAM_BASE = os.environ.get("PROXY_UPSTREAM_BASE", "")
 LISTEN_HOST = os.environ.get("PROXY_HOST", "127.0.0.1")
 LISTEN_PORT = int(os.environ.get("PROXY_PORT", "4000"))
 
+# Passthrough mode: skip request/response munging, only inject fresh token.
+# Used by the Codex-facing proxy where the Responses-API payload shape
+# doesn't match the chat-completions sanitizers below.
+PASSTHROUGH = os.environ.get("PROXY_PASSTHROUGH", "").lower() == "true"
+
 # ---------------------------------------------------------------------------
 # Fresh token injection — survives PAT rotation
 # ---------------------------------------------------------------------------
@@ -522,23 +527,24 @@ class ProxyHandler(BaseHTTPRequestHandler):
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length)
 
-        log.info(f"POST {self.path} ({content_length} bytes)")
+        log.info(f"POST {self.path} ({content_length} bytes){' [passthrough]' if PASSTHROUGH else ''}")
 
-        # --- Sanitize request ---
-        try:
-            data = json.loads(body)
-            if "messages" in data:
-                before = len(data["messages"])
-                data["messages"] = sanitize_messages(data["messages"])
-                after = len(data["messages"])
-                if before != after:
-                    log.info(f"Messages: {before} -> {after}")
-            # Strip unsupported schema keys from tool definitions (all models)
-            data = sanitize_tool_schemas(data)
-            body = json.dumps(data).encode()
-        except (json.JSONDecodeError, KeyError) as e:
-            log.warning(f"Could not parse request body: {e}")
-            pass  # Forward as-is if not valid JSON
+        # --- Sanitize request (skipped in passthrough mode) ---
+        if not PASSTHROUGH:
+            try:
+                data = json.loads(body)
+                if "messages" in data:
+                    before = len(data["messages"])
+                    data["messages"] = sanitize_messages(data["messages"])
+                    after = len(data["messages"])
+                    if before != after:
+                        log.info(f"Messages: {before} -> {after}")
+                # Strip unsupported schema keys from tool definitions (all models)
+                data = sanitize_tool_schemas(data)
+                body = json.dumps(data).encode()
+            except (json.JSONDecodeError, KeyError) as e:
+                log.warning(f"Could not parse request body: {e}")
+                pass  # Forward as-is if not valid JSON
 
         # Build upstream URL
         upstream_url = UPSTREAM_BASE + self.path
@@ -578,13 +584,15 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
             # --- Non-streaming response ---
             if not is_stream:
-                # Fix response
-                try:
-                    resp_data = resp.json()
-                    resp_data = fix_response_data(resp_data)
-                    resp_body = json.dumps(resp_data).encode()
-                except (json.JSONDecodeError, ValueError):
+                if PASSTHROUGH:
                     resp_body = resp.content
+                else:
+                    try:
+                        resp_data = resp.json()
+                        resp_data = fix_response_data(resp_data)
+                        resp_body = json.dumps(resp_data).encode()
+                    except (json.JSONDecodeError, ValueError):
+                        resp_body = resp.content
 
                 self.send_response(resp.status_code)
                 for key, value in resp.headers.items():
@@ -602,6 +610,15 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     self.send_header(key, value)
             self.send_header("Transfer-Encoding", "chunked")
             self.end_headers()
+
+            if PASSTHROUGH:
+                # Forward raw SSE bytes — Responses-API events don't match the
+                # chat-completions SSEProcessor and shouldn't be re-serialized.
+                for chunk in resp.iter_content(chunk_size=4096):
+                    if chunk:
+                        self._send_chunk(chunk)
+                self._send_chunk(b"")
+                return
 
             processor = SSEProcessor()
 
