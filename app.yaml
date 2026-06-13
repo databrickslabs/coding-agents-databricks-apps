@@ -21,8 +21,19 @@ env:
     value: 0
   # Set CLAUDE_CODE_OTEL_ENABLED=true to send Claude Code OTEL signals to Unity Catalog.
   - name: CLAUDE_CODE_OTEL_ENABLED
-    value: "false"
+    value: "true"
   - name: CLAUDE_CODE_OTEL_CATALOG_SCHEMA
     value: davidokeeffe_standard_demo_catalog.default
   - name: MAX_CONCURRENT_SESSIONS
     value: "5"
+  # Set OMNIGENTS_SERVER_URL to register this CoDA instance as an Omnigents
+  # agent host (so the Omnigents Web UI / mobile can run sessions in this
+  # container). Unset/empty = off, no behaviour change. The host tunnel
+  # authenticates via the app SP's OAuth (a PAT is rejected by the Apps proxy).
+  # See omnigents_host.py + GOAL.md.
+  # - name: OMNIGENTS_SERVER_URL
+  #   value: "https://omnigents-daveok-7405607084296055.15.azure.databricksapps.com"
+  # OMNIGENTS_WHEEL_SPEC: uv/pip install spec for the omnigents host CLI (git
+  # ref or wheel path). Required when OMNIGENTS_SERVER_URL is set.
+  # - name: OMNIGENTS_WHEEL_SPEC
+  #   value: "git+https://github.com/databricks-eng/agent-framework.git"

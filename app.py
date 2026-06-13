@@ -1304,6 +1304,12 @@ def initialize_app(local_dev=False):
 
     # SP credentials preserved — needed for Apps API (owner resolution) and secret persistence
 
+    # Capture the app SP's M2M OAuth creds BEFORE the strip below — the
+    # Omnigents host tunnel needs an OAuth token (the Apps proxy rejects PATs).
+    # No-op / returns None when disabled or creds absent. See omnigents_host.py.
+    from omnigents_host import capture_sp_credentials, start_host
+    _omnigents_sp_creds = capture_sp_credentials()
+
     # Resolve owner: Apps API (app.creator via SP) > PAT (current_user.me)
     app_owner = get_token_owner()
     if app_owner:
@@ -1318,6 +1324,11 @@ def initialize_app(local_dev=False):
     os.environ.pop("DATABRICKS_CLIENT_ID", None)
     os.environ.pop("DATABRICKS_CLIENT_SECRET", None)
     logger.info("SP credentials stripped — PAT-only auth from this point")
+
+    # Register as an Omnigents host (no-op unless OMNIGENTS_SERVER_URL is set).
+    # Uses the SP creds captured above to mint OAuth for the host tunnel; the
+    # spawned runner uses CoDA's PAT + AI-Gateway creds for the actual coding.
+    start_host(_omnigents_sp_creds)
 
     # Telemetry: app startup ping (fire-and-forget in background thread)
     log_telemetry("event", "app_startup")
