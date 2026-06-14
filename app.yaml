@@ -31,9 +31,8 @@ env:
   # container). Unset/empty = off, no behaviour change. The host tunnel
   # authenticates via the app SP's OAuth (a PAT is rejected by the Apps proxy).
   # See omnigents_host.py + GOAL.md.
-  # TEMPORARILY DISABLED to isolate a boot failure — re-enable after diagnosis.
-  # - name: OMNIGENTS_SERVER_URL
-  #   value: "https://omnigents-daveok-7405607084296055.15.azure.databricksapps.com"
+  - name: OMNIGENTS_SERVER_URL
+    value: "https://omnigents-daveok-7405607084296055.15.azure.databricksapps.com"
   # OMNIGENTS_WHEEL_SPEC: a wheels DIRECTORY (find-links) or a plain install
   # spec (git ref / PyPI name). Here: a UC Volume of wheels built from the same
   # commit as the omnigents-daveok server (protocol match). Required when
