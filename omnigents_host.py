@@ -207,11 +207,15 @@ def _write_oauth_profile(creds: dict[str, str]) -> None:
     home = os.environ.get("HOME", "/app/python/source_code")
     cfg_path = os.path.join(home, ".databrickscfg")
 
+    # auth_type = oauth-m2m is REQUIRED: without it the CLI/SDK doesn't infer
+    # client-credentials from client_id/secret and fails with "OAuth is not
+    # configured for this host" — so the host tunnel never gets an M2M token.
     profile_block = (
         f"\n[{_HOST_PROFILE}]\n"
         f"host = {creds['host']}\n"
         f"client_id = {creds['client_id']}\n"
         f"client_secret = {creds['client_secret']}\n"
+        f"auth_type = oauth-m2m\n"
     )
 
     # Append only if the profile isn't already present (idempotent across
