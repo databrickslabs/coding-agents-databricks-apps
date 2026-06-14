@@ -244,7 +244,9 @@ def _write_oauth_profile(creds: dict[str, str]) -> None:
 def _run_host_once(server_url: str) -> int:
     """Run ``omnigents host`` in the foreground until it exits. Returns rc."""
     home = os.environ.get("HOME", "/app/python/source_code")
-    cmd = [_omnigents_bin(), "host", server_url, "--profile", _HOST_PROFILE]
+    # `omnigent host` takes only the server URL (no --profile on current main).
+    # Auth is driven by DATABRICKS_CONFIG_PROFILE in the env below.
+    cmd = [_omnigents_bin(), "host", server_url]
 
     # The runner inherits this env; CoDA's ANTHROPIC_* AI-Gateway creds are
     # already present and get forwarded host→runner via Omnigents'
