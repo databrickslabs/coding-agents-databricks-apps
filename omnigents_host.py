@@ -27,6 +27,7 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import tempfile
 import threading
 import time
 
@@ -51,14 +52,72 @@ def _omnigents_bin() -> str:
     return os.path.join(home, ".local", "bin", "omnigents")
 
 
-def ensure_installed() -> bool:
-    """Install the ``omnigents`` host CLI if it isn't already present (FR-1).
+def _materialize_spec(spec: str) -> str:
+    """Resolve OMNIGENTS_WHEEL_SPEC to a locally-usable install source.
 
-    Source is ``OMNIGENTS_WHEEL_SPEC`` (a pip/uv install spec — e.g. a git ref
-    or a wheel path). ``click`` is pinned to 8.1.8: the Omnigents CLI assigns
-    ``Context.protected_args``, which is read-only in click >=8.2, so a newer
-    click breaks ``omnigents host`` at arg-parse. Returns True if the CLI is
-    available afterward.
+    A ``/Volumes/...`` UC Volume path is downloaded via the Databricks files
+    SDK into a temp dir (the app SP's READ_VOLUME grant authorizes this) and
+    that local dir is returned — Databricks Apps does not FUSE-mount Volumes
+    for every app, so we can't rely on the path existing on disk. Any other
+    spec (an existing dir, a git ref, a PyPI name) is returned unchanged.
+    """
+    if spec.startswith("/Volumes/") and not os.path.isdir(spec):
+        from databricks.sdk import WorkspaceClient
+
+        tmp = tempfile.mkdtemp(prefix="oa-wheels-")
+        w = WorkspaceClient()
+        listed = list(w.files.list_directory_contents(spec))
+        wheels = [e for e in listed if (e.path or "").endswith(".whl")]
+        if not wheels:
+            raise FileNotFoundError(f"no .whl in UC Volume {spec}")
+        for entry in wheels:
+            dest = os.path.join(tmp, os.path.basename(entry.path))
+            resp = w.files.download(entry.path)
+            with open(dest, "wb") as f:
+                f.write(resp.contents.read())
+        logger.info("Downloaded %d host wheels from %s", len(wheels), spec)
+        return tmp
+    return spec
+
+
+def _install_command(spec: str) -> list[str]:
+    """Build the ``uv tool install`` command for the configured source.
+
+    ``spec`` (already materialized to a local path when it was a UC Volume)
+    may be:
+
+    * a **directory** of wheels — we ``--find-links`` it and install the main
+      ``omnigents`` wheel, letting uv resolve the sibling
+      ``omnigents-client`` / ``omnigents-ui-sdk`` wheels from the same dir
+      while pulling the rest from public PyPI; or
+    * a plain install **spec** (git ref / PyPI name / wheel path).
+
+    ``click`` is pinned to 8.1.8: the Omnigents CLI assigns
+    ``Context.protected_args``, read-only in click >=8.2, which breaks
+    ``omnigents host`` at arg-parse.
+    """
+    pin = ["--with", "click==8.1.8"]
+    if os.path.isdir(spec):
+        main = sorted(
+            f for f in os.listdir(spec)
+            if f.startswith("omnigents-") and f.endswith(".whl")
+        )
+        if not main:
+            raise FileNotFoundError(f"no omnigents-*.whl in {spec}")
+        return [
+            "uv", "tool", "install",
+            "--find-links", spec,
+            "--index-url", "https://pypi.org/simple",
+            *pin,
+            os.path.join(spec, main[-1]),
+        ]
+    return ["uv", "tool", "install", "--index-url", "https://pypi.org/simple", *pin, spec]
+
+
+def ensure_installed() -> bool:
+    """Install the host CLI if it isn't already present (FR-1).
+
+    Returns True if the CLI is available afterward.
     """
     if os.path.exists(_omnigents_bin()):
         return True
@@ -70,14 +129,9 @@ def ensure_installed() -> bool:
         )
         return False
     try:
-        subprocess.run(
-            ["uv", "tool", "install", "--with", "click==8.1.8", spec],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=600,
-        )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        cmd = _install_command(_materialize_spec(spec))
+        subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=600)
+    except Exception as e:  # download/install failure must not crash the worker
         detail = getattr(e, "stderr", "") or str(e)
         logger.warning("omnigents install failed: %s; host NOT started", detail[:300])
         return False
