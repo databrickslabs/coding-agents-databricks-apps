@@ -72,7 +72,7 @@ def _omnigents_bin() -> str:
     return os.path.join(home, ".local", "bin", "omnigents")
 
 
-def _materialize_spec(spec: str) -> str:
+def _materialize_spec(spec: str, sp_creds: dict[str, str] | None = None) -> str:
     """Resolve OMNIGENTS_WHEEL_SPEC to a locally-usable install source.
 
     A ``/Volumes/...`` UC Volume path is downloaded via the Databricks files
@@ -80,12 +80,25 @@ def _materialize_spec(spec: str) -> str:
     that local dir is returned — Databricks Apps does not FUSE-mount Volumes
     for every app, so we can't rely on the path existing on disk. Any other
     spec (an existing dir, a git ref, a PyPI name) is returned unchanged.
+
+    Authenticates the SDK with the captured app-SP creds: by the time this
+    runs, CoDA has already stripped DATABRICKS_CLIENT_ID/SECRET from the env
+    (and popped the PAT vars), so a bare ``WorkspaceClient()`` can't configure
+    default credentials. We pass the captured SP creds explicitly.
     """
     if spec.startswith("/Volumes/") and not os.path.isdir(spec):
         from databricks.sdk import WorkspaceClient
+        from databricks.sdk.core import Config
 
         tmp = tempfile.mkdtemp(prefix="oa-wheels-")
-        w = WorkspaceClient()
+        if sp_creds:
+            w = WorkspaceClient(config=Config(
+                host=sp_creds["host"],
+                client_id=sp_creds["client_id"],
+                client_secret=sp_creds["client_secret"],
+            ))
+        else:
+            w = WorkspaceClient()
         listed = list(w.files.list_directory_contents(spec))
         wheels = [e for e in listed if (e.path or "").endswith(".whl")]
         if not wheels:
@@ -134,10 +147,11 @@ def _install_command(spec: str) -> list[str]:
     return ["uv", "tool", "install", "--index-url", "https://pypi.org/simple", *pin, spec]
 
 
-def ensure_installed() -> bool:
+def ensure_installed(sp_creds: dict[str, str] | None = None) -> bool:
     """Install the host CLI if it isn't already present (FR-1).
 
-    Returns True if the CLI is available afterward.
+    ``sp_creds`` authenticates a UC-Volume wheel download (see
+    :func:`_materialize_spec`). Returns True if the CLI is available afterward.
     """
     if os.path.exists(_omnigents_bin()):
         return True
@@ -149,7 +163,7 @@ def ensure_installed() -> bool:
         )
         return False
     try:
-        cmd = _install_command(_materialize_spec(spec))
+        cmd = _install_command(_materialize_spec(spec, sp_creds))
         subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=600)
     except Exception as e:  # download/install failure must not crash the worker
         detail = getattr(e, "stderr", "") or str(e)
@@ -262,7 +276,7 @@ def start_host(sp_creds: dict[str, str] | None) -> None:
         return
     _set(sp_creds_captured=True, stage="installing")
 
-    if not ensure_installed():
+    if not ensure_installed(sp_creds):
         _set(stage="install_failed")  # ensure_installed already logged why
         return
     _set(installed=True, stage="writing_profile")
