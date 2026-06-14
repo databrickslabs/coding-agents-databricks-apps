@@ -926,6 +926,13 @@ def get_version():
     return jsonify({"version": APP_VERSION})
 
 
+@app.route("/api/omnigents-status")
+def omnigents_status():
+    """Report Omnigents host-integration state (FR-9 observability)."""
+    from omnigents_host import get_status
+    return jsonify(get_status())
+
+
 @app.route("/api/pat-status")
 def pat_status():
     """Check if a valid, usable PAT is configured."""

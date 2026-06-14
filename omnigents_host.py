@@ -41,6 +41,26 @@ _HOST_PROFILE = "omnigents-host"
 _RESTART_BACKOFF_SECONDS = 10
 _MAX_BACKOFF_SECONDS = 120
 
+# Observable state for /api/omnigents-status (FR-9). Updated as startup
+# progresses so the integration can be diagnosed without app log access.
+_status: dict[str, object] = {
+    "enabled": False,
+    "sp_creds_captured": False,
+    "installed": False,
+    "host_launched": False,
+    "stage": "not_started",
+    "last_error": None,
+}
+
+
+def get_status() -> dict[str, object]:
+    """Return a copy of the current host-integration state."""
+    return dict(_status)
+
+
+def _set(**kw: object) -> None:
+    _status.update(kw)
+
 
 def omnigents_host_enabled() -> bool:
     """True when CoDA is configured to register as an Omnigents host."""
@@ -134,6 +154,7 @@ def ensure_installed() -> bool:
     except Exception as e:  # download/install failure must not crash the worker
         detail = getattr(e, "stderr", "") or str(e)
         logger.warning("omnigents install failed: %s; host NOT started", detail[:300])
+        _set(last_error=f"install: {detail[:280]}")
         return False
     return os.path.exists(_omnigents_bin())
 
@@ -225,24 +246,32 @@ def start_host(sp_creds: dict[str, str] | None) -> None:
     :func:`capture_sp_credentials`. No-op when disabled or creds are missing.
     """
     if not omnigents_host_enabled():
+        _set(stage="disabled")
         return
+    _set(enabled=True, stage="enabled")
     server_url = os.environ["OMNIGENTS_SERVER_URL"].strip()
 
     if not sp_creds:
-        logger.warning(
+        msg = (
             "OMNIGENTS_SERVER_URL is set but no app SP credentials were "
             "captured — the host tunnel needs OAuth (a PAT is rejected by the "
             "Apps proxy). Host NOT started."
         )
+        logger.warning(msg)
+        _set(stage="no_sp_creds", last_error=msg)
         return
+    _set(sp_creds_captured=True, stage="installing")
 
     if not ensure_installed():
-        return  # ensure_installed already logged why
+        _set(stage="install_failed")  # ensure_installed already logged why
+        return
+    _set(installed=True, stage="writing_profile")
 
     try:
         _write_oauth_profile(sp_creds)
     except Exception as e:
         logger.warning("Could not write OAuth host profile: %s; host NOT started", e)
+        _set(stage="profile_failed", last_error=str(e))
         return
 
     thread = threading.Thread(
@@ -252,4 +281,5 @@ def start_host(sp_creds: dict[str, str] | None) -> None:
         name="omnigents-host",
     )
     thread.start()
+    _set(host_launched=True, stage="running")
     logger.info("Started Omnigents host supervisor → %s", server_url)
