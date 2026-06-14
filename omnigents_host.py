@@ -68,8 +68,16 @@ def omnigents_host_enabled() -> bool:
 
 
 def _omnigents_bin() -> str:
+    """Path to the host CLI. The package was renamed omnigents→omnigent; the
+    installed executable is ``omnigent`` (alias ``omni``). Fall back to the
+    legacy ``omnigents`` name for older builds."""
     home = os.environ.get("HOME", "/app/python/source_code")
-    return os.path.join(home, ".local", "bin", "omnigents")
+    bindir = os.path.join(home, ".local", "bin")
+    for name in ("omnigent", "omnigents"):
+        path = os.path.join(bindir, name)
+        if os.path.exists(path):
+            return path
+    return os.path.join(bindir, "omnigent")  # default for the install check
 
 
 def _materialize_spec(spec: str, sp_creds: dict[str, str] | None = None) -> str:
@@ -120,26 +128,25 @@ def _install_command(spec: str) -> list[str]:
     may be:
 
     * a **directory** of wheels — we ``--find-links`` it and install the main
-      ``omnigents`` wheel, letting uv resolve the sibling
-      ``omnigents-client`` / ``omnigents-ui-sdk`` wheels from the same dir
+      ``omnigent`` wheel, letting uv resolve the sibling
+      ``omnigent-client`` / ``omnigent-ui-sdk`` wheels from the same dir
       while pulling the rest from public PyPI; or
     * a plain install **spec** (git ref / PyPI name / wheel path).
 
-    ``click`` is pinned to 8.1.8: the Omnigents CLI assigns
-    ``Context.protected_args``, read-only in click >=8.2, which breaks
-    ``omnigents host`` at arg-parse. ``databricks-sdk`` is added because the
-    host's Databricks auth path imports it — without it in the tool env,
-    ``_resolve_databricks_auth`` raises ImportError, the token factory caches
-    ``None``, and the tunnel WS upgrade goes out unauthenticated → 302 loop.
+    ``databricks-sdk`` is added because the host's Databricks auth path imports
+    it — without it in the tool env, ``_resolve_databricks_auth`` raises
+    ImportError, the token factory caches ``None``, and the tunnel WS upgrade
+    goes out unauthenticated → 302 loop. (The old ``click==8.1.8`` pin is no
+    longer needed: current ``omnigent`` pins click correctly in its deps.)
     """
-    pin = ["--with", "click==8.1.8", "--with", "databricks-sdk"]
+    pin = ["--with", "databricks-sdk"]
     if os.path.isdir(spec):
         main = sorted(
             f for f in os.listdir(spec)
-            if f.startswith("omnigents-") and f.endswith(".whl")
+            if f.startswith("omnigent-") and f.endswith(".whl")
         )
         if not main:
-            raise FileNotFoundError(f"no omnigents-*.whl in {spec}")
+            raise FileNotFoundError(f"no omnigent-*.whl in {spec}")
         return [
             "uv", "tool", "install",
             "--find-links", spec,
