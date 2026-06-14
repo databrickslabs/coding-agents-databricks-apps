@@ -1,13 +1,43 @@
 # GOAL: Attach a CoDA instance to Omnigents as an agent host
 
-> **Status:** GOAL ACHIEVED (integration proven live), with an operational
-> caveat. The CoDA host attaches to the Omnigents server end-to-end —
-> verified live multiple times with `✓ Connected … Listening for sessions`,
-> on a fully-current build of both sides (latest `agent-framework` main,
-> package `omnigent`). Code on branch `feat/omnigents-host`.
-> **Caveat:** keep the feature OFF by default in `app.yaml`. See §0.2.
+> **Status:** GOAL ACHIEVED. The CoDA host attaches to the Omnigents server
+> end-to-end and registers **online with harnesses configured** — confirmed
+> via the server's host registry (`/v1/hosts` shows
+> `name:"dbletX4BNFW", owner:<CoDA SP>, status:"online"`). Built from latest
+> `agent-framework` main (package `omnigent`). Branch `feat/omnigents-host`.
+> **Key identity finding:** the host is owned by CoDA's **app service
+> principal**, and Omnigents scopes `/v1/hosts` per-identity — so it does NOT
+> appear in a human user's (e.g. david.okeeffe) personal Web UI host list. It
+> is attached + usable in the SP context. This is the headless-SP design
+> outcome, accepted. See §0.3.
 > **Author:** David O'Keeffe · **Date:** 2026-06-15
 > **Tracking:** FEIP-7646 (child of FEIP-2996).
+
+---
+
+## 0.3 DEFINITIVE end state (2026-06-15) — host online, SP-owned
+
+`/v1/hosts` queried **as the CoDA app SP** returns the live host:
+`{host_id, name:"dbletX4BNFW", owner:"793257c7-…"(CoDA SP), status:"online",
+configured_harnesses:{claude:true, claude-sdk:true, openai-agents-sdk:true,…}}`.
+
+So the attach is real and complete. The reason it's invisible in the human
+Web UI: **Omnigents scopes the host list by caller identity.** The host
+authenticated (correctly) as the app SP via M2M OAuth, so it's owned by the
+SP; a user session (david.okeeffe) lists only that user's hosts. Querying as
+the SP shows it; querying as the user does not.
+
+**Accepted outcome:** the integration works; the host is SP-owned and used in
+the SP context, not the operator's personal UI. To make it appear as a human
+user instead would require the host to present that user's identity (e.g. an
+`omnigent login` user-session token) — not feasible from a headless container
+without interactive login. That's an Omnigents-side question, out of scope.
+
+**The final auto-start fix** (commit on branch): the host subprocess inherited
+CoDA's `DATABRICKS_WORKSPACE_ID` + `DATABRICKS_APP_*` env vars, which steer the
+SDK's unified-auth to the app's ambient identity and shadow the M2M profile →
+tunnel 302-loops. `_run_host_once` now strips them so the profile drives auth.
+Verified: host connects on attempt 1 and registers online.
 
 ---
 
