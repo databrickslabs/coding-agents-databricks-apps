@@ -240,12 +240,22 @@ def _run_host_once(server_url: str) -> int:
     # already present and get forwarded host→runner via Omnigents'
     # HARNESS_CREDENTIAL_ENV_VARS. We do NOT inject the SP secret here — the
     # host resolves it from the OAuth profile we wrote.
+    env = os.environ.copy()
+    # Omnigents' token factory calls _resolve_databricks_auth() WITHOUT a
+    # profile, so `--profile` is ignored for the tunnel token; it uses the
+    # SDK's default resolution. Point that resolution at our M2M profile via
+    # DATABRICKS_CONFIG_PROFILE, and clear the PAT env vars that would
+    # otherwise shadow it (a PAT is rejected by the Apps proxy → 302 loop).
+    env["DATABRICKS_CONFIG_PROFILE"] = _HOST_PROFILE
+    for shadowing in ("DATABRICKS_TOKEN", "DATABRICKS_HOST"):
+        env.pop(shadowing, None)
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
         cwd=home,
+        env=env,
     )
     for line in proc.stdout:  # type: ignore[union-attr]
         logger.info("[omnigents-host] %s", line.rstrip())
