@@ -134,6 +134,7 @@ def _get_setup_state_snapshot():
 
 # Single-user security: only the token owner can access the terminal
 app_owner = None
+_omnigent_sp_creds = None
 
 
 def _run_step(step_id, command):
@@ -933,6 +934,36 @@ def omnigents_status():
     return jsonify(get_status())
 
 
+@app.route("/api/omnigent-host/status")
+def omnigent_host_status():
+    """Report runtime Omnigent host state."""
+    from omnigents_host import get_status
+    return jsonify(get_status())
+
+
+@app.route("/api/omnigent-host/connect", methods=["POST"])
+def omnigent_host_connect():
+    """Start a runtime Omnigent host tunnel for a supplied server URL."""
+    data = request.get_json(silent=True) or {}
+    server_url = (data.get("server_url") or "").strip()
+    if not server_url:
+        return jsonify({"error": "server_url required"}), 400
+
+    from omnigents_host import connect_host
+    ok, status = connect_host(server_url, _omnigent_sp_creds)
+    if not ok:
+        code = 409 if status.get("last_error") == "host already running" else 400
+        return jsonify(status), code
+    return jsonify(status)
+
+
+@app.route("/api/omnigent-host/disconnect", methods=["POST"])
+def omnigent_host_disconnect():
+    """Stop the active runtime Omnigent host tunnel, if any."""
+    from omnigents_host import disconnect_host
+    return jsonify(disconnect_host())
+
+
 @app.route("/api/pat-status")
 def pat_status():
     """Check if a valid, usable PAT is configured."""
@@ -1302,7 +1333,7 @@ def close_session():
 
 def initialize_app(local_dev=False):
     """One-time init: detect owner, start cleanup thread."""
-    global app_owner
+    global app_owner, _omnigent_sp_creds
 
     # Install SIGTERM handler only for gunicorn (production).
     # For local dev, SIG_DFL is fine — the process just exits cleanly.
@@ -1315,7 +1346,7 @@ def initialize_app(local_dev=False):
     # Omnigents host tunnel needs an OAuth token (the Apps proxy rejects PATs).
     # No-op / returns None when disabled or creds absent. See omnigents_host.py.
     from omnigents_host import capture_sp_credentials, start_host
-    _omnigents_sp_creds = capture_sp_credentials()
+    _omnigent_sp_creds = capture_sp_credentials()
 
     # Resolve owner: Apps API (app.creator via SP) > PAT (current_user.me)
     app_owner = get_token_owner()
@@ -1335,7 +1366,7 @@ def initialize_app(local_dev=False):
     # Register as an Omnigents host (no-op unless OMNIGENTS_SERVER_URL is set).
     # Uses the SP creds captured above to mint OAuth for the host tunnel; the
     # spawned runner uses CoDA's PAT + AI-Gateway creds for the actual coding.
-    start_host(_omnigents_sp_creds)
+    start_host(_omnigent_sp_creds)
 
     # Telemetry: app startup ping (fire-and-forget in background thread)
     log_telemetry("event", "app_startup")
