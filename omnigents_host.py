@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import os
+import select
 import subprocess
 import tempfile
 import threading
@@ -41,25 +42,76 @@ _HOST_PROFILE = "omnigents-host"
 _RESTART_BACKOFF_SECONDS = 10
 _MAX_BACKOFF_SECONDS = 120
 
-# Observable state for /api/omnigents-status (FR-9). Updated as startup
-# progresses so the integration can be diagnosed without app log access.
+# Observable state for /api/omnigent-host/status. Updated as startup progresses
+# so the integration can be diagnosed without app log access.
 _status: dict[str, object] = {
-    "enabled": False,
-    "sp_creds_captured": False,
+    "configured": False,
+    "running": False,
     "installed": False,
     "host_launched": False,
-    "stage": "not_started",
+    "server_url": None,
+    "pid": None,
+    "stage": "idle",
     "last_error": None,
+    "log_tail": [],
 }
+
+_lock = threading.RLock()
+_stop_event: threading.Event | None = None
+_thread: threading.Thread | None = None
+_proc: subprocess.Popen[str] | None = None
+_sp_creds: dict[str, str] | None = None
+_log_tail: list[str] = []
+_LOG_TAIL_LIMIT = 80
 
 
 def get_status() -> dict[str, object]:
     """Return a copy of the current host-integration state."""
-    return dict(_status)
+    with _lock:
+        snapshot = dict(_status)
+        snapshot["log_tail"] = list(_log_tail)
+        return snapshot
 
 
 def _set(**kw: object) -> None:
-    _status.update(kw)
+    with _lock:
+        _status.update(kw)
+
+
+def _append_log(line: str) -> None:
+    line = line.rstrip()
+    if not line:
+        return
+    with _lock:
+        _log_tail.append(line)
+        del _log_tail[:-_LOG_TAIL_LIMIT]
+        _status["log_tail"] = list(_log_tail)
+
+
+def reset_for_tests() -> None:
+    """Reset module state between tests."""
+    global _proc, _sp_creds, _stop_event, _thread
+
+    if _proc is not None and _proc.poll() is None:
+        _proc.terminate()
+    with _lock:
+        _proc = None
+        _sp_creds = None
+        _stop_event = None
+        _thread = None
+        _log_tail.clear()
+        _status.clear()
+        _status.update({
+            "configured": False,
+            "running": False,
+            "installed": False,
+            "host_launched": False,
+            "server_url": None,
+            "pid": None,
+            "stage": "idle",
+            "last_error": None,
+            "log_tail": [],
+        })
 
 
 def omnigents_host_enabled() -> bool:
@@ -241,8 +293,10 @@ def _write_oauth_profile(creds: dict[str, str]) -> None:
     logger.info("Wrote OAuth profile '%s' for Omnigents host tunnel", _HOST_PROFILE)
 
 
-def _run_host_once(server_url: str) -> int:
+def _run_host_once(server_url: str, stop_event: threading.Event | None = None) -> int:
     """Run ``omnigents host`` in the foreground until it exits. Returns rc."""
+    global _proc
+
     home = os.environ.get("HOME", "/app/python/source_code")
     # `omnigent host` takes only the server URL (no --profile on current main).
     # Auth is driven by DATABRICKS_CONFIG_PROFILE in the env below.
@@ -281,19 +335,50 @@ def _run_host_once(server_url: str) -> int:
         cwd=home,
         env=env,
     )
-    for line in proc.stdout:  # type: ignore[union-attr]
-        logger.info("[omnigents-host] %s", line.rstrip())
-    return proc.wait()
+    with _lock:
+        _proc = proc
+        _status["pid"] = proc.pid
+        _status["running"] = True
+    try:
+        stdout = proc.stdout
+        while proc.poll() is None:
+            if stop_event is not None and stop_event.is_set():
+                proc.terminate()
+                break
+            if stdout is not None:
+                readable, _, _ = select.select([stdout], [], [], 0.2)
+                if readable:
+                    line = stdout.readline()
+                    if line:
+                        _append_log(line)
+                        logger.info("[omnigents-host] %s", line.rstrip())
+            else:
+                time.sleep(0.2)
+
+        if stdout is not None:
+            for line in stdout:
+                _append_log(line)
+                logger.info("[omnigents-host] %s", line.rstrip())
+        return proc.wait()
+    finally:
+        with _lock:
+            if _proc is proc:
+                _proc = None
+            _status["pid"] = None
 
 
-def _supervise(server_url: str, sp_creds: dict[str, str]) -> None:
+def _supervise(
+    server_url: str,
+    sp_creds: dict[str, str],
+    stop_event: threading.Event,
+) -> None:
     """Install, write the profile, then run the host with bounded backoff.
 
     Runs entirely in a background thread so NOTHING here blocks app startup
     (NFR-4) — the wheel install can take minutes and must never delay the
     gunicorn worker's readiness or trip the Databricks Apps boot deadline.
     """
-    _set(sp_creds_captured=True, stage="installing")
+    _set(stage="installing")
     if not ensure_installed(sp_creds):
         _set(stage="install_failed")  # ensure_installed already logged why
         return
@@ -304,49 +389,102 @@ def _supervise(server_url: str, sp_creds: dict[str, str]) -> None:
         logger.warning("Could not write OAuth host profile: %s; host NOT started", e)
         _set(stage="profile_failed", last_error=str(e))
         return
-    _set(host_launched=True, stage="running")
+    _set(host_launched=True, running=True, stage="running")
     logger.info("Omnigents host supervisor active → %s", server_url)
 
     backoff = _RESTART_BACKOFF_SECONDS
-    while True:
+    while not stop_event.is_set():
         try:
-            rc = _run_host_once(server_url)
+            rc = _run_host_once(server_url, stop_event=stop_event)
+            if stop_event.is_set():
+                break
             logger.warning("omnigents host exited rc=%s; restarting in %ss", rc, backoff)
         except Exception as e:  # never let host failures take down CoDA
             logger.warning("omnigents host crashed: %s; restarting in %ss", e, backoff)
-        time.sleep(backoff)
+            _set(last_error=str(e))
+        stop_event.wait(backoff)
         backoff = min(backoff * 2, _MAX_BACKOFF_SECONDS)
+    _set(running=False, stage="stopped", pid=None)
+
+
+def connect_host(
+    server_url: str,
+    sp_creds: dict[str, str] | None,
+) -> tuple[bool, dict[str, object]]:
+    """Start a supervised ``omnigent host`` for a runtime-supplied server URL."""
+    global _sp_creds, _stop_event, _thread
+
+    server_url = server_url.strip()
+    if not server_url:
+        _set(configured=False, running=False, stage="invalid_server_url", last_error="server_url required")
+        return False, get_status()
+    if not sp_creds:
+        msg = (
+            "No app SP credentials captured; Databricks Apps host tunnel "
+            "requires OAuth-capable app credentials."
+        )
+        _set(configured=False, running=False, stage="no_sp_creds", last_error=msg)
+        return False, get_status()
+
+    with _lock:
+        if _status.get("configured") is True and _status.get("stage") not in (
+            "idle",
+            "stopped",
+            "install_failed",
+            "profile_failed",
+            "invalid_server_url",
+            "no_sp_creds",
+        ):
+            _status["last_error"] = "host already running"
+            return False, get_status()
+
+        _sp_creds = dict(sp_creds)
+        _stop_event = threading.Event()
+        _status.update({
+            "configured": True,
+            "running": True,
+            "server_url": server_url,
+            "stage": "starting",
+            "last_error": None,
+        })
+        _thread = threading.Thread(
+            target=_supervise,
+            args=(server_url, _sp_creds, _stop_event),
+            daemon=True,
+            name="omnigent-host",
+        )
+        _thread.start()
+    logger.info("Spawned Omnigent host supervisor thread → %s", server_url)
+    return True, get_status()
+
+
+def disconnect_host() -> dict[str, object]:
+    """Stop the running host supervisor/process, if any."""
+    global _proc
+
+    with _lock:
+        stop_event = _stop_event
+        proc = _proc
+        if stop_event is not None:
+            stop_event.set()
+    if proc is not None and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+    _set(configured=False, running=False, stage="stopped", pid=None)
+    return get_status()
 
 
 def start_host(sp_creds: dict[str, str] | None) -> None:
-    """Spawn the host supervisor thread, if enabled. Returns immediately.
+    """Legacy boot-time wrapper around :func:`connect_host`.
 
-    Call from ``initialize_app`` with the creds captured by
-    :func:`capture_sp_credentials`. No-op when disabled or creds are missing.
-    ALL slow work (install, profile, run) happens in the thread so app startup
-    is never blocked (NFR-4).
+    Runtime control should call :func:`connect_host` directly. This remains so
+    older app.yaml deployments with ``OMNIGENTS_SERVER_URL`` still behave.
     """
     if not omnigents_host_enabled():
-        _set(stage="disabled")
+        _set(stage="idle")
         return
-    _set(enabled=True, stage="enabled")
-    server_url = os.environ["OMNIGENTS_SERVER_URL"].strip()
-
-    if not sp_creds:
-        msg = (
-            "OMNIGENTS_SERVER_URL is set but no app SP credentials were "
-            "captured — the host tunnel needs OAuth (a PAT is rejected by the "
-            "Apps proxy). Host NOT started."
-        )
-        logger.warning(msg)
-        _set(stage="no_sp_creds", last_error=msg)
-        return
-
-    thread = threading.Thread(
-        target=_supervise,
-        args=(server_url, sp_creds),
-        daemon=True,
-        name="omnigents-host",
-    )
-    thread.start()
-    logger.info("Spawned Omnigents host supervisor thread → %s", server_url)
+    connect_host(os.environ["OMNIGENTS_SERVER_URL"], sp_creds)
