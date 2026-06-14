@@ -256,10 +256,22 @@ def _run_host_once(server_url: str) -> int:
     # Omnigents' token factory calls _resolve_databricks_auth() WITHOUT a
     # profile, so `--profile` is ignored for the tunnel token; it uses the
     # SDK's default resolution. Point that resolution at our M2M profile via
-    # DATABRICKS_CONFIG_PROFILE, and clear the PAT env vars that would
-    # otherwise shadow it (a PAT is rejected by the Apps proxy → 302 loop).
+    # DATABRICKS_CONFIG_PROFILE, and clear every ambient Databricks env var that
+    # would otherwise shadow the profile in the SDK's unified-auth resolution.
+    # In particular DATABRICKS_WORKSPACE_ID + the DATABRICKS_APP_* vars (which
+    # Apps injects) steer auth to the app's ambient identity and cause the
+    # tunnel to 302 → OIDC even with the M2M profile present. Verified: a clean
+    # env with only the profile vars connects; leaving these in does not.
     env["DATABRICKS_CONFIG_PROFILE"] = _HOST_PROFILE
-    for shadowing in ("DATABRICKS_TOKEN", "DATABRICKS_HOST"):
+    for shadowing in (
+        "DATABRICKS_TOKEN",
+        "DATABRICKS_HOST",
+        "DATABRICKS_WORKSPACE_ID",
+        "DATABRICKS_APP_NAME",
+        "DATABRICKS_APP_URL",
+        "DATABRICKS_CLIENT_ID",
+        "DATABRICKS_CLIENT_SECRET",
+    ):
         env.pop(shadowing, None)
     proc = subprocess.Popen(
         cmd,
