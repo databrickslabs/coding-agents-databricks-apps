@@ -127,9 +127,12 @@ def _install_command(spec: str) -> list[str]:
 
     ``click`` is pinned to 8.1.8: the Omnigents CLI assigns
     ``Context.protected_args``, read-only in click >=8.2, which breaks
-    ``omnigents host`` at arg-parse.
+    ``omnigents host`` at arg-parse. ``databricks-sdk`` is added because the
+    host's Databricks auth path imports it — without it in the tool env,
+    ``_resolve_databricks_auth`` raises ImportError, the token factory caches
+    ``None``, and the tunnel WS upgrade goes out unauthenticated → 302 loop.
     """
-    pin = ["--with", "click==8.1.8"]
+    pin = ["--with", "click==8.1.8", "--with", "databricks-sdk"]
     if os.path.isdir(spec):
         main = sorted(
             f for f in os.listdir(spec)

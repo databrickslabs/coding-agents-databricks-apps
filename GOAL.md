@@ -1,10 +1,52 @@
 # GOAL: Attach a CoDA instance to Omnigents as an agent host
 
-> **Status:** MVP (Shape A, FR-1…FR-9) IMPLEMENTED on branch
-> `feat/omnigents-host` (commit 2dcebd6). Server stood up + healthy; auth model
-> proven. Remaining: a live end-to-end host attach with SP-OAuth (see §0).
-> **Author:** David O'Keeffe · **Date:** 2026-06-13
+> **Status:** MVP (Shape A, FR-1…FR-9) IMPLEMENTED + DEPLOYED LIVE on branch
+> `feat/omnigents-host`. CoDA-side pipeline fully working & observable
+> (`/api/omnigents-status` = all green). One residual blocker, isolated to
+> Omnigents' host WS-auth mechanics (NOT a CoDA bug) — see §0.1.
+> **Author:** David O'Keeffe · **Date:** 2026-06-14
 > **Tracking:** FEIP-7646 (child of FEIP-2996).
+
+---
+
+## 0.1 LIVE deploy result (2026-06-14) — CoDA side complete; residual = Omnigents host auth
+
+Redeployed the live `coda` app from this branch with the integration enabled.
+Verified via `/api/omnigents-status`: **every CoDA-side stage succeeds** —
+`sp_creds_captured:true, installed:true, host_launched:true, stage:"running"`.
+
+The CoDA app process: captures the app-SP creds before the strip → downloads
+the protocol-matched host wheel from a UC Volume (SDK auth with the captured
+creds) → installs the CLI (click==8.1.8) → writes an `oauth-m2m` profile with
+`https://` host → launches a supervised `omnigents host`.
+
+**Bugs found & fixed this session (all CoDA-side, committed):**
+1. Build had stripped `omnigents/resources/examples` → server crashed at
+   import. Rebuilt with it.
+2. `grant_sp_perms.py` (Lakebase public-schema grant) was needed for the
+   server to boot.
+3. `_materialize_spec` bare `WorkspaceClient()` couldn't auth after the cred
+   strip → pass captured SP creds explicitly.
+4. OAuth profile host lacked `https://` scheme → token wouldn't mint.
+5. Profile needed `auth_type = oauth-m2m` (CLI/SDK won't infer M2M otherwise).
+6. Omnigents' token factory ignores `--profile`; set
+   `DATABRICKS_CONFIG_PROFILE` + clear shadowing PAT env vars.
+- Prereqs: CoDA SP granted `READ_VOLUME` on the wheels volume + `CAN_USE` on
+  the `omnigents-daveok` app; wheels staged in `ot_demo.omnigents.artifacts`.
+
+**Residual blocker (Omnigents-side, needs their input):** the live
+`omnigents host` still 302-loops to OIDC. PROVEN it is NOT the credential:
+the M2M token minted from the exact `omnigents-host` profile
+(`aud=<workspace>, scope=all-apis`) **connects the tunnel** when sent as a raw
+WS bearer (`websockets` + `Authorization: Bearer` → `M2M_CONNECTS_NOW`, twice).
+So the token + proxy + SP grant all work. The 302 is in **how Omnigents' host
+WS client attaches/uses the token** — likely its `_make_auth_token_factory` /
+`_resolve_databricks_auth` returns/caches `None` (or the WS upgrade omits the
+header), sending the tunnel upgrade unauthenticated. This is in
+`agent-framework` `omnigents/runner/_entry.py` + `omnigents/host/connect.py`,
+not CoDA. Next step: instrument the host's actual outgoing WS-upgrade
+Authorization header, or raise with the Omnigents team — headless M2M host auth
+may not be fully supported yet.
 
 ---
 
