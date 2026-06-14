@@ -1,11 +1,58 @@
 # GOAL: Attach a CoDA instance to Omnigents as an agent host
 
-> **Status:** MVP (Shape A, FR-1…FR-9) IMPLEMENTED + DEPLOYED LIVE on branch
-> `feat/omnigents-host`. CoDA-side pipeline fully working & observable
-> (`/api/omnigents-status` = all green). One residual blocker, isolated to
-> Omnigents' host WS-auth mechanics (NOT a CoDA bug) — see §0.1.
-> **Author:** David O'Keeffe · **Date:** 2026-06-14
+> **Status:** GOAL ACHIEVED (integration proven live), with an operational
+> caveat. The CoDA host attaches to the Omnigents server end-to-end —
+> verified live multiple times with `✓ Connected … Listening for sessions`,
+> on a fully-current build of both sides (latest `agent-framework` main,
+> package `omnigent`). Code on branch `feat/omnigents-host`.
+> **Caveat:** keep the feature OFF by default in `app.yaml`. See §0.2.
+> **Author:** David O'Keeffe · **Date:** 2026-06-15
 > **Tracking:** FEIP-7646 (child of FEIP-2996).
+
+---
+
+## 0.2 FINAL STATE & completion summary (2026-06-15)
+
+**The goal — "attach a CoDA instance to Omnigents as an agent host" — is
+proven.** A CoDA container, running this branch's code, registers with the
+`omnigents-daveok` server over an outbound WSS tunnel authenticated by the app
+SP's M2M OAuth, and the server reports it as a live host listening for
+sessions. Verified live ≥3 times, including on a build where BOTH the server
+and the host CLI were rebuilt from latest `agent-framework` main.
+
+**The complete working recipe (all CoDA-side, committed):**
+1. Capture app-SP creds in `initialize_app` *before* CoDA strips them.
+2. Background thread (never blocks startup, NFR-4): install the `omnigent`
+   host CLI from a UC-Volume of wheels built from the same commit as the
+   server (downloaded via the files SDK, authed with the captured SP creds,
+   `--with databricks-sdk` so the host's auth path can import it); write an
+   `auth_type = oauth-m2m` profile with an `https://` host; run
+   `omnigent host <server-url>` (no `--profile` on current main) with
+   `DATABRICKS_CONFIG_PROFILE` set and PAT env vars cleared.
+3. Runner uses CoDA's PAT + `ANTHROPIC_*` gateway creds via Omnigents'
+   `HARNESS_CREDENTIAL_ENV_VARS`.
+4. Server prereqs: `grant_sp_perms.py` (Lakebase public schema); CoDA SP
+   granted `READ_VOLUME` on the wheels volume + `CAN_USE` on the server app.
+   `/api/omnigents-status` exposes the live state (FR-9).
+
+**Operational caveat (why OFF by default):** repeated rapid redeploys of the
+live `coda` app late in the session left the Databricks Apps platform failing
+to boot the app ("App process did not start within 10 minutes"). A controlled
+diagnostic (integration env vars commented out, redeploy) **reproduced the
+boot failure with the integration fully OFF** — proving the boot issue is a
+CoDA/platform deploy-state problem, NOT the integration code. Recovery is a
+clean `databricks apps stop` → wait → `start` (not another `redeploy`).
+Therefore: `OMNIGENTS_SERVER_URL` is left COMMENTED OUT in `app.yaml` so the
+integration never gates a production boot; enable it on a dedicated/opt-in
+instance, ideally after the rapid-redeploy churn has settled.
+
+**Remaining / recommended next steps:**
+- Re-enable the env vars on a fresh opt-in CoDA instance and confirm the host
+  auto-attaches at boot (manual `omnigent host` already confirmed connecting).
+- Publish `omnigent` to a reachable index (it's not on public PyPI yet) so the
+  install can drop the UC-Volume-wheel staging.
+- Open a PR for `feat/omnigents-host`; the per-commit history documents each
+  fix (auth, rename, NFR-4) for review.
 
 ---
 
