@@ -61,6 +61,16 @@ def test_capture_sp_credentials_returns_creds_when_present(monkeypatch):
     }
 
 
+def test_capture_sp_credentials_adds_https_scheme(monkeypatch):
+    """Bare host (as Databricks Apps injects it) gets https:// — config requires it."""
+    monkeypatch.setenv("DATABRICKS_CLIENT_ID", "cid")
+    monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("DATABRICKS_HOST", "adb-123.azuredatabricks.net")
+    creds = oh.capture_sp_credentials()
+    assert creds is not None
+    assert creds["host"] == "https://adb-123.azuredatabricks.net"
+
+
 def test_write_oauth_profile_is_idempotent(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     creds = {"client_id": "cid", "client_secret": "sec", "host": "https://h"}

@@ -173,6 +173,14 @@ def ensure_installed(sp_creds: dict[str, str] | None = None) -> bool:
     return os.path.exists(_omnigents_bin())
 
 
+def _ensure_https(host: str) -> str:
+    """Prefix https:// if absent — Databricks config requires the scheme."""
+    host = host.strip().rstrip("/")
+    if host and not host.startswith(("http://", "https://")):
+        return f"https://{host}"
+    return host
+
+
 def capture_sp_credentials() -> dict[str, str] | None:
     """Snapshot the app SP's M2M OAuth creds before CoDA strips them.
 
@@ -183,7 +191,7 @@ def capture_sp_credentials() -> dict[str, str] | None:
     """
     client_id = os.environ.get("DATABRICKS_CLIENT_ID", "").strip()
     client_secret = os.environ.get("DATABRICKS_CLIENT_SECRET", "").strip()
-    host = os.environ.get("DATABRICKS_HOST", "").strip()
+    host = _ensure_https(os.environ.get("DATABRICKS_HOST", ""))
     if not (client_id and client_secret and host):
         return None
     return {"client_id": client_id, "client_secret": client_secret, "host": host}
