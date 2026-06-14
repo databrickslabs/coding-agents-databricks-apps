@@ -37,6 +37,14 @@ def test_start_host_noop_when_disabled(monkeypatch):
     assert oh.get_status()["stage"] == "idle"
 
 
+def test_start_host_legacy_noop_without_env(monkeypatch):
+    oh.reset_for_tests()
+    monkeypatch.delenv("OMNIGENTS_SERVER_URL", raising=False)
+    monkeypatch.setattr(oh, "connect_host", _fail("connect_host"))
+    oh.start_host({"client_id": "c", "client_secret": "s", "host": "https://h"})
+    assert oh.get_status()["stage"] == "idle"
+
+
 def test_start_host_refuses_without_sp_creds(monkeypatch):
     """Enabled but PAT-only (no SP creds) -> host NOT started (FR-4 guard)."""
     oh.reset_for_tests()

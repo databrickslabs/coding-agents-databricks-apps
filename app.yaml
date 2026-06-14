@@ -26,16 +26,7 @@ env:
     value: davidokeeffe_standard_demo_catalog.default
   - name: MAX_CONCURRENT_SESSIONS
     value: "5"
-  # Set OMNIGENTS_SERVER_URL to register this CoDA instance as an Omnigents
-  # agent host (so the Omnigents Web UI / mobile can run sessions in this
-  # container). Unset/empty = off, no behaviour change. The host tunnel
-  # authenticates via the app SP's OAuth (a PAT is rejected by the Apps proxy).
-  # See omnigents_host.py + GOAL.md.
-  - name: OMNIGENTS_SERVER_URL
-    value: "https://omnigents-daveok-7405607084296055.15.azure.databricksapps.com"
-  # OMNIGENTS_WHEEL_SPEC: a wheels DIRECTORY (find-links) or a plain install
-  # spec (git ref / PyPI name). Here: a UC Volume of wheels built from the same
-  # commit as the omnigents-daveok server (protocol match). Required when
-  # OMNIGENTS_SERVER_URL is set.
+  # Optional install source for runtime Omnigent host control. The server URL is
+  # supplied at runtime through the CoDA UI/API.
   - name: OMNIGENTS_WHEEL_SPEC
     value: "/Volumes/ot_demo/omnigents/artifacts/wheels"
