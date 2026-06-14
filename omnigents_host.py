@@ -274,8 +274,27 @@ def _run_host_once(server_url: str) -> int:
     return proc.wait()
 
 
-def _supervise(server_url: str) -> None:
-    """Restart the host with bounded backoff; never crash the app."""
+def _supervise(server_url: str, sp_creds: dict[str, str]) -> None:
+    """Install, write the profile, then run the host with bounded backoff.
+
+    Runs entirely in a background thread so NOTHING here blocks app startup
+    (NFR-4) — the wheel install can take minutes and must never delay the
+    gunicorn worker's readiness or trip the Databricks Apps boot deadline.
+    """
+    _set(sp_creds_captured=True, stage="installing")
+    if not ensure_installed(sp_creds):
+        _set(stage="install_failed")  # ensure_installed already logged why
+        return
+    _set(installed=True, stage="writing_profile")
+    try:
+        _write_oauth_profile(sp_creds)
+    except Exception as e:
+        logger.warning("Could not write OAuth host profile: %s; host NOT started", e)
+        _set(stage="profile_failed", last_error=str(e))
+        return
+    _set(host_launched=True, stage="running")
+    logger.info("Omnigents host supervisor active → %s", server_url)
+
     backoff = _RESTART_BACKOFF_SECONDS
     while True:
         try:
@@ -288,10 +307,12 @@ def _supervise(server_url: str) -> None:
 
 
 def start_host(sp_creds: dict[str, str] | None) -> None:
-    """Launch the supervised Omnigents host thread, if enabled.
+    """Spawn the host supervisor thread, if enabled. Returns immediately.
 
     Call from ``initialize_app`` with the creds captured by
     :func:`capture_sp_credentials`. No-op when disabled or creds are missing.
+    ALL slow work (install, profile, run) happens in the thread so app startup
+    is never blocked (NFR-4).
     """
     if not omnigents_host_enabled():
         _set(stage="disabled")
@@ -308,26 +329,12 @@ def start_host(sp_creds: dict[str, str] | None) -> None:
         logger.warning(msg)
         _set(stage="no_sp_creds", last_error=msg)
         return
-    _set(sp_creds_captured=True, stage="installing")
-
-    if not ensure_installed(sp_creds):
-        _set(stage="install_failed")  # ensure_installed already logged why
-        return
-    _set(installed=True, stage="writing_profile")
-
-    try:
-        _write_oauth_profile(sp_creds)
-    except Exception as e:
-        logger.warning("Could not write OAuth host profile: %s; host NOT started", e)
-        _set(stage="profile_failed", last_error=str(e))
-        return
 
     thread = threading.Thread(
         target=_supervise,
-        args=(server_url,),
+        args=(server_url, sp_creds),
         daemon=True,
         name="omnigents-host",
     )
     thread.start()
-    _set(host_launched=True, stage="running")
-    logger.info("Started Omnigents host supervisor → %s", server_url)
+    logger.info("Spawned Omnigents host supervisor thread → %s", server_url)
