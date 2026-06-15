@@ -197,6 +197,41 @@ def test_write_oauth_profile_is_idempotent(monkeypatch, tmp_path):
     assert "client_id = cid" in cfg
 
 
+def test_run_host_once_prepends_local_bin_to_path(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("DATABRICKS_HOST", "https://ambient.example.com")
+    monkeypatch.setattr(oh, "_omnigents_bin", lambda: "/bin/omnigent")
+
+    captured = {}
+
+    class FakeProc:
+        pid = 1234
+        stdout = None
+
+        def poll(self):
+            return 0
+
+        def wait(self):
+            return 0
+
+    def fake_popen(cmd, stdout, stderr, text, cwd, env):
+        captured["cmd"] = cmd
+        captured["cwd"] = cwd
+        captured["env"] = env
+        return FakeProc()
+
+    monkeypatch.setattr(oh.subprocess, "Popen", fake_popen)
+
+    assert oh._run_host_once("https://omnigent.example.com") == 0
+
+    env = captured["env"]
+    assert captured["cwd"] == str(tmp_path)
+    assert env["PATH"].split(":")[0] == str(tmp_path / ".local" / "bin")
+    assert env["DATABRICKS_CONFIG_PROFILE"] == oh._HOST_PROFILE
+    assert "DATABRICKS_HOST" not in env
+
+
 def _fail(name):
     def _raise(*a, **k):
         raise AssertionError(f"{name} should not be called")

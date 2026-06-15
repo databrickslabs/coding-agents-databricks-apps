@@ -316,6 +316,9 @@ def _run_host_once(server_url: str, stop_event: threading.Event | None = None) -
     # Apps injects) steer auth to the app's ambient identity and cause the
     # tunnel to 302 → OIDC even with the M2M profile present. Verified: a clean
     # env with only the profile vars connects; leaving these in does not.
+    local_bin = os.path.join(home, ".local", "bin")
+    if local_bin not in env.get("PATH", ""):
+        env["PATH"] = f"{local_bin}:{env.get('PATH', '')}"
     env["DATABRICKS_CONFIG_PROFILE"] = _HOST_PROFILE
     for shadowing in (
         "DATABRICKS_TOKEN",
