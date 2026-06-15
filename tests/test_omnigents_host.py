@@ -7,6 +7,8 @@ without the OAuth-capable SP creds (a PAT alone is rejected by the Apps proxy).
 
 from __future__ import annotations
 
+import hashlib
+
 import omnigents_host as oh
 
 
@@ -198,10 +200,17 @@ def test_write_oauth_profile_is_idempotent(monkeypatch, tmp_path):
 
 
 def test_run_host_once_prepends_local_bin_to_path(monkeypatch, tmp_path):
+    oh.reset_for_tests()
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("PATH", "/usr/bin")
+    monkeypatch.setenv("DATABRICKS_APP_NAME", "coda")
     monkeypatch.setenv("DATABRICKS_HOST", "https://ambient.example.com")
     monkeypatch.setattr(oh, "_omnigents_bin", lambda: "/bin/omnigent")
+    monkeypatch.setattr(
+        oh,
+        "_sp_creds",
+        {"client_id": "793257c7-63d3-464f-b6fb-3bc11880bf2d"},
+    )
 
     captured = {}
 
@@ -226,8 +235,13 @@ def test_run_host_once_prepends_local_bin_to_path(monkeypatch, tmp_path):
     assert oh._run_host_once("https://omnigent.example.com") == 0
 
     env = captured["env"]
+    expected_host_id = "host_" + hashlib.sha256(
+        b"coda-omnigents-host:793257c7-63d3-464f-b6fb-3bc11880bf2d"
+    ).hexdigest()[:32]
     assert captured["cwd"] == str(tmp_path)
     assert env["PATH"].split(":")[0] == str(tmp_path / ".local" / "bin")
+    assert env["OMNIGENT_HOST_ID"] == expected_host_id
+    assert env["OMNIGENT_HOST_NAME"] == "coda"
     assert env["DATABRICKS_CONFIG_PROFILE"] == oh._HOST_PROFILE
     assert "DATABRICKS_HOST" not in env
 

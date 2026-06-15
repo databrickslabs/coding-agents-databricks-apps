@@ -24,6 +24,7 @@ CoDA behaves exactly as before.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import select
@@ -63,6 +64,16 @@ _proc: subprocess.Popen[str] | None = None
 _sp_creds: dict[str, str] | None = None
 _log_tail: list[str] = []
 _LOG_TAIL_LIMIT = 80
+
+
+def _stable_host_identity() -> tuple[str, str] | None:
+    """Return a deterministic Omnigents host identity for this Databricks App."""
+    app_client_id = (_sp_creds or {}).get("client_id") or os.environ.get("DATABRICKS_CLIENT_ID", "")
+    if not app_client_id:
+        return None
+    app_name = os.environ.get("DATABRICKS_APP_NAME", "").strip() or "coda"
+    digest = hashlib.sha256(f"coda-omnigents-host:{app_client_id}".encode()).hexdigest()[:32]
+    return f"host_{digest}", app_name
 
 
 def get_status() -> dict[str, object]:
@@ -319,6 +330,10 @@ def _run_host_once(server_url: str, stop_event: threading.Event | None = None) -
     local_bin = os.path.join(home, ".local", "bin")
     if local_bin not in env.get("PATH", ""):
         env["PATH"] = f"{local_bin}:{env.get('PATH', '')}"
+    stable_identity = _stable_host_identity()
+    if stable_identity is not None:
+        env.setdefault("OMNIGENT_HOST_ID", stable_identity[0])
+        env.setdefault("OMNIGENT_HOST_NAME", stable_identity[1])
     env["DATABRICKS_CONFIG_PROFILE"] = _HOST_PROFILE
     for shadowing in (
         "DATABRICKS_TOKEN",
