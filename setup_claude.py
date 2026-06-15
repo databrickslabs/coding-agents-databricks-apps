@@ -126,17 +126,20 @@ print(f"Onboarding skipped + MCPs configured: {claude_json_path}")
 local_bin = home / ".local" / "bin"
 claude_bin = local_bin / "claude"
 
-print("Installing/upgrading Claude Code CLI...")
-result = subprocess.run(
-    ["bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash"],
-    env={**os.environ, "HOME": str(home)},
-    capture_output=True,
-    text=True
-)
-if result.returncode == 0:
-    print("Claude Code CLI installed successfully")
+if os.environ.get("CODA_SKIP_CLAUDE_INSTALL", "").lower() == "true":
+    print("Claude Code CLI install skipped")
 else:
-    print(f"CLI install warning: {result.stderr}")
+    print("Installing/upgrading Claude Code CLI...")
+    result = subprocess.run(
+        ["bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash"],
+        env={**os.environ, "HOME": str(home)},
+        capture_output=True,
+        text=True
+    )
+    if result.returncode == 0:
+        print("Claude Code CLI installed successfully")
+    else:
+        print(f"CLI install warning: {result.stderr}")
 
 # 4. Copy subagent definitions to ~/.claude/agents/
 # These enable TDD workflow: prd-writer → test-generator → implementer → build-feature
