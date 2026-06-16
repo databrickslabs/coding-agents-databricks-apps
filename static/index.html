@@ -167,6 +167,10 @@
       font-size: 11px; line-height: 1.35; opacity: 0.65;
       max-width: 220px; overflow-wrap: anywhere; padding: 0 2px;
     }
+    #omnigent-host-note {
+      font-size: 10px; line-height: 1.3; opacity: 0.4;
+      max-width: 220px; overflow-wrap: anywhere; padding: 2px 2px 0;
+    }
 
     /* Speak button inside toolbar */
     #speak-btn { display: none; }
@@ -359,6 +363,7 @@
         <button id="omnigent-disconnect-btn" title="Stop omnigent host">Stop</button>
       </div>
       <div id="omnigent-host-status">Idle</div>
+      <div id="omnigent-host-note">Attaches as this app's service principal — the host is owned by the SP, so it appears in your personal Omnigent host picker only if the SP shares it with you.</div>
       <div class="separator"></div>
       <div class="tool-row">
         <button id="search-btn" title="Search (Ctrl+Shift+F)">&#x1F50D;</button>
