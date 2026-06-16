@@ -506,3 +506,76 @@ def start_host(sp_creds: dict[str, str] | None) -> None:
         _set(stage="idle")
         return
     connect_host(os.environ["OMNIGENTS_SERVER_URL"], sp_creds)
+
+
+def _sp_bearer(sp_creds: dict[str, str]) -> str:
+    """Mint an app-SP OAuth (client-credentials) token for server API calls.
+
+    The host this CoDA registers is owned by the app SP (the tunnel authenticates
+    as the SP). Server-side actions on that host — sharing it, launching a runner
+    — must therefore be called AS the SP, since the server scopes them to the
+    host owner. We reuse the captured M2M creds the host tunnel already uses.
+    """
+    from databricks.sdk.core import Config
+
+    cfg = Config(
+        host=sp_creds["host"],
+        client_id=sp_creds["client_id"],
+        client_secret=sp_creds["client_secret"],
+        auth_type="oauth-m2m",
+    )
+    headers = cfg.authenticate()  # {"Authorization": "Bearer <token>"}
+    token = headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    if not token:
+        raise RuntimeError("could not mint SP OAuth token")
+    return token
+
+
+def share_and_launch(
+    server_url: str,
+    sp_creds: dict[str, str] | None,
+    grant_user: str,
+    launch: bool = True,
+) -> dict[str, object]:
+    """Grant ``grant_user`` ``use`` on this CoDA host, optionally launch a runner.
+
+    Demonstrates "use CoDA via Omnigent": the host is SP-owned, so the operator's
+    personal Omnigent UI can't see it until the owner (the SP) shares it. This
+    issues that share via the server's ``PUT /v1/hosts/{id}/permissions/{user}``
+    using an SP token, then (optionally) ``POST /v1/hosts/{id}/runners`` to start
+    a session on the host. Returns a result dict for the API to surface.
+    """
+    import json
+    import urllib.request
+
+    if not sp_creds:
+        return {"ok": False, "error": "no SP creds captured"}
+    ident = _stable_host_identity()
+    if ident is None:
+        return {"ok": False, "error": "could not resolve host id"}
+    host_id = ident[0]
+    base = _ensure_https(server_url)
+    token = _sp_bearer(sp_creds)
+
+    def _call(method: str, path: str, body: dict | None = None) -> tuple[int, str]:
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(f"{base}{path}", data=data, method=method)
+        req.add_header("Authorization", f"Bearer {token}")
+        if data is not None:
+            req.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                return resp.status, resp.read().decode()[:500]
+        except urllib.error.HTTPError as e:
+            return e.code, e.read().decode()[:500]
+
+    result: dict[str, object] = {"host_id": host_id}
+    gc, gb = _call("PUT", f"/v1/hosts/{host_id}/permissions/{grant_user}", {"level": "use"})
+    result["grant_status"] = gc
+    result["grant_body"] = gb
+    result["ok"] = gc in (200, 201, 204)
+    if launch and result["ok"]:
+        lc, lb = _call("POST", f"/v1/hosts/{host_id}/runners", {})
+        result["launch_status"] = lc
+        result["launch_body"] = lb
+    return result

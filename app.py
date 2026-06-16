@@ -964,6 +964,39 @@ def omnigent_host_disconnect():
     return jsonify(disconnect_host())
 
 
+@app.route("/api/omnigent-host/share", methods=["POST"])
+def omnigent_host_share():
+    """Share this SP-owned host with the app owner so it shows in their picker.
+
+    The host is owned by the app SP, so the operator's personal Omnigent UI
+    can't see it until the owner (SP) grants them ``use``. This issues that
+    grant — and optionally launches a runner — using the captured SP creds.
+    Owner-gated identically to configure-pat: only the resolved app owner may
+    invoke it, since it acts with the SP's authority.
+    """
+    if _is_databricks_apps() and app_owner:
+        if get_request_user() != app_owner:
+            return jsonify({"error": "Forbidden"}), 403
+
+    from omnigents_host import get_status
+    server_url = os.environ.get("OMNIGENTS_SERVER_URL", "").strip() or str(
+        get_status().get("server_url") or ""
+    ).strip()
+    if not server_url:
+        return jsonify({"error": "no server_url; connect the host first"}), 400
+
+    grant_user = get_request_user() or app_owner
+    if not grant_user:
+        return jsonify({"error": "could not resolve a user to grant"}), 400
+
+    data = request.get_json(silent=True) or {}
+    launch = bool(data.get("launch", True))
+
+    from omnigents_host import share_and_launch
+    result = share_and_launch(server_url, _omnigent_sp_creds, grant_user, launch=launch)
+    return jsonify(result), (200 if result.get("ok") else 502)
+
+
 @app.route("/api/pat-status")
 def pat_status():
     """Check if a valid, usable PAT is configured."""
