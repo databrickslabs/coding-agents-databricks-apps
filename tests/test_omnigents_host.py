@@ -251,3 +251,36 @@ def _fail(name):
         raise AssertionError(f"{name} should not be called")
 
     return _raise
+
+
+def test_run_setup_once_feeds_quit_input(monkeypatch):
+    """setup must run non-interactively: feed 'q' so it adopts ambient creds
+    and exits cleanly instead of blocking on the harness menu."""
+    calls = {}
+
+    class FakeResult:
+        returncode = 0
+        stdout = "Found existing credentials ... auto-configured for omnigent: Claude"
+        stderr = ""
+
+    def fake_run(cmd, **kwargs):
+        calls["cmd"] = cmd
+        calls["input"] = kwargs.get("input")
+        calls["timeout"] = kwargs.get("timeout")
+        return FakeResult()
+
+    monkeypatch.setattr(oh.subprocess, "run", fake_run)
+    oh._run_setup_once()
+
+    assert calls["cmd"][-1] == "setup"
+    assert calls["input"] == "q\n"
+    assert calls["timeout"] and calls["timeout"] > 0
+
+
+def test_run_setup_once_swallows_failure(monkeypatch):
+    """A setup failure must not propagate — the host must still launch."""
+    def boom(*a, **k):
+        raise RuntimeError("setup blew up")
+
+    monkeypatch.setattr(oh.subprocess, "run", boom)
+    oh._run_setup_once()  # must not raise

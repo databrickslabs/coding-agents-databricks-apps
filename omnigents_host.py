@@ -304,6 +304,44 @@ def _write_oauth_profile(creds: dict[str, str]) -> None:
     logger.info("Wrote OAuth profile '%s' for Omnigents host tunnel", _HOST_PROFILE)
 
 
+def _run_setup_once() -> None:
+    """Auto-configure harnesses from CoDA's ambient LLM creds (best-effort).
+
+    Without this, ``omnigent host`` connects but no harness is configured for
+    the runner — a session started from the Web UI fails ("Claude Code isn't
+    configured on <host>" / the runner can't auth to the model). ``omnigent
+    setup`` detects credentials already in the env (CoDA's ``ANTHROPIC_*`` /
+    AI-Gateway vars) and writes them into ``~/.omnigent/config.yaml``.
+
+    The command is interactive: it auto-adopts ambient creds, then drops into a
+    harness menu. We feed ``q`` so it exits cleanly (rc 0) right after the
+    auto-config — verified locally: the adopted creds persist on quit. Runs in
+    the NORMAL env (keeps ``ANTHROPIC_*``), not the stripped host-tunnel env.
+    Best-effort: failure here must not stop the host from launching.
+    """
+    try:
+        env = os.environ.copy()
+        home = env.get("HOME", "/app/python/source_code")
+        local_bin = os.path.join(home, ".local", "bin")
+        if local_bin not in env.get("PATH", ""):
+            env["PATH"] = f"{local_bin}:{env.get('PATH', '')}"
+        result = subprocess.run(
+            [_omnigents_bin(), "setup"],
+            input="q\n",
+            capture_output=True,
+            text=True,
+            timeout=120,
+            env=env,
+            cwd=home,
+        )
+        for line in (result.stdout + result.stderr).splitlines():
+            if "auto-configured" in line or "configured for omnigent" in line:
+                logger.info("[omnigents-setup] %s", line.strip())
+        logger.info("omnigent setup completed (rc=%s)", result.returncode)
+    except Exception as e:  # never block host launch on setup
+        logger.warning("omnigent setup failed (non-fatal): %s", e)
+
+
 def _run_host_once(server_url: str, stop_event: threading.Event | None = None) -> int:
     """Run ``omnigents host`` in the foreground until it exits. Returns rc."""
     global _proc
@@ -407,6 +445,10 @@ def _supervise(
         logger.warning("Could not write OAuth host profile: %s; host NOT started", e)
         _set(stage="profile_failed", last_error=str(e))
         return
+    # Configure harnesses from CoDA's ambient LLM creds so runners can auth
+    # (otherwise sessions started from the Web UI fail "not configured").
+    _set(stage="configuring_harnesses")
+    _run_setup_once()
     _set(host_launched=True, running=True, stage="running")
     logger.info("Omnigents host supervisor active → %s", server_url)
 
