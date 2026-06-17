@@ -309,6 +309,31 @@ def _write_oauth_profile(creds: dict[str, str]) -> None:
     logger.info("Wrote OAuth profile '%s' for Omnigents host tunnel", _HOST_PROFILE)
 
 
+def _ensure_tmux() -> None:
+    """Install a static tmux to ~/.local/bin if missing (best-effort).
+
+    The native ``omnigent claude`` / ``omnigent codex`` harnesses launch the
+    agent through a local tmux terminal and refuse to start without tmux on
+    PATH — surfacing in the Web UI as "Claude Code isn't configured on <host>".
+    CoDA's ``run_setup()`` also installs tmux, but that path is gated behind the
+    interactive PAT bootstrap; the host can connect via SP creds before any PAT
+    is pasted, so install here too. Runs BEFORE ``_run_setup_once`` so the
+    harness-readiness probe sees tmux. Idempotent (install_tmux.sh no-ops when
+    tmux already resolves). Never blocks the host on failure.
+    """
+    home = os.environ.get("HOME", "/app/python/source_code")
+    local_bin = os.path.join(home, ".local", "bin")
+    if os.path.exists(os.path.join(local_bin, "tmux")):
+        return
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "install_tmux.sh")
+    if not os.path.exists(script):
+        return
+    try:
+        subprocess.run(["bash", script], check=False, capture_output=True, text=True, timeout=120)
+    except Exception as e:  # never block host launch on tmux install
+        logger.warning("tmux install failed (non-fatal): %s", e)
+
+
 def _run_setup_once() -> None:
     """Auto-configure harnesses from CoDA's ambient LLM creds (best-effort).
 
@@ -452,7 +477,10 @@ def _supervise(
         return
     # Configure harnesses from CoDA's ambient LLM creds so runners can auth
     # (otherwise sessions started from the Web UI fail "not configured").
+    # Install tmux FIRST so the readiness probe in _run_setup_once sees it and
+    # the native claude/codex harnesses report configured.
     _set(stage="configuring_harnesses")
+    _ensure_tmux()
     _run_setup_once()
     _set(host_launched=True, running=True, stage="running")
     logger.info("Omnigents host supervisor active → %s", server_url)
