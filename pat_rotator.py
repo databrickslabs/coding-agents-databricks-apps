@@ -235,16 +235,51 @@ class PATRotator:
         logger.info("PAT rotated: all CLIs updated")
 
     def _write_databrickscfg(self, token):
-        """Write token to ~/.databrickscfg for CLI/SDK tools."""
-        content = (
+        """Write token to ~/.databrickscfg for CLI/SDK tools.
+
+        Rewrites ONLY the ``[DEFAULT]`` section and preserves every other
+        profile. The Omnigent host appends an ``[omnigents-host]`` OAuth (M2M)
+        profile that its spawned runners resolve from this file (a fresh runner
+        process has no in-memory SDK token cache, so it re-reads the file every
+        time). A naive ``open(..., "w")`` that emitted only ``[DEFAULT]`` wiped
+        that block on each rotation, so runners spawned after the first rotation
+        failed to authenticate their tunnel (302 -> OIDC login). Keep all
+        non-DEFAULT sections so co-owned profiles survive rotation.
+        """
+        default_block = (
             "[DEFAULT]\n"
             f"host = {self._host}\n"
             f"token = {token}\n"
         )
+        preserved = self._read_non_default_sections()
+        content = default_block + preserved
         try:
             with open(self._databrickscfg_path, "w") as f:
                 f.write(content)
             os.chmod(self._databrickscfg_path, 0o600)
         except OSError as e:
             logger.warning(f"Could not write .databrickscfg: {e}")
+
+    def _read_non_default_sections(self):
+        """Return the text of every ``~/.databrickscfg`` section except DEFAULT.
+
+        Used to preserve co-owned profiles (e.g. the Omnigent host's
+        ``[omnigents-host]`` OAuth profile) across a DEFAULT-only rewrite.
+        Returns ``""`` when the file is absent or has no other sections.
+        """
+        try:
+            with open(self._databrickscfg_path) as f:
+                lines = f.readlines()
+        except OSError:
+            return ""
+        out = []
+        in_default = False
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("[") and stripped.endswith("]"):
+                in_default = stripped == "[DEFAULT]"
+            if not in_default:
+                out.append(line)
+        text = "".join(out).strip()
+        return f"\n{text}\n" if text else ""
 

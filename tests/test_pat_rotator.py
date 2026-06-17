@@ -194,6 +194,45 @@ class TestTokenPersistence:
         assert "host = https://test.databricks.com" in content
 
     @mock.patch("pat_rotator.requests.post")
+    def test_preserves_other_profiles(self, mock_post, tmp_path):
+        """Rotation must NOT clobber co-owned profiles (e.g. the Omnigent host's
+        [omnigents-host] OAuth profile). A fresh runner re-reads this file with
+        no token cache, so wiping the block on rotation breaks its tunnel auth.
+        """
+        cfg_path = str(tmp_path / ".databrickscfg")
+        # Simulate the on-disk state after the host appended its OAuth profile.
+        with open(cfg_path, "w") as f:
+            f.write(
+                "[DEFAULT]\n"
+                "host = https://test.databricks.com\n"
+                "token = dapi-old\n"
+                "\n[omnigents-host]\n"
+                "host = https://test.databricks.com\n"
+                "client_id = sp-client-id\n"
+                "client_secret = sp-secret\n"
+                "auth_type = oauth-m2m\n"
+            )
+        mock_post.side_effect = [
+            _mock_create_response(token_value="dapi-new", token_id="tid-new"),
+            _mock_delete_response(),
+        ]
+        rotator = _make_rotator()
+        rotator._current_token = "dapi-old"
+        rotator._current_token_id = "tid-old"
+        rotator._databrickscfg_path = cfg_path
+
+        rotator._rotate_once()
+
+        content = open(cfg_path).read()
+        # DEFAULT rotated to the new token.
+        assert "token = dapi-new" in content
+        assert "dapi-old" not in content
+        # The host's OAuth profile survived the rewrite.
+        assert "[omnigents-host]" in content
+        assert "client_id = sp-client-id" in content
+        assert "auth_type = oauth-m2m" in content
+
+    @mock.patch("pat_rotator.requests.post")
     def test_databrickscfg_permissions(self, mock_post, tmp_path):
         """Config file should have 0o600 permissions (owner read/write only)."""
         mock_post.side_effect = [
