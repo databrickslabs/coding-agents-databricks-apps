@@ -163,10 +163,15 @@ def _materialize_spec(spec: str, sp_creds: dict[str, str] | None = None) -> str:
 
         tmp = tempfile.mkdtemp(prefix="oa-wheels-")
         if sp_creds:
+            # auth_type="oauth-m2m" pins the SDK to the SP creds. Without it the
+            # unified-auth resolver ALSO discovers the ambient DATABRICKS_TOKEN
+            # (the PAT the rotator just bootstrapped) and refuses with "more than
+            # one authorization method configured: oauth and pat".
             w = WorkspaceClient(config=Config(
                 host=sp_creds["host"],
                 client_id=sp_creds["client_id"],
                 client_secret=sp_creds["client_secret"],
+                auth_type="oauth-m2m",
             ))
         else:
             w = WorkspaceClient()
