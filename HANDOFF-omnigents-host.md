@@ -9,25 +9,58 @@
 
 ---
 
-## UPDATE 2026-06-17 — runner now connects end-to-end (RESOLVED)
+## UPDATE 2026-06-17 — runner connects; native harness blocked on bwrap (full chain peeled)
 
-A Polly (Claude SDK) session started from the Omnigent Web UI against host `coda` now spawns a
-runner that **connects and runs** — no `runner_failed_to_start`, no OIDC redirect. Verified live:
-host status `stage: running`, 1 runner started, 0 exits/failures. Two bugs were the cause (NOT the
-two "open blockers" below, which were downstream of a connected runner):
+The original `runner_failed_to_start` / OIDC-redirect error is **FIXED**. Peeling it exposed a
+chain of independent issues; 3 are fixed (all CoDA-side), the last is the bwrap sandbox.
 
+**FIXED (committed, deployed, verified live):**
 1. **`b5b11a6`** — `pat_rotator._write_databrickscfg` rewrote `~/.databrickscfg` in `"w"` mode with
-   only `[DEFAULT]` every 10 min, **clobbering the `[omnigents-host]` OAuth profile** the host
-   appends. The host kept working (SDK cached the token in-process) but each fresh runner re-read
-   the PAT-only file → profile missing → unauthenticated tunnel → 302 OIDC. Fix: preserve all
-   non-DEFAULT sections on rewrite. Regression test `test_preserves_other_profiles`.
+   only `[DEFAULT]` every 10 min, **clobbering the `[omnigents-host]` OAuth profile**. Host kept
+   working (SDK cached the token in-process) but each fresh runner re-read the PAT-only file →
+   profile missing → unauthenticated tunnel → 302 OIDC → `runner_failed_to_start`. Fix: preserve
+   non-DEFAULT sections. Test `test_preserves_other_profiles`.
 2. **`90e78b6`** — `_materialize_spec` built a `WorkspaceClient` from SP creds without pinning
-   `auth_type`, so the SDK also saw the ambient bootstrapped PAT → "more than one authorization
-   method configured: oauth and pat". Only surfaces on a fresh container (wheels not yet
-   installed). Fix: `auth_type="oauth-m2m"`, mirroring `_sp_bearer`.
+   `auth_type` → SDK also saw the ambient PAT → "more than one authorization method configured".
+   Fix: `auth_type="oauth-m2m"`. (Surfaces only on a fresh container.)
+3. **`71f1860` + `71fe22a`** — installed static `tmux` (install_tmux.sh; mjakob-gh/build-static-tmux)
+   in both `run_setup()` and the host-connect path (`_ensure_tmux`, before the readiness probe).
+   This + the `claude` CLI (installed by `setup_claude.py` in `run_setup()`) clears the
+   "Claude Code isn't configured on coda" banner. **Banner = `shutil.which("claude")`, NOT tmux**
+   (harness_readiness.py → harness_cli_installed) — tmux is needed at *runtime*, not for the banner.
 
-Note: the host connects via SP OAuth creds (captured at startup) **independent of the terminal PAT
-bootstrap gate** — you can POST `/api/omnigent-host/connect` before pasting a terminal PAT.
+**Verified live:** Polly (claude-sdk) AND native Claude Code sessions both spawn a runner that
+connects (host log: runner started, 0 tunnel failures). The error class moved past auth entirely.
+
+**REMAINING BLOCKER — native terminal needs `bwrap` (sandbox):**
+Native Claude Code now fails with `native_terminal_start_failed`. Runner log root cause:
+```
+OSError: linux_bwrap sandbox requires the 'bwrap' binary on PATH ...
+  or set os_env.sandbox.type to 'none' to disable sandboxing.
+(omnigent/inner/bwrap_sandbox.py:233, via _auto_create_claude_terminal → launch_terminal)
+```
+- The native terminal wraps the agent in a **bubblewrap sandbox** (default `linux_bwrap`). CoDA's
+  container has no `bwrap` and no root (`apt`/`apt-get` exist at /usr/bin but can't install without
+  root). **Confirmed `unshare --user --map-root-user echo` → NS_OK**, so unprivileged userns IS
+  allowed → a vendored static `bwrap` WOULD run.
+- A **session-level `enforce_sandbox: none` policy does NOT fix it**: tried live (pol_… added then
+  deleted). The native terminal's `effective_os_env_spec` comes from the **agent spec's `os_env`**
+  (default linux_bwrap), bypassing the start-policy verdict (which only rewrites the harness spec,
+  not the auto-created claude terminal). The `claude-sdk`/Polly harness defaults to `sandbox=none`
+  and needs NO bwrap (and no tmux) — its only blocker is the separate server-side spec-404.
+
+**Three ways to land the native harness (pick later):**
+1. **Vendor a static `bwrap`** (musl + static libcap, linux-amd64) into the repo, install to
+   `~/.local/bin` like tmux. userns confirmed working. Most effort; upstream ships only source.
+2. **Server-side**: set `os_env.sandbox.type: none` (or `allow_sandbox_override: true`) on the
+   `omnigents-daveok` built-in "Claude Code" agent spec, OR have a server admin add a server-wide
+   `enforce_sandbox(sandbox_type="none")` default policy (`POST /v1/policies` is admin-gated; my
+   user OAuth got `forbidden`; admin = file roster in the server's data dir per `admin_list.py`).
+3. **Pivot to claude-sdk/Polly** (sandbox=none, no bwrap/tmux): fix the server-side agent-spec-404.
+
+Note: the host connects via SP OAuth creds captured at startup, **independent of the terminal PAT
+gate** — `POST /api/omnigent-host/connect` works before any PAT is pasted. But `run_setup()`
+(installs claude+tmux) IS gated behind the PAT bootstrap.
 
 ## TL;DR (original, pre-fix)
 
