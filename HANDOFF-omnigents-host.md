@@ -9,7 +9,27 @@
 
 ---
 
-## TL;DR
+## UPDATE 2026-06-17 — runner now connects end-to-end (RESOLVED)
+
+A Polly (Claude SDK) session started from the Omnigent Web UI against host `coda` now spawns a
+runner that **connects and runs** — no `runner_failed_to_start`, no OIDC redirect. Verified live:
+host status `stage: running`, 1 runner started, 0 exits/failures. Two bugs were the cause (NOT the
+two "open blockers" below, which were downstream of a connected runner):
+
+1. **`b5b11a6`** — `pat_rotator._write_databrickscfg` rewrote `~/.databrickscfg` in `"w"` mode with
+   only `[DEFAULT]` every 10 min, **clobbering the `[omnigents-host]` OAuth profile** the host
+   appends. The host kept working (SDK cached the token in-process) but each fresh runner re-read
+   the PAT-only file → profile missing → unauthenticated tunnel → 302 OIDC. Fix: preserve all
+   non-DEFAULT sections on rewrite. Regression test `test_preserves_other_profiles`.
+2. **`90e78b6`** — `_materialize_spec` built a `WorkspaceClient` from SP creds without pinning
+   `auth_type`, so the SDK also saw the ambient bootstrapped PAT → "more than one authorization
+   method configured: oauth and pat". Only surfaces on a fresh container (wheels not yet
+   installed). Fix: `auth_type="oauth-m2m"`, mirroring `_sp_bearer`.
+
+Note: the host connects via SP OAuth creds (captured at startup) **independent of the terminal PAT
+bootstrap gate** — you can POST `/api/omnigent-host/connect` before pasting a terminal PAT.
+
+## TL;DR (original, pre-fix)
 
 CoDA-as-an-Omnigent-host **works end-to-end through runner-launch-in-container**: the CoDA
 app connects to the Omnigent server as a host, authenticates (app-SP OAuth), is shareable to a

@@ -365,6 +365,10 @@ def run_setup():
 
     _run_step("gh", ["bash", "install_gh.sh"])
 
+    # tmux — required by Omnigent's native claude/codex harnesses (they launch
+    # the agent through a local tmux terminal and refuse to start without it).
+    _run_step("tmux", ["bash", "install_tmux.sh"])
+
     # --- Upgrade Databricks CLI (runtime image ships an older version) ---
     _run_step("dbcli", ["bash", "install_databricks_cli.sh"])
 
