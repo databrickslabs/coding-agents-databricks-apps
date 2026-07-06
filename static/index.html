@@ -363,7 +363,7 @@
         <button id="omnigent-disconnect-btn" title="Stop omnigent host">Stop</button>
       </div>
       <div id="omnigent-host-status">Idle</div>
-      <div id="omnigent-host-note">Attaches as this app's service principal — the host is owned by the SP, so it appears in your personal Omnigent host picker only if the SP shares it with you.</div>
+      <div id="omnigent-host-note">Attaches as this app's service principal. On connect it auto-shares itself with you (grants <code>use</code>) so it appears in your personal Omnigent host picker.</div>
       <div class="separator"></div>
       <div class="tool-row">
         <button id="search-btn" title="Search (Ctrl+Shift+F)">&#x1F50D;</button>
@@ -705,10 +705,20 @@
     document.getElementById('font-increase').addEventListener('click', () => setFontSize(currentFontSize + 1));
 
     // ── Omnigent Host Control ─────────────────────────────────────
+    // One-shot latch: the host is SP-owned, so it isn't visible in the
+    // operator's personal picker until the SP grants them `use`. Auto-fire
+    // that grant (owner-gated /share) on the rising edge into `running`, once
+    // per connect. Reset on connect/disconnect so a reconnect re-arms it.
+    let omnigentShareFired = false;
+
     async function refreshOmnigentHostStatus() {
       const resp = await fetch('/api/omnigent-host/status');
       const status = await resp.json();
       renderOmnigentHostStatus(status);
+      if (status.stage === 'running' && !omnigentShareFired) {
+        omnigentShareFired = true;  // latch before the await so the 5s poll can't double-fire
+        autoShareOmnigentHost().catch(() => {});
+      }
       return status;
     }
 
@@ -720,6 +730,25 @@
       el.textContent = `${stage}${server}`;
     }
 
+    async function autoShareOmnigentHost() {
+      // Grant only (launch:false) — make the host visible/selectable in the
+      // operator's picker without also spawning a session on connect.
+      const resp = await fetch('/api/omnigent-host/share', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ launch: false }),
+      });
+      const result = await resp.json();
+      const el = document.getElementById('omnigent-host-status');
+      if (!el) return;
+      if (resp.ok && result.grant_status && result.grant_status >= 200 && result.grant_status < 300) {
+        el.textContent += ' — ✓ shared to you (selectable in your Omnigent picker)';
+      } else {
+        omnigentShareFired = false;  // allow a later poll to retry a transient failure
+        el.textContent += ` — share failed (${result.grant_status || result.error || 'error'})`;
+      }
+    }
+
     async function connectOmnigentHost() {
       const input = document.getElementById('omnigent-server-url');
       const serverUrl = (input?.value || '').trim();
@@ -727,6 +756,7 @@
         renderOmnigentHostStatus({ stage: 'server URL required' });
         return;
       }
+      omnigentShareFired = false;  // re-arm one auto-share for this connect
       const resp = await fetch('/api/omnigent-host/connect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -737,6 +767,7 @@
     }
 
     async function disconnectOmnigentHost() {
+      omnigentShareFired = false;  // re-arm for the next connect
       const resp = await fetch('/api/omnigent-host/disconnect', { method: 'POST' });
       const status = await resp.json();
       renderOmnigentHostStatus(status);
