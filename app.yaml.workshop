@@ -4,9 +4,10 @@
 #   - MAX_CONCURRENT_SESSIONS raised to 10 (A-C1; fleet sizing decision)
 #   - OMNIGENTS_SERVER_URL/OMNIGENTS_WHEEL_SPEC omitted -> boot host-register
 #     no-ops (A-R3: attendees use CoDA's own terminal, not the Omnigent tunnel)
-#   - CHALLENGE_REPO_URL/REF added: the ONE config spot for the preloaded
-#     challenge repo (A-R7). Compute size is NOT set here — it's a create-time
-#     property (`databricks apps create --compute-size LARGE`, see Makefile).
+#   - CHALLENGE_REPO_URL + CHALLENGE_REPO_READ_TOKEN added: the ONE config
+#     spot for the preloaded private challenge repo (A-R7). Compute size is
+#     NOT set here — it's a create-time property
+#     (`databricks apps create --compute-size LARGE`, see Makefile).
 command:
   - gunicorn
   - app:app
@@ -36,12 +37,17 @@ env:
   # validated by the day-of smoke test — A-O1/A-O2).
   - name: MAX_CONCURRENT_SESSIONS
     value: "10"
-  # ── Challenge repo (A-R7) — the one-line swap spot ──────────────────────
-  # Public repo cloned at setup into ~/projects/<name>, pinned to REF so all
-  # instances start identical. The terminal opens directly inside it.
-  # STAND-IN: currently points at an existing public repo for M1 verification.
-  # Swap URL+REF to the real challenge repo when ready, then redeploy.
+  # ── Challenge repo (A-R7) — the one config spot ─────────────────────────
+  # PRIVATE repo cloned from its main branch at container startup into
+  # ~/projects/<name>; the terminal opens directly inside it. The read token
+  # is a repo-scoped READ-ONLY GitHub token stored in a Databricks secret and
+  # attached to the app as a secret resource named "challenge-repo-token"
+  # (`make workshop-secret` does both). Token is used for the clone only and
+  # is stripped from attendee terminal sessions.
+  # STAND-IN: points at an existing private sandbox repo for M1 verification.
+  # Swap the URL (and the secret value) for the real challenge repo, then
+  # redeploy.
   - name: CHALLENGE_REPO_URL
-    value: "https://github.com/dgokeeffe/databricks-claude-code-workshop"
-  - name: CHALLENGE_REPO_REF
-    value: "d9101b24a954d4cd070ce4da9934c6d5210d15cd"
+    value: "https://github.com/david-okeeffe_data/dok-sandbox"
+  - name: CHALLENGE_REPO_READ_TOKEN
+    valueFrom: challenge-repo-token

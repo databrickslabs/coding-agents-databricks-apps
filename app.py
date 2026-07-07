@@ -118,8 +118,9 @@ setup_state = {
     ]
 }
 
-# Workshop deploys (app.yaml.workshop) preload a pinned challenge repo (spec A-R7).
-# Register the step in the setup UI only when configured so normal deploys are unaffected.
+# Workshop deploys (app.yaml.workshop) preload the private challenge repo at
+# container startup (spec A-R7). Register the step in the setup UI only when
+# configured so normal deploys are unaffected.
 if os.environ.get("CHALLENGE_REPO_URL"):
     setup_state["steps"].append(
         {"id": "challenge", "label": "Preloading challenge repo", "status": "pending", "started_at": None, "completed_at": None, "error": None}
@@ -372,10 +373,6 @@ def run_setup():
 
     _run_step("gh", ["bash", "install_gh.sh"])
 
-    # Workshop: preload the pinned challenge repo into ~/projects/ (A-R7).
-    # No-op unless CHALLENGE_REPO_URL is set (see app.yaml.workshop).
-    if os.environ.get("CHALLENGE_REPO_URL"):
-        _run_step("challenge", ["bash", "install_challenge_repo.sh"])
 
     # tmux — required by Omnigent's native claude/codex harnesses (they launch
     # the agent through a local tmux terminal and refuse to start without it).
@@ -1142,6 +1139,9 @@ def create_session():
         # Also strip CLI-specific API keys so they read from config files
         # (always current after rotation) instead of stale env snapshots.
         shell_env.pop("GEMINI_API_KEY", None)
+        # Workshop: the challenge-repo read token is only for the startup
+        # clone — never expose it in attendee terminals.
+        shell_env.pop("CHALLENGE_REPO_READ_TOKEN", None)
         # Ensure HOME is set correctly
         if not shell_env.get("HOME") or shell_env["HOME"] == "/":
             shell_env["HOME"] = "/app/python/source_code"
@@ -1425,6 +1425,15 @@ def initialize_app(local_dev=False):
     # Uses the SP creds captured above to mint OAuth for the host tunnel; the
     # spawned runner uses CoDA's PAT + AI-Gateway creds for the actual coding.
     start_host(_omnigent_sp_creds)
+
+    # Workshop: preload the private challenge repo at container startup (A-R7).
+    # The read token comes from app.yaml env (secret valueFrom), so this does
+    # not wait for PAT setup. Background thread — never blocks app boot.
+    if os.environ.get("CHALLENGE_REPO_URL"):
+        threading.Thread(
+            target=_run_step, args=("challenge", ["bash", "install_challenge_repo.sh"]),
+            daemon=True, name="challenge-preload",
+        ).start()
 
     # Telemetry: app startup ping (fire-and-forget in background thread)
     log_telemetry("event", "app_startup")

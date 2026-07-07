@@ -23,7 +23,7 @@ USER_EMAIL    = $(shell databricks current-user me --profile $(PROFILE) --output
 WORKSPACE_PATH = /Workspace/Users/$(USER_EMAIL)/apps/$(APP_NAME)
 
 .PHONY: help test deploy redeploy create-app create-pat sync deploy-app status open clean \
-	deploy-workshop redeploy-workshop guard-workshop-name create-app-workshop workshop-yaml
+	deploy-workshop redeploy-workshop guard-workshop-name create-app-workshop workshop-yaml workshop-secret
 
 # ── Help ─────────────────────────────────────────────
 
@@ -89,6 +89,8 @@ deploy-app: ## Deploy the app from workspace
 # deployed app.yaml (host-register OFF, 10 sessions, preloaded challenge repo).
 
 WS_COMPUTE_SIZE ?= LARGE
+WS_SECRET_SCOPE ?= coda-workshop
+WS_SECRET_KEY   ?= challenge-repo-read-token
 
 deploy-workshop: guard-workshop-name create-app-workshop sync workshop-yaml deploy-app ## Deploy a workshop instance (LARGE + app.yaml.workshop)
 	@echo ""
@@ -120,6 +122,17 @@ create-app-workshop: ## Create the workshop app at $(WS_COMPUTE_SIZE) compute (i
 workshop-yaml: ## Overwrite the synced app.yaml with the workshop variant
 	@echo "==> Swapping in app.yaml.workshop as $(WORKSPACE_PATH)/app.yaml..."
 	@databricks workspace import $(WORKSPACE_PATH)/app.yaml --file app.yaml.workshop --format AUTO --overwrite --profile $(PROFILE)
+
+# Reads the token from stdin so it never appears on a command line:
+#   gh auth token | make workshop-secret PROFILE=lakemeter APP_NAME=coding-agents-01
+# NOTE: `apps update` REPLACES the app's resources list — workshop apps have
+# only this one resource, so a plain write is correct here.
+workshop-secret: guard-workshop-name ## Store the challenge-repo read token (from stdin) and attach it to the app
+	@databricks secrets create-scope $(WS_SECRET_SCOPE) --profile $(PROFILE) 2>/dev/null || true
+	@printf '%s' "$$(cat)" | databricks secrets put-secret $(WS_SECRET_SCOPE) $(WS_SECRET_KEY) --profile $(PROFILE)
+	@databricks apps update $(APP_NAME) --profile $(PROFILE) --json '{"resources": [{"name": "challenge-repo-token", "secret": {"scope": "$(WS_SECRET_SCOPE)", "key": "$(WS_SECRET_KEY)", "permission": "READ"}}]}' > /dev/null
+	@echo "    Secret stored ($(WS_SECRET_SCOPE)/$(WS_SECRET_KEY)) and attached as app resource 'challenge-repo-token'."
+	@echo "    Redeploy the app for the env var to take effect."
 
 # ── Monitoring ───────────────────────────────────────
 
