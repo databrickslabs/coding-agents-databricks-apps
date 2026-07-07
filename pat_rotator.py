@@ -14,7 +14,7 @@ import logging
 import requests
 
 import app_state
-from utils import ensure_https
+from utils import ensure_https, read_non_default_databrickscfg_sections
 
 logger = logging.getLogger(__name__)
 
@@ -261,25 +261,11 @@ class PATRotator:
             logger.warning(f"Could not write .databrickscfg: {e}")
 
     def _read_non_default_sections(self):
-        """Return the text of every ``~/.databrickscfg`` section except DEFAULT.
+        """Preserve co-owned ~/.databrickscfg sections across a DEFAULT rewrite.
 
-        Used to preserve co-owned profiles (e.g. the Omnigent host's
-        ``[omnigents-host]`` OAuth profile) across a DEFAULT-only rewrite.
-        Returns ``""`` when the file is absent or has no other sections.
+        Delegates to the shared helper so the rotator and setup_databricks.py
+        honor one "own only [DEFAULT]" contract (see
+        utils.read_non_default_databrickscfg_sections).
         """
-        try:
-            with open(self._databrickscfg_path) as f:
-                lines = f.readlines()
-        except OSError:
-            return ""
-        out = []
-        in_default = False
-        for line in lines:
-            stripped = line.strip()
-            if stripped.startswith("[") and stripped.endswith("]"):
-                in_default = stripped == "[DEFAULT]"
-            if not in_default:
-                out.append(line)
-        text = "".join(out).strip()
-        return f"\n{text}\n" if text else ""
+        return read_non_default_databrickscfg_sections(self._databrickscfg_path)
 

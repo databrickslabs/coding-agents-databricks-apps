@@ -34,6 +34,11 @@ def _update_claude(token):
         with open(path) as f:
             settings = json.load(f)
         changed = False
+        # Only refresh a *static* token if one is present. When the spec-C
+        # apiKeyHelper owns model auth, this key is absent and the rotator
+        # leaves it alone — Claude fetches its own token per-TTL. The OTEL
+        # refresh below still runs (it authenticates the OTLP export to the
+        # workspace, a separate concern the helper does not cover).
         if "env" in settings and "ANTHROPIC_AUTH_TOKEN" in settings["env"]:
             settings["env"]["ANTHROPIC_AUTH_TOKEN"] = token
             changed = True

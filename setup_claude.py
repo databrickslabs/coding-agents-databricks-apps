@@ -13,6 +13,87 @@ if not os.environ.get("HOME") or os.environ["HOME"] == "/":
 
 home = Path(os.environ["HOME"])
 
+# The SP OAuth profile the Omnigent host writes (auth_type=oauth-m2m). The
+# apiKeyHelper prefers it so model calls can use the app service principal and
+# the workshop needs no per-attendee PAT. Kept in sync with
+# omnigents_host._HOST_PROFILE.
+_SP_PROFILE = "omnigents-host"
+
+
+def _write_apikey_helper(claude_dir: Path) -> Path:
+    """Write the executable token helper Claude Code calls per-TTL (spec C).
+
+    Claude Code runs this and reads *stdout verbatim* as the bearer token, so
+    it must print the token and nothing else. Order of preference:
+      1. SP OAuth token via `databricks auth token -p omnigents-host` — the
+         workshop path (no user PAT). Only works where that OAuth profile
+         exists (host-connected instances); `auth token` is OAuth-only and
+         errors on a PAT profile.
+      2. The PAT from $DATABRICKS_TOKEN, else the `token =` line of the
+         [DEFAULT] profile — the standard per-user path.
+    All diagnostics go to stderr; stdout carries only the token.
+    """
+    helper_path = claude_dir / "anthropic-token-helper.py"
+    helper_src = '''#!/usr/bin/env python3
+"""Print a Databricks bearer token for Claude Code's apiKeyHelper (spec C).
+
+stdout MUST be the token only — Claude Code uses it verbatim.
+"""
+import configparser
+import json
+import os
+import subprocess
+import sys
+
+SP_PROFILE = "omnigents-host"
+
+
+def _sp_oauth_token():
+    # `databricks auth token` is OAuth-only; it errors on a PAT profile.
+    try:
+        out = subprocess.run(
+            ["databricks", "auth", "token", "-p", SP_PROFILE],
+            capture_output=True, text=True, timeout=30,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+        )
+    except Exception:
+        return None
+    if out.returncode != 0:
+        return None
+    try:
+        return json.loads(out.stdout).get("access_token") or None
+    except (json.JSONDecodeError, AttributeError):
+        return None
+
+
+def _pat_token():
+    tok = os.environ.get("DATABRICKS_TOKEN", "").strip()
+    if tok:
+        return tok
+    cfg_path = os.path.expanduser("~/.databrickscfg")
+    try:
+        cp = configparser.ConfigParser()
+        cp.read(cfg_path)
+        return (cp["DEFAULT"].get("token") or "").strip() or None
+    except Exception:
+        return None
+
+
+def main():
+    token = _sp_oauth_token() or _pat_token()
+    if not token:
+        print("no token source (no SP OAuth profile, no PAT)", file=sys.stderr)
+        sys.exit(1)
+    sys.stdout.write(token)
+
+
+if __name__ == "__main__":
+    main()
+'''
+    helper_path.write_text(helper_src)
+    helper_path.chmod(0o700)
+    return helper_path
+
 # Create ~/.claude directory
 claude_dir = home / ".claude"
 claude_dir.mkdir(exist_ok=True)
@@ -77,7 +158,26 @@ if token:
     settings.setdefault("env", {})
     settings["env"]["ANTHROPIC_MODEL"] = active_model
     settings["env"]["ANTHROPIC_BASE_URL"] = anthropic_base_url
-    settings["env"]["ANTHROPIC_AUTH_TOKEN"] = token
+
+    # Token source (spec C): by default write the static PAT. When
+    # ENABLE_SP_APIKEYHELPER is set, install an apiKeyHelper that fetches a
+    # fresh token per-TTL instead — Claude Code re-runs it on the interval
+    # below, so nothing has to rotate a static token into this file. The
+    # helper falls back to the PAT when no SP OAuth profile is present, so the
+    # standard per-user deploy is unaffected even with the flag on.
+    if os.environ.get("ENABLE_SP_APIKEYHELPER", "").strip().lower() in ("true", "1", "yes"):
+        helper_path = _write_apikey_helper(claude_dir)
+        # apiKeyHelper is a shell command; invoke via python3 explicitly so it
+        # doesn't depend on shebang resolution or the file's PATH.
+        settings["apiKeyHelper"] = f"python3 {helper_path}"
+        # SP OAuth tokens are short-lived (~1h); re-run the helper well under
+        # that. Matches Omnigent's native-claude default.
+        settings["env"]["CLAUDE_CODE_API_KEY_HELPER_TTL_MS"] = "900000"
+        # Do not pin a static token — the helper is authoritative.
+        settings["env"].pop("ANTHROPIC_AUTH_TOKEN", None)
+        print(f"Claude apiKeyHelper installed: {helper_path}")
+    else:
+        settings["env"]["ANTHROPIC_AUTH_TOKEN"] = token
     settings["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = opus_model
     settings["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = sonnet_model
     settings["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = haiku_model

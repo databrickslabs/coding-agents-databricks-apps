@@ -314,7 +314,13 @@ def _configure_all_cli_auth(token):
     settings.setdefault("env", {})
     settings["env"]["ANTHROPIC_MODEL"] = os.environ.get("ANTHROPIC_MODEL", "databricks-claude-opus-4-7")
     settings["env"]["ANTHROPIC_BASE_URL"] = anthropic_base_url
-    settings["env"]["ANTHROPIC_AUTH_TOKEN"] = token
+    # Respect the spec-C apiKeyHelper: when it owns model auth (setup_claude.py
+    # installed the "apiKeyHelper" key), don't re-pin a static token here — the
+    # helper fetches its own per-TTL. Otherwise write the PAT as before.
+    if settings.get("apiKeyHelper"):
+        settings["env"].pop("ANTHROPIC_AUTH_TOKEN", None)
+    else:
+        settings["env"]["ANTHROPIC_AUTH_TOKEN"] = token
     settings["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = "databricks-claude-opus-4-7"
     settings["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = "databricks-claude-sonnet-4-6"
     settings["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = "databricks-claude-haiku-4-5"
