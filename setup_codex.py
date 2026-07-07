@@ -7,6 +7,9 @@ or via the AI Gateway at /openai/v1.
 
 Config: ~/.codex/config.toml with custom model_providers for Databricks.
 Auth: Bearer token via DATABRICKS_TOKEN environment variable.
+
+Opt-out:
+  Set ENABLE_CODEX=false in app.yaml to skip installation entirely.
 """
 import json
 import os
@@ -20,6 +23,11 @@ from utils import (
     get_npm_version,
     resolve_mlflow_experiment_id,
 )
+
+# Opt-out: allow operators to disable Codex bundling without removing the file.
+if os.environ.get("ENABLE_CODEX", "true").strip().lower() in ("false", "0", "no"):
+    print("ENABLE_CODEX=false — skipping Codex CLI setup")
+    raise SystemExit(0)
 
 # Set HOME if not properly set
 if not os.environ.get("HOME") or os.environ["HOME"] == "/":

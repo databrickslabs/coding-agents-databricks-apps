@@ -1,6 +1,8 @@
 # Workshop variant of app.yaml (spec-A-coda-workshop-layer.md, milestone M1).
 # Deployed by `make deploy-workshop` which swaps this in as app.yaml in the
 # workspace copy. Differences from the standard app.yaml:
+#   - Claude Code ONLY: ENABLE_CODEX/OPENCODE/GEMINI/HERMES all "false"
+#     (workshop uses one agent; fewer deps to install/fail at boot)
 #   - MAX_CONCURRENT_SESSIONS raised to 10 (A-C1; fleet sizing decision)
 #   - OMNIGENTS_SERVER_URL/OMNIGENTS_WHEEL_SPEC omitted -> boot host-register
 #     no-ops (A-R3: attendees use CoDA's own terminal, not the Omnigent tunnel)
@@ -16,17 +18,17 @@ env:
     value: /app/python/source_code
   - name: ANTHROPIC_MODEL
     value: databricks-claude-opus-4-7
-  - name: GEMINI_MODEL
-    value: databricks-gemini-2-5-pro
-  # Must be a *-codex model served via the Responses API — see app.yaml.
-  - name: CODEX_MODEL
-    value: databricks-gpt-5-3-codex
-  - name: HERMES_MODEL
-    value: databricks-claude-opus-4-6
-  - name: HERMES_FALLBACK_MODEL
-    value: databricks-claude-opus-4-6
+  # ── Claude Code only ─────────────────────────────────────────────────────
+  # The workshop uses Claude Code exclusively — skip installing the other
+  # agent CLIs (fewer npm downloads, faster setup, smaller failure surface).
+  - name: ENABLE_CODEX
+    value: "false"
+  - name: ENABLE_OPENCODE
+    value: "false"
+  - name: ENABLE_GEMINI
+    value: "false"
   - name: ENABLE_HERMES
-    value: "true"
+    value: "false"
   - name: CLAUDE_CODE_DISABLE_AUTO_MEMORY
     value: 0
   - name: CLAUDE_CODE_OTEL_ENABLED

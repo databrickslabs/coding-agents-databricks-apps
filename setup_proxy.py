@@ -20,6 +20,11 @@ from urllib.error import URLError
 
 from utils import ensure_https, get_gateway_host
 
+# The proxy exists solely for OpenCode — skip it when OpenCode is disabled.
+if os.environ.get("ENABLE_OPENCODE", "true").strip().lower() in ("false", "0", "no"):
+    print("ENABLE_OPENCODE=false — skipping content-filter proxy (OpenCode-only component)")
+    raise SystemExit(0)
+
 PROXY_PORT = 4000
 PROXY_HOST = "127.0.0.1"
 HEALTH_TIMEOUT = 15

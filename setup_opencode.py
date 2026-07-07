@@ -5,6 +5,9 @@ Routes requests through a local content-filter proxy proxy (localhost:4000) whic
 text content blocks before forwarding to Databricks AI Gateway. This fixes OpenCode
 issue #5028 where empty content blocks cause "Bad Request" errors.
 See docs/plans/2026-03-11-litellm-empty-content-blocks-design.md for details.
+
+Opt-out:
+  Set ENABLE_OPENCODE=false in app.yaml to skip installation entirely.
 """
 import os
 import json
@@ -12,6 +15,11 @@ import subprocess
 from pathlib import Path
 
 from utils import ensure_https, get_gateway_host, get_npm_version
+
+# Opt-out: allow operators to disable OpenCode bundling without removing the file.
+if os.environ.get("ENABLE_OPENCODE", "true").strip().lower() in ("false", "0", "no"):
+    print("ENABLE_OPENCODE=false — skipping OpenCode CLI setup")
+    raise SystemExit(0)
 
 # content-filter proxy local proxy — sanitizes empty content blocks before reaching Databricks
 # (see https://github.com/sst/opencode/issues/5028)
