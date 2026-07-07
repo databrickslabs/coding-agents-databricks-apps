@@ -42,3 +42,6 @@ uv.lock
 
 # Agent-plane reference clone
 agent-plane-ref/
+
+# Playwright storage state — live SSO cookies; must never be committed or synced
+tests/e2e/auth.json
