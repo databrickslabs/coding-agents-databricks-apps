@@ -8,8 +8,12 @@ env:
     value: databricks-claude-opus-4-7
   - name: GEMINI_MODEL
     value: databricks-gemini-2-5-pro
+  # Must be a *-codex model served via the Responses API — the Codex harness
+  # (and CLI) speaks wire_api="responses", which only the -codex endpoints
+  # support. A general chat-completions model (e.g. databricks-gpt-5-5) 400s on
+  # /responses. See setup_codex.py base_url handling.
   - name: CODEX_MODEL
-    value: databricks-gpt-5-5
+    value: databricks-gpt-5-3-codex
   - name: HERMES_MODEL
     value: databricks-claude-opus-4-6
   - name: HERMES_FALLBACK_MODEL
@@ -29,4 +33,4 @@ env:
   # Optional install source for runtime Omnigent host control. The server URL is
   # supplied at runtime through the CoDA UI/API.
   - name: OMNIGENTS_WHEEL_SPEC
-    value: "/Volumes/ot_demo/omnigents/artifacts/wheels"
+    value: "/Volumes/lakemeter_catalog/daveok_omnigent/artifacts/wheels"
