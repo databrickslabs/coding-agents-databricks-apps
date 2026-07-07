@@ -1,0 +1,47 @@
+# Workshop variant of app.yaml (spec-A-coda-workshop-layer.md, milestone M1).
+# Deployed by `make deploy-workshop` which swaps this in as app.yaml in the
+# workspace copy. Differences from the standard app.yaml:
+#   - MAX_CONCURRENT_SESSIONS raised to 10 (A-C1; fleet sizing decision)
+#   - OMNIGENTS_SERVER_URL/OMNIGENTS_WHEEL_SPEC omitted -> boot host-register
+#     no-ops (A-R3: attendees use CoDA's own terminal, not the Omnigent tunnel)
+#   - CHALLENGE_REPO_URL/REF added: the ONE config spot for the preloaded
+#     challenge repo (A-R7). Compute size is NOT set here — it's a create-time
+#     property (`databricks apps create --compute-size LARGE`, see Makefile).
+command:
+  - gunicorn
+  - app:app
+env:
+  - name: HOME
+    value: /app/python/source_code
+  - name: ANTHROPIC_MODEL
+    value: databricks-claude-opus-4-7
+  - name: GEMINI_MODEL
+    value: databricks-gemini-2-5-pro
+  # Must be a *-codex model served via the Responses API — see app.yaml.
+  - name: CODEX_MODEL
+    value: databricks-gpt-5-3-codex
+  - name: HERMES_MODEL
+    value: databricks-claude-opus-4-6
+  - name: HERMES_FALLBACK_MODEL
+    value: databricks-claude-opus-4-6
+  - name: ENABLE_HERMES
+    value: "true"
+  - name: CLAUDE_CODE_DISABLE_AUTO_MEMORY
+    value: 0
+  - name: CLAUDE_CODE_OTEL_ENABLED
+    value: "true"
+  - name: CLAUDE_CODE_OTEL_CATALOG_SCHEMA
+    value: davidokeeffe_standard_demo_catalog.default
+  # 10 concurrent browser-terminal sessions per instance (assumed for LARGE,
+  # validated by the day-of smoke test — A-O1/A-O2).
+  - name: MAX_CONCURRENT_SESSIONS
+    value: "10"
+  # ── Challenge repo (A-R7) — the one-line swap spot ──────────────────────
+  # Public repo cloned at setup into ~/projects/<name>, pinned to REF so all
+  # instances start identical. The terminal opens directly inside it.
+  # STAND-IN: currently points at an existing public repo for M1 verification.
+  # Swap URL+REF to the real challenge repo when ready, then redeploy.
+  - name: CHALLENGE_REPO_URL
+    value: "https://github.com/dgokeeffe/databricks-claude-code-workshop"
+  - name: CHALLENGE_REPO_REF
+    value: "d9101b24a954d4cd070ce4da9934c6d5210d15cd"

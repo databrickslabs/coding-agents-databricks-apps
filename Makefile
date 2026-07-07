@@ -22,7 +22,8 @@ APP_NAME      ?= coding-agents
 USER_EMAIL    = $(shell databricks current-user me --profile $(PROFILE) --output json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('userName',''))")
 WORKSPACE_PATH = /Workspace/Users/$(USER_EMAIL)/apps/$(APP_NAME)
 
-.PHONY: help test deploy redeploy create-app create-pat sync deploy-app status open clean
+.PHONY: help test deploy redeploy create-app create-pat sync deploy-app status open clean \
+	deploy-workshop redeploy-workshop guard-workshop-name create-app-workshop workshop-yaml
 
 # ── Help ─────────────────────────────────────────────
 
@@ -81,6 +82,44 @@ sync: ## Sync local files to Databricks workspace
 deploy-app: ## Deploy the app from workspace
 	@echo "==> Deploying app '$(APP_NAME)'..."
 	@databricks apps deploy $(APP_NAME) --source-code-path $(WORKSPACE_PATH) --profile $(PROFILE) --no-wait
+
+# ── Workshop (spec-A M1) ─────────────────────────────
+# Usage: make deploy-workshop PROFILE=lakemeter APP_NAME=coding-agents-01
+# Creates the app at LARGE compute and swaps app.yaml.workshop in as the
+# deployed app.yaml (host-register OFF, 10 sessions, preloaded challenge repo).
+
+WS_COMPUTE_SIZE ?= LARGE
+
+deploy-workshop: guard-workshop-name create-app-workshop sync workshop-yaml deploy-app ## Deploy a workshop instance (LARGE + app.yaml.workshop)
+	@echo ""
+	@echo "Workshop deployment complete! App URL:"
+	@databricks apps get $(APP_NAME) --profile $(PROFILE) --output json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('url','(pending)'))"
+
+redeploy-workshop: guard-workshop-name sync workshop-yaml deploy-app ## Redeploy a workshop instance (skip app creation)
+	@echo ""
+	@echo "Workshop redeployment complete!"
+
+guard-workshop-name: ## Refuse to deploy the workshop config over the main instance
+	@if [ "$(APP_NAME)" = "coding-agents" ]; then \
+		echo "ERROR: workshop deploy would overwrite the main 'coding-agents' app."; \
+		echo "       Pass APP_NAME=coding-agents-01 (or -02..-06)."; \
+		exit 1; \
+	fi
+
+create-app-workshop: ## Create the workshop app at $(WS_COMPUTE_SIZE) compute (idempotent)
+	@echo "==> Checking if app '$(APP_NAME)' exists..."
+	@state=$$(databricks apps get $(APP_NAME) --profile $(PROFILE) --output json 2>/dev/null \
+		| python3 -c "import sys,json; print(json.load(sys.stdin).get('compute_status',{}).get('state',''))" 2>/dev/null); \
+	if [ -n "$$state" ]; then \
+		echo "    App '$(APP_NAME)' already exists (state: $$state), skipping create."; \
+	else \
+		echo "    Creating app '$(APP_NAME)' (compute size: $(WS_COMPUTE_SIZE))..."; \
+		databricks apps create $(APP_NAME) --compute-size $(WS_COMPUTE_SIZE) --profile $(PROFILE); \
+	fi
+
+workshop-yaml: ## Overwrite the synced app.yaml with the workshop variant
+	@echo "==> Swapping in app.yaml.workshop as $(WORKSPACE_PATH)/app.yaml..."
+	@databricks workspace import $(WORKSPACE_PATH)/app.yaml --file app.yaml.workshop --format AUTO --overwrite --profile $(PROFILE)
 
 # ── Monitoring ───────────────────────────────────────
 

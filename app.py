@@ -118,6 +118,13 @@ setup_state = {
     ]
 }
 
+# Workshop deploys (app.yaml.workshop) preload a pinned challenge repo (spec A-R7).
+# Register the step in the setup UI only when configured so normal deploys are unaffected.
+if os.environ.get("CHALLENGE_REPO_URL"):
+    setup_state["steps"].append(
+        {"id": "challenge", "label": "Preloading challenge repo", "status": "pending", "started_at": None, "completed_at": None, "error": None}
+    )
+
 
 def _update_step(step_id, **kwargs):
     with setup_lock:
@@ -364,6 +371,11 @@ def run_setup():
         "mkdir -p ~/.local/bin && bash install_micro.sh && mv micro ~/.local/bin/ 2>/dev/null || true"])
 
     _run_step("gh", ["bash", "install_gh.sh"])
+
+    # Workshop: preload the pinned challenge repo into ~/projects/ (A-R7).
+    # No-op unless CHALLENGE_REPO_URL is set (see app.yaml.workshop).
+    if os.environ.get("CHALLENGE_REPO_URL"):
+        _run_step("challenge", ["bash", "install_challenge_repo.sh"])
 
     # tmux — required by Omnigent's native claude/codex harnesses (they launch
     # the agent through a local tmux terminal and refuse to start without it).
@@ -1140,6 +1152,15 @@ def create_session():
         # Start shell in ~/projects/ directory
         projects_dir = os.path.join(shell_env["HOME"], "projects")
         os.makedirs(projects_dir, exist_ok=True)
+
+        # Workshop: open the terminal directly inside the preloaded challenge
+        # repo when it exists (A-R7 — attendees start in the repo, no cd/clone).
+        challenge_url = os.environ.get("CHALLENGE_REPO_URL", "")
+        if challenge_url:
+            repo_name = os.path.basename(challenge_url.rstrip("/")).removesuffix(".git")
+            challenge_dir = os.path.join(projects_dir, repo_name)
+            if os.path.isdir(challenge_dir):
+                projects_dir = challenge_dir
 
         pid = subprocess.Popen(
             ["/bin/bash"],
