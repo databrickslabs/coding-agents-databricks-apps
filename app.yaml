@@ -30,7 +30,12 @@ env:
     value: davidokeeffe_standard_demo_catalog.default
   - name: MAX_CONCURRENT_SESSIONS
     value: "5"
-  # Optional install source for runtime Omnigent host control. The server URL is
-  # supplied at runtime through the CoDA UI/API.
+  # Register this app as a persistent Omnigent host on boot. With the URL set,
+  # initialize_app() -> start_host() dials the server as the app SP, so the
+  # deployed app self-registers as an always-on host on every restart/redeploy.
+  - name: OMNIGENTS_SERVER_URL
+    value: "https://omnigent-daveok-335310294452632.aws.databricksapps.com"
+  # Install source for the omnigent host CLI (downloaded from this UC Volume
+  # using the app SP's READ_VOLUME grant).
   - name: OMNIGENTS_WHEEL_SPEC
     value: "/Volumes/lakemeter_catalog/daveok_omnigent/artifacts/wheels"
