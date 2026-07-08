@@ -191,7 +191,7 @@ def _materialize_spec(spec: str, sp_creds: dict[str, str] | None = None) -> str:
     return spec
 
 
-def _install_command(spec: str) -> list[str]:
+def _install_command(spec: str, *, force: bool = False) -> list[str]:
     """Build the ``uv tool install`` command for the configured source.
 
     ``spec`` (already materialized to a local path when it was a UC Volume)
@@ -210,6 +210,11 @@ def _install_command(spec: str) -> list[str]:
     longer needed: current ``omnigent`` pins click correctly in its deps.)
     """
     pin = ["--with", "databricks-sdk"]
+    # ``uv tool install`` no-ops when the tool is already installed, so a new
+    # wheel in the UC Volume would be ignored on restart. ``--force`` makes it
+    # reinstall over the existing tool — required to roll out a new runner
+    # build. Opt-in via OMNIGENTS_FORCE_REINSTALL (see ensure_installed).
+    force_flag = ["--force"] if force else []
     if os.path.isdir(spec):
         main = sorted(
             f for f in os.listdir(spec)
@@ -219,12 +224,16 @@ def _install_command(spec: str) -> list[str]:
             raise FileNotFoundError(f"no omnigent-*.whl in {spec}")
         return [
             "uv", "tool", "install",
+            *force_flag,
             "--find-links", spec,
             "--index-url", "https://pypi.org/simple",
             *pin,
             os.path.join(spec, main[-1]),
         ]
-    return ["uv", "tool", "install", "--index-url", "https://pypi.org/simple", *pin, spec]
+    return [
+        "uv", "tool", "install", *force_flag,
+        "--index-url", "https://pypi.org/simple", *pin, spec,
+    ]
 
 
 def ensure_installed(sp_creds: dict[str, str] | None = None) -> bool:
@@ -232,8 +241,18 @@ def ensure_installed(sp_creds: dict[str, str] | None = None) -> bool:
 
     ``sp_creds`` authenticates a UC-Volume wheel download (see
     :func:`_materialize_spec`). Returns True if the CLI is available afterward.
+
+    Set ``OMNIGENTS_FORCE_REINSTALL=1`` to reinstall even when the binary is
+    already present — the way to roll out a new runner build, since
+    ``uv tool install`` (and this early return) would otherwise keep the stale
+    binary across restarts.
     """
-    if os.path.exists(_omnigents_bin()):
+    force = os.environ.get("OMNIGENTS_FORCE_REINSTALL", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if os.path.exists(_omnigents_bin()) and not force:
         return True
     spec = os.environ.get("OMNIGENTS_WHEEL_SPEC", "").strip()
     if not spec:
@@ -243,7 +262,7 @@ def ensure_installed(sp_creds: dict[str, str] | None = None) -> bool:
         )
         return False
     try:
-        cmd = _install_command(_materialize_spec(spec, sp_creds))
+        cmd = _install_command(_materialize_spec(spec, sp_creds), force=force)
         subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=600)
     except Exception as e:  # download/install failure must not crash the worker
         detail = getattr(e, "stderr", "") or str(e)
