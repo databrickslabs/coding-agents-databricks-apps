@@ -311,6 +311,47 @@ def _write_oauth_profile(creds: dict[str, str]) -> None:
     logger.info("Wrote OAuth profile '%s' for Omnigents host tunnel", _HOST_PROFILE)
 
 
+def _ensure_claude() -> None:
+    """Install the Claude Code CLI to ~/.local/bin if missing (best-effort).
+
+    The native ``claude-native`` harness gates on the ``claude`` binary being on
+    PATH (onboarding/harness_readiness.py); without it the host reports
+    ``claude-native: not configured`` and every native session is rejected at
+    launch with ``harness_not_configured``. CoDA installs ``claude`` in
+    ``setup_claude.py``, but that runs inside ``run_setup()`` which is gated
+    behind the interactive PAT bootstrap — the auto host-connect path (SP creds,
+    no PAT) never runs it. So install here too, mirroring ``_ensure_tmux``: same
+    ``claude.ai/install.sh`` fetch, to the same ``~/.local/bin`` the host
+    prepends to the runner's PATH. Idempotent; never blocks the host on failure.
+    """
+    home = os.environ.get("HOME", "/app/python/source_code")
+    claude_path = os.path.join(home, ".local", "bin", "claude")
+    if os.path.exists(claude_path):
+        logger.info("claude already present at %s", claude_path)
+        return
+    try:
+        result = subprocess.run(
+            ["bash", "-c", "curl -fsSL https://claude.ai/install.sh | bash"],
+            env={**os.environ, "HOME": home},
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        if result.returncode == 0 and os.path.exists(claude_path):
+            logger.info("claude installed to %s", claude_path)
+        else:
+            logger.warning(
+                "claude install did NOT land (rc=%s); claude-native will report "
+                "not-configured. stdout=%r stderr=%r",
+                result.returncode,
+                (result.stdout or "").strip()[-500:],
+                (result.stderr or "").strip()[-500:],
+            )
+    except Exception as e:  # never block host launch on claude install
+        logger.warning("claude install failed (non-fatal): %s", e)
+
+
 def _ensure_tmux() -> None:
     """Install a static tmux to ~/.local/bin if missing (best-effort).
 
@@ -549,6 +590,7 @@ def _supervise(
     # Install tmux FIRST so the readiness probe in _run_setup_once sees it and
     # the native claude/codex harnesses report configured.
     _set(stage="configuring_harnesses")
+    _ensure_claude()
     _ensure_tmux()
     _run_setup_once()
     # Surface per-session runner logs through the app logger so runner-side
