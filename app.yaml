@@ -30,6 +30,14 @@ env:
     value: davidokeeffe_standard_demo_catalog.default
   - name: MAX_CONCURRENT_SESSIONS
     value: "5"
+  # Claude Code fetches its gateway bearer via an apiKeyHelper that mints a
+  # fresh app-SP OAuth token per-TTL (spec C), instead of the PAT rotator
+  # pushing a static token into settings.json. Requires the [omnigents-host]
+  # OAuth profile, which OMNIGENTS_SERVER_URL below causes to be written; the
+  # helper falls back to the PAT if it's ever absent. Verified: the SP token
+  # is accepted by /anthropic (C-O1, HTTP 200).
+  - name: ENABLE_SP_APIKEYHELPER
+    value: "true"
   # Register this app as a persistent Omnigent host on boot. With the URL set,
   # initialize_app() -> start_host() dials the server as the app SP, so the
   # deployed app self-registers as an always-on host on every restart/redeploy.
