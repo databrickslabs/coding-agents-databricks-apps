@@ -325,13 +325,33 @@ def _ensure_tmux() -> None:
     """
     home = os.environ.get("HOME", "/app/python/source_code")
     local_bin = os.path.join(home, ".local", "bin")
-    if os.path.exists(os.path.join(local_bin, "tmux")):
+    tmux_path = os.path.join(local_bin, "tmux")
+    if os.path.exists(tmux_path):
+        logger.info("tmux already present at %s", tmux_path)
         return
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "install_tmux.sh")
     if not os.path.exists(script):
+        logger.warning("install_tmux.sh not found at %s; native harnesses need tmux", script)
         return
     try:
-        subprocess.run(["bash", script], check=False, capture_output=True, text=True, timeout=120)
+        # Log the install outcome: the native claude/codex harnesses report
+        # "not configured" whenever tmux is absent, and this install fetches a
+        # static binary from GitHub — a fetch that can fail on a container with
+        # restricted egress. capture_output hid that failure before, leaving
+        # only a silent claude-native:False downstream.
+        result = subprocess.run(
+            ["bash", script], check=False, capture_output=True, text=True, timeout=120
+        )
+        if result.returncode == 0 and os.path.exists(tmux_path):
+            logger.info("tmux installed: %s", (result.stdout or "").strip().splitlines()[-1:])
+        else:
+            logger.warning(
+                "tmux install did NOT land (rc=%s); native harnesses will report "
+                "not-configured. stdout=%r stderr=%r",
+                result.returncode,
+                (result.stdout or "").strip()[-500:],
+                (result.stderr or "").strip()[-500:],
+            )
     except Exception as e:  # never block host launch on tmux install
         logger.warning("tmux install failed (non-fatal): %s", e)
 
