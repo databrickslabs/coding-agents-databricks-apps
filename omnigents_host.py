@@ -64,6 +64,7 @@ _proc: subprocess.Popen[str] | None = None
 _sp_creds: dict[str, str] | None = None
 _log_tail: list[str] = []
 _LOG_TAIL_LIMIT = 80
+_runner_tailer_started = False
 
 
 def _stable_host_identity() -> tuple[str, str] | None:
@@ -101,7 +102,7 @@ def _append_log(line: str) -> None:
 
 def reset_for_tests() -> None:
     """Reset module state between tests."""
-    global _proc, _sp_creds, _stop_event, _thread
+    global _proc, _sp_creds, _stop_event, _thread, _runner_tailer_started
 
     if _proc is not None and _proc.poll() is None:
         _proc.terminate()
@@ -110,6 +111,7 @@ def reset_for_tests() -> None:
         _sp_creds = None
         _stop_event = None
         _thread = None
+        _runner_tailer_started = False
         _log_tail.clear()
         _status.clear()
         _status.update({
@@ -334,6 +336,53 @@ def _ensure_tmux() -> None:
         logger.warning("tmux install failed (non-fatal): %s", e)
 
 
+def _start_runner_log_tailer() -> None:
+    """Stream runner log files into the app logger (best-effort).
+
+    ``omnigent host`` spawns each session's runner as a separate process that
+    writes to ``$HOME/.omnigent/logs/host-runner/runner-*.log`` — files that
+    never reach the app's stdout, so runner-side failures (e.g. a native
+    terminal that "failed to start; see runner logs") are invisible through
+    ``databricks apps logs``, which has no container shell to read them. This
+    daemon thread watches that directory and forwards new/growing runner logs
+    to the same ``logger.info`` / ``_append_log`` sinks the host stdout uses,
+    so those failures surface without a browser terminal. Idempotent (starts
+    at most one tailer); never blocks or crashes the supervisor.
+    """
+    global _runner_tailer_started
+    with _lock:
+        if _runner_tailer_started:
+            return
+        _runner_tailer_started = True
+
+    home = os.environ.get("HOME", "/app/python/source_code")
+    log_dir = os.path.join(home, ".omnigent", "logs", "host-runner")
+
+    def _tail() -> None:
+        offsets: dict[str, int] = {}
+        while True:
+            try:
+                names = os.listdir(log_dir) if os.path.isdir(log_dir) else []
+                for name in names:
+                    if not (name.startswith("runner-") and name.endswith(".log")):
+                        continue
+                    path = os.path.join(log_dir, name)
+                    with open(path, errors="replace") as f:
+                        f.seek(offsets.get(name, 0))
+                        for line in f:
+                            if line.endswith("\n"):
+                                text = line.rstrip()
+                                if text:
+                                    _append_log(text)
+                                    logger.info("[runner:%s] %s", name, text)
+                        offsets[name] = f.tell()
+            except Exception:  # never let a tail error take down the thread
+                pass
+            time.sleep(1.0)
+
+    threading.Thread(target=_tail, daemon=True, name="omnigent-runner-log-tail").start()
+
+
 def _run_setup_once() -> None:
     """Auto-configure harnesses from CoDA's ambient LLM creds (best-effort).
 
@@ -482,6 +531,9 @@ def _supervise(
     _set(stage="configuring_harnesses")
     _ensure_tmux()
     _run_setup_once()
+    # Surface per-session runner logs through the app logger so runner-side
+    # failures are visible via `databricks apps logs` (no container shell).
+    _start_runner_log_tailer()
     _set(host_launched=True, running=True, stage="running")
     logger.info("Omnigents host supervisor active → %s", server_url)
 
