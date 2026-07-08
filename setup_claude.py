@@ -25,10 +25,12 @@ def _write_apikey_helper(claude_dir: Path) -> Path:
 
     Claude Code runs this and reads *stdout verbatim* as the bearer token, so
     it must print the token and nothing else. Order of preference:
-      1. SP OAuth token via `databricks auth token -p omnigents-host` — the
-         workshop path (no user PAT). Only works where that OAuth profile
-         exists (host-connected instances); `auth token` is OAuth-only and
-         errors on a PAT profile.
+      1. SP OAuth token minted via the Databricks SDK from the omnigents-host
+         M2M profile — the workshop/host path (no user PAT). Verified accepted
+         by the /anthropic gateway (C-O1, HTTP 200). Uses the SDK's
+         Config.authenticate(), NOT `databricks auth token`: the CLI verb is
+         U2M-only and hard-refuses M2M (client_id/secret) profiles. Only works
+         where the omnigents-host profile exists (host-connected instances).
       2. The PAT from $DATABRICKS_TOKEN, else the `token =` line of the
          [DEFAULT] profile — the standard per-user path.
     All diagnostics go to stderr; stdout carries only the token.
@@ -40,30 +42,29 @@ def _write_apikey_helper(claude_dir: Path) -> Path:
 stdout MUST be the token only — Claude Code uses it verbatim.
 """
 import configparser
-import json
 import os
-import subprocess
 import sys
 
 SP_PROFILE = "omnigents-host"
 
 
 def _sp_oauth_token():
-    # `databricks auth token` is OAuth-only; it errors on a PAT profile.
+    # Mint the SP token via the SDK. The M2M (client_id/secret) profile the
+    # Omnigent host writes is NOT usable via `databricks auth token` (that CLI
+    # verb is U2M-only and refuses M2M); Config.authenticate() does the
+    # client-credentials flow. Verified accepted by /anthropic (C-O1, HTTP 200).
+    # Absent profile / non-host instance -> returns None, caller falls back.
     try:
-        out = subprocess.run(
-            ["databricks", "auth", "token", "-p", SP_PROFILE],
-            capture_output=True, text=True, timeout=30,
-            env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
-        )
+        from databricks.sdk.core import Config
     except Exception:
         return None
-    if out.returncode != 0:
-        return None
     try:
-        return json.loads(out.stdout).get("access_token") or None
-    except (json.JSONDecodeError, AttributeError):
+        headers = Config(profile=SP_PROFILE).authenticate()
+    except Exception:
         return None
+    auth = (headers or {}).get("Authorization", "")
+    # Strip the "Bearer " prefix so stdout carries the raw token only.
+    return auth[7:].strip() if auth.startswith("Bearer ") else (auth.strip() or None)
 
 
 def _pat_token():
