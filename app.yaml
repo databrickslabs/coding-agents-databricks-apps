@@ -47,3 +47,9 @@ env:
   # using the app SP's READ_VOLUME grant).
   - name: OMNIGENTS_WHEEL_SPEC
     value: "/Volumes/lakemeter_catalog/daveok_omnigent/artifacts/wheels"
+  # Force-reinstall the host CLI on boot so a new wheel in the UC Volume is
+  # actually installed (uv tool install otherwise no-ops when the tool exists,
+  # leaving a stale runner across restarts). Set while rolling out a runner
+  # build; can be removed once the deployed wheel is stable.
+  - name: OMNIGENTS_FORCE_REINSTALL
+    value: "1"
