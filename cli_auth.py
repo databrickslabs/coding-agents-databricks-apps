@@ -21,6 +21,7 @@ if not _HOME or _HOME == "/":
 def update_cli_tokens(token):
     """Update the literal token in all CLI config files."""
     _update_claude(token)
+    _update_pi(token)
     _update_codex(token)
     _update_opencode(token)
     _update_gemini(token)
@@ -47,6 +48,26 @@ def _update_claude(token):
         if changed:
             with open(path, "w") as f:
                 json.dump(settings, f, indent=2)
+    except (OSError, json.JSONDecodeError):
+        pass  # file doesn't exist yet — initial setup hasn't run
+
+
+def _update_pi(token):
+    """Update the databricks-claude provider apiKey in ~/.pi/agent/models.json.
+
+    Pi's config holds a static apiKey (no apiKeyHelper), so the rotator must
+    swap it on each rotation. Mirrors _update_opencode: walk the JSON, rewrite
+    only the token, leave the rest of the config intact.
+    """
+    path = os.path.join(_HOME, ".pi", "agent", "models.json")
+    try:
+        with open(path) as f:
+            config = json.load(f)
+        provider = config.get("providers", {}).get("databricks-claude")
+        if isinstance(provider, dict) and "apiKey" in provider:
+            provider["apiKey"] = token
+            with open(path, "w") as f:
+                json.dump(config, f, indent=2)
     except (OSError, json.JSONDecodeError):
         pass  # file doesn't exist yet — initial setup hasn't run
 

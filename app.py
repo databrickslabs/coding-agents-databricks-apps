@@ -109,6 +109,7 @@ setup_state = {
         {"id": "dbcli",     "label": "Upgrading Databricks CLI",     "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "proxy",   "label": "Starting content-filter proxy", "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "claude",     "label": "Configuring Claude CLI",       "status": "pending", "started_at": None, "completed_at": None, "error": None},
+        {"id": "pi",         "label": "Configuring Pi CLI",           "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "codex",      "label": "Configuring Codex CLI",        "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "opencode",   "label": "Configuring OpenCode CLI",     "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "gemini",     "label": "Configuring Gemini CLI",       "status": "pending", "started_at": None, "completed_at": None, "error": None},
@@ -312,7 +313,7 @@ def _configure_all_cli_auth(token):
         settings = {}
 
     settings.setdefault("env", {})
-    settings["env"]["ANTHROPIC_MODEL"] = os.environ.get("ANTHROPIC_MODEL", "databricks-claude-opus-4-7")
+    settings["env"]["ANTHROPIC_MODEL"] = os.environ.get("ANTHROPIC_MODEL", "databricks-claude-opus-4-8")
     settings["env"]["ANTHROPIC_BASE_URL"] = anthropic_base_url
     # Respect the spec-C apiKeyHelper: when it owns model auth (setup_claude.py
     # installed the "apiKeyHelper" key), don't re-pin a static token here — the
@@ -321,7 +322,7 @@ def _configure_all_cli_auth(token):
         settings["env"].pop("ANTHROPIC_AUTH_TOKEN", None)
     else:
         settings["env"]["ANTHROPIC_AUTH_TOKEN"] = token
-    settings["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = "databricks-claude-opus-4-7"
+    settings["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = "databricks-claude-opus-4-8"
     settings["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = "databricks-claude-sonnet-4-6"
     settings["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = "databricks-claude-haiku-4-5"
     settings["env"]["ANTHROPIC_CUSTOM_HEADERS"] = "x-databricks-use-coding-agent-mode: true"
@@ -342,7 +343,7 @@ def _configure_all_cli_auth(token):
     # 3. Re-run Codex, OpenCode, Gemini setup scripts with token in env
     #    They are idempotent: detect CLI already installed, just write config files
     env = {**os.environ, "DATABRICKS_TOKEN": token}
-    for script in ["setup_codex.py", "setup_opencode.py", "setup_gemini.py", "setup_hermes.py"]:
+    for script in ["setup_pi.py", "setup_codex.py", "setup_opencode.py", "setup_gemini.py", "setup_hermes.py"]:
         try:
             result = subprocess.run(
                 ["uv", "run", "python", script],
@@ -395,6 +396,7 @@ def run_setup():
     # --- Parallel agent setup (all independent of each other) ---
     parallel_steps = [
         ("claude",     ["uv", "run", "python", "setup_claude.py"]),
+        ("pi",         ["uv", "run", "python", "setup_pi.py"]),
         ("codex",      ["uv", "run", "python", "setup_codex.py"]),
         ("opencode",   ["uv", "run", "python", "setup_opencode.py"]),
         ("gemini",     ["uv", "run", "python", "setup_gemini.py"]),

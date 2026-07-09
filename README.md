@@ -285,7 +285,9 @@ This template repo opens that vision up for every Databricks user — no IDE set
 |----------|----------|-------------|
 | `DATABRICKS_TOKEN` | No | Optional. If not set, the app prompts for a token on first session. Auto-rotated every 10 minutes |
 | `HOME` | Yes | Set to `/app/python/source_code` in app.yaml |
-| `ANTHROPIC_MODEL` | No | Claude model name (default: `databricks-claude-opus-4-7`) |
+| `ANTHROPIC_MODEL` | No | Claude model name (default: `databricks-claude-opus-4-8`) |
+| `PI_MODEL` | No | Pi model name — same `/anthropic` gateway route as Claude (default: `databricks-claude-opus-4-8`) |
+| `ENABLE_PI` | No | Set `false` to skip installing the Pi coding agent (default: `true`) |
 | `CODEX_MODEL` | No | Codex model name (default: `databricks-gpt-5-5`) |
 | `GEMINI_MODEL` | No | Gemini model name (default: `databricks-gemini-2-5-pro`) |
 | `DATABRICKS_GATEWAY_HOST` | No | AI Gateway URL override. Auto-discovered from `DATABRICKS_WORKSPACE_ID` if unset |
