@@ -597,6 +597,17 @@ def _supervise(
     if not ensure_installed(sp_creds):
         _set(stage="install_failed")  # ensure_installed already logged why
         return
+    # Log the installed omnigent version to the host's stdout so `databricks
+    # apps logs` shows which wheel is actually live — the runner subprocess's
+    # own logs are unreliable to grep (rolling buffer, zombie-runner spam).
+    try:
+        _ver = subprocess.run(
+            [_omnigents_bin(), "--version"],
+            check=False, capture_output=True, text=True, timeout=30,
+        ).stdout.strip()
+        logger.info("OMNIGENT VERSION INSTALLED: %s", _ver or "(unknown)")
+    except Exception as e:  # never let a version probe block boot
+        logger.info("OMNIGENT VERSION INSTALLED: (probe failed: %s)", e)
     _set(installed=True, stage="writing_profile")
     try:
         _write_oauth_profile(sp_creds)
