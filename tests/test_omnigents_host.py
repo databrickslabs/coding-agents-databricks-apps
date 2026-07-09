@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import hashlib
 
+import yaml
+
 import omnigents_host as oh
 
 
@@ -284,3 +286,39 @@ def test_run_setup_once_swallows_failure(monkeypatch):
 
     monkeypatch.setattr(oh.subprocess, "run", boom)
     oh._run_setup_once()  # must not raise
+
+
+# ── _configure_omnigent_databricks_auth (runner native-Pi/Claude/Codex fix) ──
+
+def test_configure_omnigent_auth_writes_databricks_profile(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    oh._configure_omnigent_databricks_auth()
+    cfg = yaml.safe_load((tmp_path / ".omnigent" / "config.yaml").read_text())
+    assert cfg["auth"] == {"type": "databricks", "profile": oh._HOST_PROFILE}
+
+
+def test_configure_omnigent_auth_preserves_other_keys(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cfg_dir = tmp_path / ".omnigent"
+    cfg_dir.mkdir()
+    (cfg_dir / "config.yaml").write_text(yaml.safe_dump({
+        "default_agent": "examples/hello.yaml",
+        "server": "https://srv.example.com",
+        "auth": {"type": "api_key", "api_key": "env-adopted"},  # what setup wrote
+    }))
+    oh._configure_omnigent_databricks_auth()
+    cfg = yaml.safe_load((cfg_dir / "config.yaml").read_text())
+    # auth is upgraded to the databricks profile...
+    assert cfg["auth"] == {"type": "databricks", "profile": oh._HOST_PROFILE}
+    # ...without clobbering setup's other keys.
+    assert cfg["default_agent"] == "examples/hello.yaml"
+    assert cfg["server"] == "https://srv.example.com"
+
+
+def test_configure_omnigent_auth_is_idempotent(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    oh._configure_omnigent_databricks_auth()
+    first = (tmp_path / ".omnigent" / "config.yaml").read_text()
+    oh._configure_omnigent_databricks_auth()  # second run must not error/churn
+    second = (tmp_path / ".omnigent" / "config.yaml").read_text()
+    assert first == second

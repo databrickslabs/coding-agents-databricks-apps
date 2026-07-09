@@ -159,16 +159,16 @@ if token:
     if available:
         print(f"Discovered {len(available)} READY serving endpoints at workspace")
 
-    requested_model = os.environ.get("ANTHROPIC_MODEL", "databricks-claude-opus-4-7")
+    requested_model = os.environ.get("ANTHROPIC_MODEL", "databricks-claude-opus-4-8")
     active_model = pick_in_geo_model(
-        [requested_model, "databricks-claude-opus-4-6", "databricks-claude-sonnet-4-6"],
+        [requested_model, "databricks-claude-opus-4-7", "databricks-claude-opus-4-6", "databricks-claude-sonnet-4-6"],
         available,
         fallback=requested_model,
     )
     opus_model = pick_in_geo_model(
-        ["databricks-claude-opus-4-7", "databricks-claude-opus-4-6"],
+        ["databricks-claude-opus-4-8", "databricks-claude-opus-4-7", "databricks-claude-opus-4-6"],
         available,
-        fallback="databricks-claude-opus-4-7",
+        fallback="databricks-claude-opus-4-8",
     )
     sonnet_model = pick_in_geo_model(
         ["databricks-claude-sonnet-4-6", "databricks-claude-sonnet-4-5"],

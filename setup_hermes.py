@@ -40,8 +40,8 @@ home = Path(os.environ["HOME"])
 
 host = os.environ.get("DATABRICKS_HOST", "")
 token = os.environ.get("DATABRICKS_TOKEN", "")
-hermes_model = os.environ.get("HERMES_MODEL", "databricks-claude-opus-4-7")
-hermes_fallback_model = os.environ.get("HERMES_FALLBACK_MODEL", "databricks-claude-opus-4-6")
+hermes_model = os.environ.get("HERMES_MODEL", "databricks-claude-opus-4-8")
+hermes_fallback_model = os.environ.get("HERMES_FALLBACK_MODEL", "databricks-claude-opus-4-8")
 
 hermes_home = home / ".hermes"
 hermes_bin = home / ".local" / "bin" / "hermes"
@@ -123,6 +123,7 @@ claude_skills_dir = Path("/app/python/source_code/.claude/skills")
 external_skills = [str(claude_skills_dir)] if claude_skills_dir.exists() else []
 
 model_catalog = [
+    "databricks-claude-opus-4-8",
     "databricks-claude-opus-4-6",
     "databricks-claude-sonnet-4-6",
     "databricks-claude-haiku-4-5",

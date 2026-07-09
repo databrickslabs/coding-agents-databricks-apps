@@ -5,7 +5,11 @@ env:
   - name: HOME
     value: /app/python/source_code
   - name: ANTHROPIC_MODEL
-    value: databricks-claude-opus-4-7
+    value: databricks-claude-opus-4-8
+  # Pi routes to the same /anthropic gateway route as Claude Code; PI_MODEL is
+  # the serving-endpoint name it addresses (validated against in-geo models).
+  - name: PI_MODEL
+    value: databricks-claude-opus-4-8
   - name: GEMINI_MODEL
     value: databricks-gemini-2-5-pro
   # Must be a *-codex model served via the Responses API — the Codex harness
@@ -15,11 +19,14 @@ env:
   - name: CODEX_MODEL
     value: databricks-gpt-5-3-codex
   - name: HERMES_MODEL
-    value: databricks-claude-opus-4-6
+    value: databricks-claude-opus-4-8
   - name: HERMES_FALLBACK_MODEL
-    value: databricks-claude-opus-4-6
+    value: databricks-claude-opus-4-8
   # Set ENABLE_HERMES=false to skip Hermes Agent install. Other CLIs are unaffected.
   - name: ENABLE_HERMES
+    value: "true"
+  # Set ENABLE_PI=false to skip installing the Pi coding agent. Other CLIs are unaffected.
+  - name: ENABLE_PI
     value: "true"
   - name: CLAUDE_CODE_DISABLE_AUTO_MEMORY
     value: 0

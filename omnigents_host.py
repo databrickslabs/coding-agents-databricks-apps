@@ -25,6 +25,7 @@ CoDA behaves exactly as before.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import select
@@ -32,6 +33,8 @@ import subprocess
 import tempfile
 import threading
 import time
+
+import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -425,6 +428,97 @@ def _ensure_claude_settings(sp_creds: dict[str, str]) -> None:
         logger.warning("setup_claude.py failed (non-fatal): %s", e)
 
 
+def _pi_enabled() -> bool:
+    """True unless ENABLE_PI is explicitly falsey (mirrors setup_pi.py's gate)."""
+    return os.environ.get("ENABLE_PI", "true").strip().lower() not in ("false", "0", "no")
+
+
+def _ensure_pi() -> None:
+    """Install the Pi CLI to ~/.local/bin if missing (best-effort).
+
+    Mirrors ``_ensure_claude``: the auto host-connect path (SP creds, no PAT)
+    never runs ``run_setup()``, so ``setup_pi.py``'s npm install doesn't happen
+    there. Install here too so the ``pi`` harness resolves the binary on the
+    runner's PATH. Unlike Claude (curl installer), Pi is an npm package, so use
+    the same ``npm install --prefix=$HOME/.local`` idiom as ``setup_gemini.py``.
+    Idempotent; never blocks the host on failure.
+    """
+    home = os.environ.get("HOME", "/app/python/source_code")
+    pi_path = os.path.join(home, ".local", "bin", "pi")
+    if os.path.exists(pi_path):
+        logger.info("pi already present at %s", pi_path)
+        return
+    try:
+        result = subprocess.run(
+            ["npm", "install", "-g", "--ignore-scripts",
+             f"--prefix={os.path.join(home, '.local')}",
+             "@earendil-works/pi-coding-agent"],
+            env={**os.environ, "HOME": home},
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if result.returncode == 0 and os.path.exists(pi_path):
+            logger.info("pi installed to %s", pi_path)
+        else:
+            logger.warning(
+                "pi install did NOT land (rc=%s); the pi harness will report "
+                "not-configured. stdout=%r stderr=%r",
+                result.returncode,
+                (result.stdout or "").strip()[-500:],
+                (result.stderr or "").strip()[-500:],
+            )
+    except Exception as e:  # never block host launch on pi install
+        logger.warning("pi install failed (non-fatal): %s", e)
+
+
+def _ensure_pi_settings(sp_creds: dict[str, str]) -> None:
+    """Write ~/.pi/agent/models.json so the pi harness can auth (best-effort).
+
+    Mirrors ``_ensure_claude_settings``: the auto host-connect path never runs
+    ``run_setup()``, so ``setup_pi.py``'s config write doesn't happen there.
+    ``setup_pi.py`` gates its config write on ``DATABRICKS_TOKEN``, so mint an SP
+    OAuth bearer and pass it in, then re-run the script — single source of truth
+    for the models.json schema and gateway/model resolution, exactly like Claude.
+    Pi has no apiKeyHelper, so ``_start_pi_token_refresher`` keeps the static
+    token fresh afterward. Idempotent; never blocks host launch on failure.
+    """
+    try:
+        token = _sp_bearer(sp_creds)
+    except Exception as e:
+        logger.warning("could not mint SP token for pi settings: %s", e)
+        return
+    env = os.environ.copy()
+    env["DATABRICKS_TOKEN"] = token
+    home = env.get("HOME", "/app/python/source_code")
+    local_bin = os.path.join(home, ".local", "bin")
+    if local_bin not in env.get("PATH", ""):
+        env["PATH"] = f"{local_bin}:{env.get('PATH', '')}"
+    try:
+        result = subprocess.run(
+            ["uv", "run", "python", "setup_pi.py"],
+            env=env,
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        models = os.path.join(home, ".pi", "agent", "models.json")
+        logger.info(
+            "setup_pi.py rc=%s; models.json exists=%s",
+            result.returncode,
+            os.path.exists(models),
+        )
+        if result.returncode != 0:
+            logger.warning(
+                "setup_pi.py stderr=%r", (result.stderr or "").strip()[-500:]
+            )
+    except Exception as e:  # never block host launch on pi settings
+        logger.warning("setup_pi.py failed (non-fatal): %s", e)
+
+
 def _ensure_tmux() -> None:
     """Install a static tmux to ~/.local/bin if missing (best-effort).
 
@@ -517,6 +611,55 @@ def _start_runner_log_tailer() -> None:
     threading.Thread(target=_tail, daemon=True, name="omnigent-runner-log-tail").start()
 
 
+_pi_refresher_started = False
+
+
+def _start_pi_token_refresher(sp_creds: dict[str, str]) -> None:
+    """Keep ~/.pi/agent/models.json's static apiKey fresh (best-effort).
+
+    Pi's config holds a static ``apiKey`` with no apiKeyHelper, and the host
+    path authenticates with SP OAuth tokens that expire in ~1h — so a dispatched
+    Pi session outliving the token would 401 mid-run. The PAT rotator (the
+    interactive path's freshness mechanism, via ``cli_auth._update_pi``) is not
+    active here. So re-mint on an interval well under the TTL and rewrite only
+    the token in models.json, matching how ucode keeps Pi fresh and Claude's
+    900000ms helper cadence. Idempotent (starts at most one refresher); never
+    lets an exception kill the thread.
+
+    NOTE: this only helps if a running ``pi`` re-reads models.json per request.
+    If Pi caches the apiKey at launch, only newly-spawned runners pick up the
+    new token (a long single session could still expire). Verify against the pi
+    runtime — see the plan's verification item (c).
+    """
+    global _pi_refresher_started
+    with _lock:
+        if _pi_refresher_started:
+            return
+        _pi_refresher_started = True
+
+    home = os.environ.get("HOME", "/app/python/source_code")
+    models_path = os.path.join(home, ".pi", "agent", "models.json")
+
+    def _refresh() -> None:
+        while True:
+            time.sleep(900)  # < the ~1h SP OAuth TTL; matches Claude's helper cadence
+            try:
+                token = _sp_bearer(sp_creds)
+                with open(models_path) as f:
+                    config = json.load(f)
+                provider = config.get("providers", {}).get("databricks-claude")
+                if isinstance(provider, dict) and provider.get("apiKey") != token:
+                    provider["apiKey"] = token
+                    tmp = f"{models_path}.tmp"
+                    with open(tmp, "w") as f:
+                        json.dump(config, f, indent=2)
+                    os.replace(tmp, models_path)  # atomic
+            except Exception:  # never let a refresh error take down the thread
+                pass
+
+    threading.Thread(target=_refresh, daemon=True, name="pi-token-refresh").start()
+
+
 def _run_setup_once() -> None:
     """Auto-configure harnesses from CoDA's ambient LLM creds (best-effort).
 
@@ -553,6 +696,51 @@ def _run_setup_once() -> None:
         logger.info("omnigent setup completed (rc=%s)", result.returncode)
     except Exception as e:  # never block host launch on setup
         logger.warning("omnigent setup failed (non-fatal): %s", e)
+
+
+def _configure_omnigent_databricks_auth() -> None:
+    """Pin ~/.omnigent/config.yaml's auth to the omnigents-host Databricks profile.
+
+    ``omnigent setup`` (run above) auto-adopts CoDA's ambient ``ANTHROPIC_*`` env
+    as an ``auth: {type: api_key, ...}`` entry. But the runner's native-Pi
+    credential resolver (``omnigent.pi_native_credentials._databricks_pi_provider``)
+    only recognizes a ``kind="databricks"`` provider — it reads the host from a
+    ``~/.databrickscfg`` profile and builds a ``{host}/anthropic`` base URL with a
+    per-request ``!<auth_command>`` bearer. Without it, a dispatched Pi session
+    logs "no omnigent-configured provider … Pi will use its own login" and runs
+    unauthenticated. The same databricks entry is what native Claude/Codex use, so
+    this fixes all three harnesses on the runner, not just Pi.
+
+    So overwrite the ``auth`` block with ``{type: databricks, profile:
+    omnigents-host}`` — the profile ``_write_oauth_profile`` already wrote. Read-
+    merge-write to preserve setup's other keys; idempotent; best-effort.
+    """
+    home = os.environ.get("HOME", "/app/python/source_code")
+    config_path = os.path.join(home, ".omnigent", "config.yaml")
+    desired = {"type": "databricks", "profile": _HOST_PROFILE}
+    try:
+        try:
+            with open(config_path) as f:
+                config = yaml.safe_load(f) or {}
+        except FileNotFoundError:
+            config = {}
+        if not isinstance(config, dict):
+            config = {}
+        if config.get("auth") == desired:
+            logger.info("omnigent auth already pinned to '%s' profile", _HOST_PROFILE)
+            return
+        config["auth"] = desired
+        os.makedirs(os.path.dirname(config_path), exist_ok=True)
+        tmp = f"{config_path}.tmp"
+        with open(tmp, "w") as f:
+            yaml.safe_dump(config, f, default_flow_style=False, sort_keys=False)
+        os.replace(tmp, config_path)  # atomic
+        logger.info(
+            "Pinned omnigent auth to Databricks profile '%s' (runner native-Pi/Claude/Codex)",
+            _HOST_PROFILE,
+        )
+    except Exception as e:  # never block host launch on config write
+        logger.warning("could not pin omnigent databricks auth (non-fatal): %s", e)
 
 
 def _run_host_once(server_url: str, stop_event: threading.Event | None = None) -> int:
@@ -676,8 +864,19 @@ def _supervise(
     _set(stage="configuring_harnesses")
     _ensure_claude()
     _ensure_claude_settings(sp_creds)
+    # Pi harness (host path): install the binary + write models.json, then keep
+    # its static token fresh. Gated by ENABLE_PI, mirroring the interactive path.
+    if _pi_enabled():
+        _ensure_pi()
+        _ensure_pi_settings(sp_creds)
+        _start_pi_token_refresher(sp_creds)
     _ensure_tmux()
     _run_setup_once()
+    # Pin omnigent's auth to the databricks host profile so the runner's native
+    # credential resolver (Pi/Claude/Codex) authenticates via the AI Gateway
+    # instead of falling back to "its own login". Must run AFTER _run_setup_once
+    # (which writes the env-adopted api_key entry this overwrites).
+    _configure_omnigent_databricks_auth()
     # Surface per-session runner logs through the app logger so runner-side
     # failures are visible via `databricks apps logs` (no container shell).
     _start_runner_log_tailer()
