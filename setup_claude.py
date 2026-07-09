@@ -43,9 +43,13 @@ stdout MUST be the token only — Claude Code uses it verbatim.
 """
 import configparser
 import os
+import shutil
+import subprocess
 import sys
 
 SP_PROFILE = "omnigents-host"
+# Set on the uv re-run so the child (which has the SDK) doesn't recurse.
+_REEXEC_GUARD = "OMNIGENTS_APIKEY_HELPER_REEXEC"
 
 
 def _sp_oauth_token():
@@ -56,6 +60,29 @@ def _sp_oauth_token():
     # Absent profile / non-host instance -> returns None, caller falls back.
     try:
         from databricks.sdk.core import Config
+    except ImportError:
+        # Claude Code invokes this via a bare python3 (e.g. /usr/bin/python3)
+        # that lacks databricks-sdk, so the import fails and the SP mint would
+        # silently fall back to a PAT (absent in the host/SP context) -> empty
+        # token -> gateway 401. Re-run this same file once under uv, which
+        # provisions the SDK. Must be `uv run ... python <file>` (uv's OWN
+        # managed interpreter) — `uv run --with X <external-python>` runs that
+        # external python, which still lacks the SDK.
+        if os.environ.get(_REEXEC_GUARD) == "1":
+            return None
+        uv = shutil.which("uv")
+        if not uv:
+            return None
+        env = dict(os.environ, **{_REEXEC_GUARD: "1"})
+        try:
+            out = subprocess.run(
+                [uv, "run", "--with", "databricks-sdk", "python",
+                 os.path.abspath(__file__)],
+                env=env, capture_output=True, text=True, check=False,
+            )
+        except Exception:
+            return None
+        return (out.stdout or "").strip() or None
     except Exception:
         return None
     try:
