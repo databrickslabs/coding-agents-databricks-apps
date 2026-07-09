@@ -152,13 +152,7 @@ def test_disconnect_stops_running_process(monkeypatch):
 
     proc = FakeProc()
     monkeypatch.setattr(oh, "_proc", proc)
-    oh._set(
-        configured=True,
-        running=True,
-        server_url="https://srv.example.com",
-        stage="running",
-        pid=1234,
-    )
+    oh._set(configured=True, running=True, server_url="https://srv.example.com", stage="running", pid=1234)
 
     status = oh.disconnect_host()
     assert proc.terminated is True
@@ -241,12 +235,9 @@ def test_run_host_once_prepends_local_bin_to_path(monkeypatch, tmp_path):
     assert oh._run_host_once("https://omnigent.example.com") == 0
 
     env = captured["env"]
-    expected_host_id = (
-        "host_"
-        + hashlib.sha256(
-            b"coda-omnigents-host:793257c7-63d3-464f-b6fb-3bc11880bf2d"
-        ).hexdigest()[:32]
-    )
+    expected_host_id = "host_" + hashlib.sha256(
+        b"coda-omnigents-host:793257c7-63d3-464f-b6fb-3bc11880bf2d"
+    ).hexdigest()[:32]
     assert captured["cwd"] == str(tmp_path)
     assert env["PATH"].split(":")[0] == str(tmp_path / ".local" / "bin")
     assert env["OMNIGENT_HOST_ID"] == expected_host_id
@@ -288,80 +279,8 @@ def test_run_setup_once_feeds_quit_input(monkeypatch):
 
 def test_run_setup_once_swallows_failure(monkeypatch):
     """A setup failure must not propagate — the host must still launch."""
-
     def boom(*a, **k):
         raise RuntimeError("setup blew up")
 
     monkeypatch.setattr(oh.subprocess, "run", boom)
     oh._run_setup_once()  # must not raise
-
-
-# ── Liveness watchdog ────────────────────────────────
-# A hung tunnel (half-open WebSocket after a token rollover) leaves the host
-# process alive but silent, so the supervisor's restart loop never fires. The
-# watchdog terminates a process that has produced no output past the timeout;
-# that termination is what lets the supervisor restart it with fresh auth.
-
-
-def test_is_stalled_true_past_timeout():
-    """No output for longer than the timeout -> stalled."""
-    now = 1000.0
-    last = now - oh._WATCHDOG_TIMEOUT_SECONDS - 1
-    assert oh._is_stalled(last, now) is True
-
-
-def test_is_stalled_false_within_timeout():
-    """Recent output -> not stalled."""
-    now = 1000.0
-    last = now - 1  # one second ago
-    assert oh._is_stalled(last, now) is False
-
-
-def test_is_stalled_exactly_at_timeout_is_not_stalled():
-    """Boundary: exactly at the timeout is still alive (strict >)."""
-    now = 1000.0
-    last = now - oh._WATCHDOG_TIMEOUT_SECONDS
-    assert oh._is_stalled(last, now) is False
-
-
-def test_watchdog_terminates_stalled_process(monkeypatch):
-    """A live-but-silent process is terminated so the supervisor can restart it."""
-    terminated = {"called": False}
-
-    class FakeProc:
-        def poll(self):
-            return None  # still running
-
-        def terminate(self):
-            terminated["called"] = True
-
-    # Pin the timeout tiny and the clock past it so the check fires immediately.
-    monkeypatch.setattr(oh, "_WATCHDOG_TIMEOUT_SECONDS", 0.01)
-    last_output = {"at": oh.time.monotonic() - 1.0}
-    stop = oh.threading.Event()
-
-    oh._watchdog(FakeProc(), last_output, stop)
-    assert terminated["called"] is True
-
-
-def test_watchdog_leaves_healthy_process_alone(monkeypatch):
-    """A process producing recent output is never terminated."""
-
-    class FakeProc:
-        def __init__(self):
-            self._polls = 0
-
-        def poll(self):
-            # Exit after a couple of ticks so the watchdog loop ends.
-            self._polls += 1
-            return None if self._polls < 3 else 0
-
-        def terminate(self):
-            raise AssertionError("healthy process must not be terminated")
-
-    monkeypatch.setattr(oh, "_WATCHDOG_TIMEOUT_SECONDS", 100.0)
-    monkeypatch.setattr(oh, "_WATCHDOG_POLL_SECONDS", 0.001)
-    last_output = {"at": oh.time.monotonic()}  # just now
-    stop = oh.threading.Event()
-
-    oh._watchdog(FakeProc(), last_output, stop)  # must not raise
