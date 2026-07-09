@@ -371,6 +371,60 @@ def _ensure_claude() -> None:
         logger.warning("claude install failed (non-fatal): %s", e)
 
 
+def _ensure_claude_settings(sp_creds: dict[str, str]) -> None:
+    """Write ~/.claude/settings.json so native Claude Code can auth (best-effort).
+
+    Native ``claude`` needs ``ANTHROPIC_BASE_URL`` (the Databricks AI Gateway
+    ``/anthropic`` endpoint) plus a token source; without them it replies
+    "Not logged in · Please run /login" and no session produces a real answer.
+    CoDA's ``setup_claude.py`` writes that config, but it runs inside
+    ``run_setup()`` behind the interactive PAT bootstrap — the auto host-connect
+    path (SP creds, no PAT) never runs it. So run it here, mirroring
+    ``_ensure_claude`` / ``_ensure_tmux``.
+
+    ``setup_claude.py`` gates its settings.json write on ``DATABRICKS_TOKEN``
+    (used once to discover serving endpoints), so mint an SP OAuth bearer and
+    pass it in. Going forward the installed apiKeyHelper (spec C, gated on
+    ``ENABLE_SP_APIKEYHELPER``) re-mints per-TTL from the ``omnigents-host``
+    profile, so the one-shot token is only needed for the initial write.
+    Idempotent; never blocks host launch on failure.
+    """
+    try:
+        token = _sp_bearer(sp_creds)
+    except Exception as e:
+        logger.warning("could not mint SP token for claude settings: %s", e)
+        return
+    env = os.environ.copy()
+    env["DATABRICKS_TOKEN"] = token
+    env.setdefault("ENABLE_SP_APIKEYHELPER", "true")
+    home = env.get("HOME", "/app/python/source_code")
+    local_bin = os.path.join(home, ".local", "bin")
+    if local_bin not in env.get("PATH", ""):
+        env["PATH"] = f"{local_bin}:{env.get('PATH', '')}"
+    try:
+        result = subprocess.run(
+            ["uv", "run", "python", "setup_claude.py"],
+            env=env,
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        settings = os.path.join(home, ".claude", "settings.json")
+        logger.info(
+            "setup_claude.py rc=%s; settings.json exists=%s",
+            result.returncode,
+            os.path.exists(settings),
+        )
+        if result.returncode != 0:
+            logger.warning(
+                "setup_claude.py stderr=%r", (result.stderr or "").strip()[-500:]
+            )
+    except Exception as e:  # never block host launch on claude settings
+        logger.warning("setup_claude.py failed (non-fatal): %s", e)
+
+
 def _ensure_tmux() -> None:
     """Install a static tmux to ~/.local/bin if missing (best-effort).
 
@@ -621,6 +675,7 @@ def _supervise(
     # the native claude/codex harnesses report configured.
     _set(stage="configuring_harnesses")
     _ensure_claude()
+    _ensure_claude_settings(sp_creds)
     _ensure_tmux()
     _run_setup_once()
     # Surface per-session runner logs through the app logger so runner-side
