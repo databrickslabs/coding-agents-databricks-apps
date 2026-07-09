@@ -208,17 +208,7 @@ def _install_command(spec: str, *, force: bool = False) -> list[str]:
     ImportError, the token factory caches ``None``, and the tunnel WS upgrade
     goes out unauthenticated → 302 loop. (The old ``click==8.1.8`` pin is no
     longer needed: current ``omnigent`` pins click correctly in its deps.)
-
-    The index defaults to the Databricks pypi-proxy, which is in-network from an
-    Apps container and far faster than public pypi.org — a force-reinstall from
-    pypi.org resolves ~160 transitive deps over the public internet and can
-    exceed the platform's 10-minute app-start deadline. Override with
-    ``OMNIGENTS_PIP_INDEX_URL`` for non-Databricks deploys.
     """
-    index_url = os.environ.get(
-        "OMNIGENTS_PIP_INDEX_URL",
-        "https://pypi-proxy.cloud.databricks.com/simple",
-    )
     pin = ["--with", "databricks-sdk"]
     # ``uv tool install`` no-ops when the tool is already installed, so a new
     # wheel in the UC Volume would be ignored on restart. ``--force`` makes it
@@ -236,13 +226,13 @@ def _install_command(spec: str, *, force: bool = False) -> list[str]:
             "uv", "tool", "install",
             *force_flag,
             "--find-links", spec,
-            "--index-url", index_url,
+            "--index-url", "https://pypi.org/simple",
             *pin,
             os.path.join(spec, main[-1]),
         ]
     return [
         "uv", "tool", "install", *force_flag,
-        "--index-url", index_url, *pin, spec,
+        "--index-url", "https://pypi.org/simple", *pin, spec,
     ]
 
 
