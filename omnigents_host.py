@@ -34,6 +34,8 @@ import tempfile
 import threading
 import time
 
+import yaml
+
 logger = logging.getLogger(__name__)
 
 # Profile name written to ~/.databrickscfg for the host's OAuth (M2M) auth.
@@ -730,6 +732,51 @@ def _run_setup_once() -> None:
         logger.warning("omnigent setup failed (non-fatal): %s", e)
 
 
+def _configure_omnigent_databricks_auth() -> None:
+    """Pin ~/.omnigent/config.yaml's auth to the omnigents-host Databricks profile.
+
+    ``omnigent setup`` (run above) auto-adopts CoDA's ambient ``ANTHROPIC_*`` env
+    as an ``auth: {type: api_key, ...}`` entry. But the runner's native-Pi
+    credential resolver (``omnigent.pi_native_credentials._databricks_pi_provider``)
+    only recognizes a ``kind="databricks"`` provider — it reads the host from a
+    ``~/.databrickscfg`` profile and builds a ``{host}/anthropic`` base URL with a
+    per-request ``!<auth_command>`` bearer. Without it, a dispatched Pi session
+    logs "no omnigent-configured provider … Pi will use its own login" and runs
+    unauthenticated. The same databricks entry is what native Claude/Codex use, so
+    this fixes all three harnesses on the runner, not just Pi.
+
+    So overwrite the ``auth`` block with ``{type: databricks, profile:
+    omnigents-host}`` — the profile ``_write_oauth_profile`` already wrote. Read-
+    merge-write to preserve setup's other keys; idempotent; best-effort.
+    """
+    home = os.environ.get("HOME", "/app/python/source_code")
+    config_path = os.path.join(home, ".omnigent", "config.yaml")
+    desired = {"type": "databricks", "profile": _HOST_PROFILE}
+    try:
+        try:
+            with open(config_path) as f:
+                config = yaml.safe_load(f) or {}
+        except FileNotFoundError:
+            config = {}
+        if not isinstance(config, dict):
+            config = {}
+        if config.get("auth") == desired:
+            logger.info("omnigent auth already pinned to '%s' profile", _HOST_PROFILE)
+            return
+        config["auth"] = desired
+        os.makedirs(os.path.dirname(config_path), exist_ok=True)
+        tmp = f"{config_path}.tmp"
+        with open(tmp, "w") as f:
+            yaml.safe_dump(config, f, default_flow_style=False, sort_keys=False)
+        os.replace(tmp, config_path)  # atomic
+        logger.info(
+            "Pinned omnigent auth to Databricks profile '%s' (runner native-Pi/Claude/Codex)",
+            _HOST_PROFILE,
+        )
+    except Exception as e:  # never block host launch on config write
+        logger.warning("could not pin omnigent databricks auth (non-fatal): %s", e)
+
+
 def _is_stalled(last_output_monotonic: float, now: float) -> bool:
     """True when no host output has arrived within the watchdog timeout.
 
@@ -907,6 +954,11 @@ def _supervise(
         _start_pi_token_refresher(sp_creds)
     _ensure_tmux()
     _run_setup_once()
+    # Pin omnigent's auth to the databricks host profile so the runner's native
+    # credential resolver (Pi/Claude/Codex) authenticates via the AI Gateway
+    # instead of falling back to "its own login". Must run AFTER _run_setup_once
+    # (which writes the env-adopted api_key entry this overwrites).
+    _configure_omnigent_databricks_auth()
     # Surface per-session runner logs through the app logger so runner-side
     # failures are visible via `databricks apps logs` (no container shell).
     _start_runner_log_tailer()
