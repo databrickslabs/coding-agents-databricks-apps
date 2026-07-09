@@ -42,6 +42,17 @@ _HOST_PROFILE = "omnigents-host"
 # Supervisor restart policy.
 _RESTART_BACKOFF_SECONDS = 10
 _MAX_BACKOFF_SECONDS = 120
+# A run that stayed up at least this long is treated as healthy: the supervisor
+# resets its backoff to the floor afterwards so a single blip doesn't leave the
+# restart delay elevated for the life of the process.
+_HEALTHY_RUN_SECONDS = 300
+
+# Liveness watchdog. The host emits log output continuously while connected, so
+# a prolonged silence with the process still alive means a hung tunnel (e.g. a
+# half-open WebSocket after a token rollover). The watchdog terminates such a
+# process so the supervisor's restart loop runs and re-auths from scratch.
+_WATCHDOG_TIMEOUT_SECONDS = 180
+_WATCHDOG_POLL_SECONDS = 15
 
 # Observable state for /api/omnigent-host/status. Updated as startup progresses
 # so the integration can be diagnosed without app log access.
@@ -69,11 +80,15 @@ _runner_tailer_started = False
 
 def _stable_host_identity() -> tuple[str, str] | None:
     """Return a deterministic Omnigents host identity for this Databricks App."""
-    app_client_id = (_sp_creds or {}).get("client_id") or os.environ.get("DATABRICKS_CLIENT_ID", "")
+    app_client_id = (_sp_creds or {}).get("client_id") or os.environ.get(
+        "DATABRICKS_CLIENT_ID", ""
+    )
     if not app_client_id:
         return None
     app_name = os.environ.get("DATABRICKS_APP_NAME", "").strip() or "coda"
-    digest = hashlib.sha256(f"coda-omnigents-host:{app_client_id}".encode()).hexdigest()[:32]
+    digest = hashlib.sha256(
+        f"coda-omnigents-host:{app_client_id}".encode()
+    ).hexdigest()[:32]
     return f"host_{digest}", app_name
 
 
@@ -114,17 +129,19 @@ def reset_for_tests() -> None:
         _runner_tailer_started = False
         _log_tail.clear()
         _status.clear()
-        _status.update({
-            "configured": False,
-            "running": False,
-            "installed": False,
-            "host_launched": False,
-            "server_url": None,
-            "pid": None,
-            "stage": "idle",
-            "last_error": None,
-            "log_tail": [],
-        })
+        _status.update(
+            {
+                "configured": False,
+                "running": False,
+                "installed": False,
+                "host_launched": False,
+                "server_url": None,
+                "pid": None,
+                "stage": "idle",
+                "last_error": None,
+                "log_tail": [],
+            }
+        )
 
 
 def omnigents_host_enabled() -> bool:
@@ -169,12 +186,14 @@ def _materialize_spec(spec: str, sp_creds: dict[str, str] | None = None) -> str:
             # unified-auth resolver ALSO discovers the ambient DATABRICKS_TOKEN
             # (the PAT the rotator just bootstrapped) and refuses with "more than
             # one authorization method configured: oauth and pat".
-            w = WorkspaceClient(config=Config(
-                host=sp_creds["host"],
-                client_id=sp_creds["client_id"],
-                client_secret=sp_creds["client_secret"],
-                auth_type="oauth-m2m",
-            ))
+            w = WorkspaceClient(
+                config=Config(
+                    host=sp_creds["host"],
+                    client_id=sp_creds["client_id"],
+                    client_secret=sp_creds["client_secret"],
+                    auth_type="oauth-m2m",
+                )
+            )
         else:
             w = WorkspaceClient()
         listed = list(w.files.list_directory_contents(spec))
@@ -217,22 +236,33 @@ def _install_command(spec: str, *, force: bool = False) -> list[str]:
     force_flag = ["--force"] if force else []
     if os.path.isdir(spec):
         main = sorted(
-            f for f in os.listdir(spec)
+            f
+            for f in os.listdir(spec)
             if f.startswith("omnigent-") and f.endswith(".whl")
         )
         if not main:
             raise FileNotFoundError(f"no omnigent-*.whl in {spec}")
         return [
-            "uv", "tool", "install",
+            "uv",
+            "tool",
+            "install",
             *force_flag,
-            "--find-links", spec,
-            "--index-url", "https://pypi.org/simple",
+            "--find-links",
+            spec,
+            "--index-url",
+            "https://pypi.org/simple",
             *pin,
             os.path.join(spec, main[-1]),
         ]
     return [
-        "uv", "tool", "install", *force_flag,
-        "--index-url", "https://pypi.org/simple", *pin, spec,
+        "uv",
+        "tool",
+        "install",
+        *force_flag,
+        "--index-url",
+        "https://pypi.org/simple",
+        *pin,
+        spec,
     ]
 
 
@@ -445,7 +475,9 @@ def _ensure_tmux() -> None:
         return
     script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "install_tmux.sh")
     if not os.path.exists(script):
-        logger.warning("install_tmux.sh not found at %s; native harnesses need tmux", script)
+        logger.warning(
+            "install_tmux.sh not found at %s; native harnesses need tmux", script
+        )
         return
     try:
         # Log the install outcome: the native claude/codex harnesses report
@@ -457,7 +489,9 @@ def _ensure_tmux() -> None:
             ["bash", script], check=False, capture_output=True, text=True, timeout=120
         )
         if result.returncode == 0 and os.path.exists(tmux_path):
-            logger.info("tmux installed: %s", (result.stdout or "").strip().splitlines()[-1:])
+            logger.info(
+                "tmux installed: %s", (result.stdout or "").strip().splitlines()[-1:]
+            )
         else:
             logger.warning(
                 "tmux install did NOT land (rc=%s); native harnesses will report "
@@ -555,6 +589,39 @@ def _run_setup_once() -> None:
         logger.warning("omnigent setup failed (non-fatal): %s", e)
 
 
+def _is_stalled(last_output_monotonic: float, now: float) -> bool:
+    """True when no host output has arrived within the watchdog timeout.
+
+    Uses monotonic timestamps (not wall-clock) so an NTP correction can't make
+    a healthy host look stalled or a stalled one look alive. Strict ``>`` so the
+    exact-boundary case is treated as still-alive.
+    """
+    return (now - last_output_monotonic) > _WATCHDOG_TIMEOUT_SECONDS
+
+
+def _watchdog(
+    proc: subprocess.Popen[str],
+    last_output: dict[str, float],
+    stop_event: threading.Event,
+) -> None:
+    """Terminate ``proc`` if it goes silent past the timeout while still alive.
+
+    ``last_output["at"]`` is a monotonic timestamp updated by the reader loop on
+    every line. Terminating a stalled process unblocks ``_run_host_once`` so the
+    supervisor restarts the host and rewrites/refreshes its auth.
+    """
+    while proc.poll() is None and not stop_event.is_set():
+        if _is_stalled(last_output["at"], time.monotonic()):
+            logger.warning(
+                "omnigents host produced no output for >%ss; terminating hung tunnel",
+                _WATCHDOG_TIMEOUT_SECONDS,
+            )
+            _set(last_error="watchdog: host hung (no output past timeout)")
+            proc.terminate()
+            return
+        stop_event.wait(_WATCHDOG_POLL_SECONDS)
+
+
 def _run_host_once(server_url: str, stop_event: threading.Event | None = None) -> int:
     """Run ``omnigents host`` in the foreground until it exits. Returns rc."""
     global _proc
@@ -608,6 +675,16 @@ def _run_host_once(server_url: str, stop_event: threading.Event | None = None) -
         _proc = proc
         _status["pid"] = proc.pid
         _status["running"] = True
+    # Liveness watchdog: seeded to now, bumped on every line the reader sees.
+    last_output = {"at": time.monotonic()}
+    watchdog_stop = threading.Event()
+    watchdog = threading.Thread(
+        target=_watchdog,
+        args=(proc, last_output, watchdog_stop),
+        daemon=True,
+        name="omnigent-host-watchdog",
+    )
+    watchdog.start()
     try:
         stdout = proc.stdout
         while proc.poll() is None:
@@ -619,6 +696,7 @@ def _run_host_once(server_url: str, stop_event: threading.Event | None = None) -
                 if readable:
                     line = stdout.readline()
                     if line:
+                        last_output["at"] = time.monotonic()
                         _append_log(line)
                         logger.info("[omnigents-host] %s", line.rstrip())
             else:
@@ -630,6 +708,7 @@ def _run_host_once(server_url: str, stop_event: threading.Event | None = None) -
                 logger.info("[omnigents-host] %s", line.rstrip())
         return proc.wait()
     finally:
+        watchdog_stop.set()
         with _lock:
             if _proc is proc:
                 _proc = None
@@ -657,7 +736,10 @@ def _supervise(
     try:
         _ver = subprocess.run(
             [_omnigents_bin(), "--version"],
-            check=False, capture_output=True, text=True, timeout=30,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
         ).stdout.strip()
         logger.info("OMNIGENT VERSION INSTALLED: %s", _ver or "(unknown)")
     except Exception as e:  # never let a version probe block boot
@@ -686,16 +768,24 @@ def _supervise(
 
     backoff = _RESTART_BACKOFF_SECONDS
     while not stop_event.is_set():
+        run_started = time.monotonic()
         try:
             rc = _run_host_once(server_url, stop_event=stop_event)
             if stop_event.is_set():
                 break
-            logger.warning("omnigents host exited rc=%s; restarting in %ss", rc, backoff)
+            logger.warning(
+                "omnigents host exited rc=%s; restarting in %ss", rc, backoff
+            )
         except Exception as e:  # never let host failures take down CoDA
             logger.warning("omnigents host crashed: %s; restarting in %ss", e, backoff)
             _set(last_error=str(e))
         stop_event.wait(backoff)
-        backoff = min(backoff * 2, _MAX_BACKOFF_SECONDS)
+        # A run that stayed up long enough was healthy; don't carry an elevated
+        # backoff forward, or a single old blip penalizes every later restart.
+        if time.monotonic() - run_started >= _HEALTHY_RUN_SECONDS:
+            backoff = _RESTART_BACKOFF_SECONDS
+        else:
+            backoff = min(backoff * 2, _MAX_BACKOFF_SECONDS)
     _set(running=False, stage="stopped", pid=None)
 
 
@@ -708,7 +798,12 @@ def connect_host(
 
     server_url = server_url.strip()
     if not server_url:
-        _set(configured=False, running=False, stage="invalid_server_url", last_error="server_url required")
+        _set(
+            configured=False,
+            running=False,
+            stage="invalid_server_url",
+            last_error="server_url required",
+        )
         return False, get_status()
     if not sp_creds:
         msg = (
@@ -732,13 +827,15 @@ def connect_host(
 
         _sp_creds = dict(sp_creds)
         _stop_event = threading.Event()
-        _status.update({
-            "configured": True,
-            "running": True,
-            "server_url": server_url,
-            "stage": "starting",
-            "last_error": None,
-        })
+        _status.update(
+            {
+                "configured": True,
+                "running": True,
+                "server_url": server_url,
+                "stage": "starting",
+                "last_error": None,
+            }
+        )
         _thread = threading.Thread(
             target=_supervise,
             args=(server_url, _sp_creds, _stop_event),
@@ -844,7 +941,9 @@ def share_and_launch(
             return e.code, e.read().decode()[:500]
 
     result: dict[str, object] = {"host_id": host_id}
-    gc, gb = _call("PUT", f"/v1/hosts/{host_id}/permissions/{grant_user}", {"level": "use"})
+    gc, gb = _call(
+        "PUT", f"/v1/hosts/{host_id}/permissions/{grant_user}", {"level": "use"}
+    )
     result["grant_status"] = gc
     result["grant_body"] = gb
     result["ok"] = gc in (200, 201, 204)
