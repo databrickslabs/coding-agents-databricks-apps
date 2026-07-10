@@ -43,11 +43,21 @@ env:
   # validated by the day-of smoke test — A-O1/A-O2).
   - name: MAX_CONCURRENT_SESSIONS
     value: "10"
-  # PAT rotation stretched to ~8h for the workshop: the injected identity is a
-  # dedicated low-privilege SP token, revoked post-workshop, so the longer
-  # lifetime is an accepted trade for fewer mid-session rotations. token_lifetime
-  # must stay > rotation_interval so the token never expires between mints —
-  # 8h15m lifetime gives a 15-min overlap. Secure boxes keep the 600/900 default.
+  # ── Shared-app trust model ───────────────────────────────────────────────
+  # This is the LESS-SECURE shared box. Every attendee drives the terminal as
+  # the single injected PAT identity, so the single-user owner binding is
+  # switched OFF. Isolation then rests entirely on the UC grants of that
+  # injected identity — it MUST be a dedicated low-privilege SP token (never a
+  # personal PAT), and it MUST be revoked when the workshop ends. The
+  # owner-gated write endpoints (configure-pat, omnigent-host/share) stay
+  # owner-only even in this mode.
+  - name: CODA_DISABLE_OWNER_CHECK
+    value: "true"
+  # PAT rotation stretched to ~8h for the workshop: because that injected SP
+  # token is disposable and revoked post-workshop, the longer lifetime is an
+  # accepted trade for fewer mid-session rotations. token_lifetime must stay
+  # > rotation_interval so the token never expires between mints — 8h15m
+  # lifetime gives a 15-min overlap. Secure boxes keep the 600/900 default.
   - name: PAT_ROTATION_INTERVAL
     value: "28800"   # 8h — mint a fresh token every 8 hours
   - name: PAT_TOKEN_LIFETIME
