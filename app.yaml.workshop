@@ -33,10 +33,12 @@ env:
     value: "false"
   - name: CLAUDE_CODE_DISABLE_AUTO_MEMORY
     value: 0
+  # OTEL export off by default. To enable, set "true" and point
+  # CLAUDE_CODE_OTEL_CATALOG_SCHEMA at a <catalog>.<schema> the app SP can write to.
   - name: CLAUDE_CODE_OTEL_ENABLED
-    value: "true"
-  - name: CLAUDE_CODE_OTEL_CATALOG_SCHEMA
-    value: davidokeeffe_standard_demo_catalog.default
+    value: "false"
+  # - name: CLAUDE_CODE_OTEL_CATALOG_SCHEMA
+  #   value: <catalog>.<schema>
   # 10 concurrent browser-terminal sessions per instance (assumed for LARGE,
   # validated by the day-of smoke test — A-O1/A-O2).
   - name: MAX_CONCURRENT_SESSIONS

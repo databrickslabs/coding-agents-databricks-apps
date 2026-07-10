@@ -60,7 +60,7 @@ Web UI: a new admin-gated **Hosts** page + a per-host **share management** panel
 | **RK-C6** | Admin sees hosts but actions bypass owner intent | Trust/security | Owner-or-admin gating + audit on every mutating action (C-N2/C-N3) |
 
 ## 6. Milestones
-- **M0 — Secure a deployable Omnigent (BLOCKING GATE, C-O1).** Decide fork vs. upstream; get a modifiable server you can deploy as (or alongside) `omnigent-daveok`. Clone it locally. **Nothing else starts until this exists.**
+- **M0 — Secure a deployable Omnigent (BLOCKING GATE, C-O1).** Decide fork vs. upstream; get a modifiable server you can deploy as (or alongside) your own Omnigent app. Clone it locally. **Nothing else starts until this exists.**
 - **M1 — Admin host listing (read-only, lowest risk).** Admin-scoped unfiltered host list endpoint + the new admin Hosts page rendering the existing registry data. Ships value immediately (visibility) with no mutation risk.
 - **M2 — Host shutdown.** Endpoint reusing the disconnect path + UI action with confirm + audit. Owner-or-admin gated.
 - **M3 — Host permission model + grant API (the new core).** Extend the permission store to host scope; implement `PUT/GET/DELETE …/permissions/…`; resolve header-mode identity (C-O4) and isolation stance (C-O3) here.

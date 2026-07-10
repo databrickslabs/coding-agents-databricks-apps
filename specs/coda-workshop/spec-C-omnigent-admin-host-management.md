@@ -59,7 +59,7 @@ Admin host-listing endpoint + page; host shutdown (endpoint + UI); host permissi
 - Raising host capacity (C-C3).
 
 ## 7. Open questions
-- **C-O1 — Fork vs. upstream + deploy access (BLOCKING).** Where does the code change live, and can we deploy the modified server as `omnigent-daveok`? Without a deployable target, this is unbuildable. *(No omnigent repo is checked out locally yet.)*
+- **C-O1 — Fork vs. upstream + deploy access (BLOCKING).** Where does the code change live, and can we deploy the modified server as our own Omnigent app? Without a deployable target, this is unbuildable. *(No omnigent repo is checked out locally yet.)*
 - **C-O2 — Grant granularity.** User-only, or also groups / a `__public__`-style all-users grant (reusing the session-level public-grant machinery in `server/permissions.py:82`)? Groups/public make cohort scenarios one call instead of N.
 - **C-O3 — Tenant isolation on a shared host (RISK).** Can two principals safely share one host's FS/sessions? If not, `use` may need to mean "can launch an isolated runner" rather than "shares the workspace." Determines whether C-N1 is achievable.
 - **C-O4 — Header-mode principal identity.** In `accounts_enabled:false` mode, what identity string is a grant keyed on (email? SP id?), and does the SSO proxy carry it consistently (ref CoDA's `X-Forwarded-Email` authority)?

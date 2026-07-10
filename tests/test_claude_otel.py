@@ -21,7 +21,7 @@ def test_otel_enabled_writes_all_signal_env_vars():
         "os.environ",
         {
             "CLAUDE_CODE_OTEL_ENABLED": "true",
-            "CLAUDE_CODE_OTEL_CATALOG_SCHEMA": "davidokeeffe_standard_demo_catalog.default",
+            "CLAUDE_CODE_OTEL_CATALOG_SCHEMA": "test_catalog.default",
         },
     ):
         changed = apply_claude_otel_env(
@@ -49,15 +49,15 @@ def test_otel_enabled_writes_all_signal_env_vars():
 
     assert "Authorization=Bearer dapi_test_token" in env["OTEL_EXPORTER_OTLP_TRACES_HEADERS"]
     assert (
-        "X-Databricks-UC-Table-Name=davidokeeffe_standard_demo_catalog.default.claude_otel_spans"
+        "X-Databricks-UC-Table-Name=test_catalog.default.claude_otel_spans"
         in env["OTEL_EXPORTER_OTLP_TRACES_HEADERS"]
     )
     assert (
-        "X-Databricks-UC-Table-Name=davidokeeffe_standard_demo_catalog.default.claude_otel_logs"
+        "X-Databricks-UC-Table-Name=test_catalog.default.claude_otel_logs"
         in env["OTEL_EXPORTER_OTLP_LOGS_HEADERS"]
     )
     assert (
-        "X-Databricks-UC-Table-Name=davidokeeffe_standard_demo_catalog.default.claude_otel_metrics"
+        "X-Databricks-UC-Table-Name=test_catalog.default.claude_otel_metrics"
         in env["OTEL_EXPORTER_OTLP_METRICS_HEADERS"]
     )
 

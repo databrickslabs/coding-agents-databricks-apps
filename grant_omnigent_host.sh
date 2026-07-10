@@ -25,8 +25,8 @@
 #   ./grant_omnigent_host.sh \
 #       --profile lakemeter \
 #       --coda-app coding-agents \
-#       --server-app omnigent-daveok \
-#       --wheel-volume lakemeter_catalog.daveok_omnigent.artifacts
+#       --server-app <your-omnigent-app> \
+#       --wheel-volume <catalog>.<schema>.artifacts
 
 set -euo pipefail
 
