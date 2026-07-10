@@ -1,4 +1,5 @@
 import os
+import sys
 import pty
 import fcntl
 import struct
@@ -163,6 +164,18 @@ def _owner_check_disabled() -> bool:
     )
 
 
+def _venv_python():
+    """Return the interpreter that runs the app.
+
+    On the Databricks Apps runtime gunicorn runs inside the uv-managed venv,
+    so ``sys.executable`` already has every declared dependency (including
+    databricks-sdk) importable. Invoking setup scripts with this interpreter
+    directly removes the need for ``uv run python`` (which re-resolves the
+    environment on every call and depends on ``uv`` being on PATH).
+    """
+    return sys.executable
+
+
 def _run_step(step_id, command):
     _update_step(step_id, status="running", started_at=time.time())
     try:
@@ -170,10 +183,15 @@ def _run_step(step_id, command):
         if not env.get("HOME") or env["HOME"] == "/":
             env["HOME"] = "/app/python/source_code"
         home = env.get("HOME", "/app/python/source_code")
-        # Ensure uv and other tools in ~/.local/bin are on PATH
+        # Ensure uv and other tools in ~/.local/bin are on PATH. Still needed
+        # for `uv tool install` (Hermes) and any script that shells out to uv.
         local_bin = os.path.join(home, ".local", "bin")
         if local_bin not in env.get("PATH", ""):
             env["PATH"] = f"{local_bin}:{env.get('PATH', '')}"
+        # Expose the venv interpreter so child scripts that need to re-exec a
+        # dependency-complete Python (e.g. Claude's apiKeyHelper) can use it
+        # instead of shelling out to `uv run`.
+        env.setdefault("CODA_VENV_PYTHON", _venv_python())
         env.pop("DATABRICKS_CLIENT_ID", None)
         env.pop("DATABRICKS_CLIENT_SECRET", None)
 
@@ -306,12 +324,18 @@ def _setup_git_config():
         f.write('\n')
         f.write('echo "[post-commit] $(date +%H:%M:%S) syncing $REPO_ROOT" >> "$SYNC_LOG"\n')
         f.write('\n')
-        f.write('# Use uv run so sync script gets the correct Python + deps\n')
+        # Use the app's own venv interpreter (dependency-complete) so the sync
+        # script runs with the right Python + deps without shelling out to uv.
         f.write('APP_DIR="/app/python/source_code"\n')
         f.write('SYNC_SCRIPT="$APP_DIR/sync_to_workspace.py"\n')
+        f.write(f'APP_PYTHON="{_venv_python()}"\n')
+        f.write('# Fall back to uv if the recorded interpreter is missing.\n')
+        f.write('if [ ! -x "$APP_PYTHON" ]; then\n')
+        f.write('    APP_PYTHON="uv run --project $APP_DIR python"\n')
+        f.write('fi\n')
         f.write('\n')
         f.write('if [ -f "$SYNC_SCRIPT" ]; then\n')
-        f.write('    nohup uv run --project "$APP_DIR" python "$SYNC_SCRIPT" "$REPO_ROOT" >> "$SYNC_LOG" 2>&1 & disown\n')
+        f.write('    nohup $APP_PYTHON "$SYNC_SCRIPT" "$REPO_ROOT" >> "$SYNC_LOG" 2>&1 & disown\n')
         f.write('else\n')
         f.write('    echo "[post-commit] $(date +%H:%M:%S) SKIP: sync script not found" >> "$SYNC_LOG"\n')
         f.write('fi\n')
@@ -409,11 +433,12 @@ def _configure_all_cli_auth(token):
 
     # 3. Re-run Codex, OpenCode, Gemini setup scripts with token in env
     #    They are idempotent: detect CLI already installed, just write config files
-    env = {**os.environ, "DATABRICKS_TOKEN": token}
+    env = {**os.environ, "DATABRICKS_TOKEN": token,
+           "CODA_VENV_PYTHON": _venv_python()}
     for script in ["setup_pi.py", "setup_codex.py", "setup_opencode.py", "setup_gemini.py", "setup_hermes.py"]:
         try:
             result = subprocess.run(
-                ["uv", "run", "python", script],
+                [_venv_python(), script],
                 env=env, capture_output=True, text=True, timeout=60
             )
             if result.returncode == 0:
@@ -464,17 +489,18 @@ def run_setup():
     # --- Content-filter proxy (must be running before OpenCode starts) ---
     # Sanitizes requests/responses between OpenCode and Databricks
     # (see OpenCode #5028, docs/plans/2026-03-11-litellm-empty-content-blocks-design.md)
-    _run_step("proxy", ["uv", "run", "python", "setup_proxy.py"])
+    _py = _venv_python()
+    _run_step("proxy", [_py, "setup_proxy.py"])
 
     # --- Parallel agent setup (all independent of each other) ---
     parallel_steps = [
-        ("claude",     ["uv", "run", "python", "setup_claude.py"]),
-        ("pi",         ["uv", "run", "python", "setup_pi.py"]),
-        ("codex",      ["uv", "run", "python", "setup_codex.py"]),
-        ("opencode",   ["uv", "run", "python", "setup_opencode.py"]),
-        ("gemini",     ["uv", "run", "python", "setup_gemini.py"]),
-        ("hermes",     ["uv", "run", "python", "setup_hermes.py"]),
-        ("databricks", ["uv", "run", "python", "setup_databricks.py"]),
+        ("claude",     [_py, "setup_claude.py"]),
+        ("pi",         [_py, "setup_pi.py"]),
+        ("codex",      [_py, "setup_codex.py"]),
+        ("opencode",   [_py, "setup_opencode.py"]),
+        ("gemini",     [_py, "setup_gemini.py"]),
+        ("hermes",     [_py, "setup_hermes.py"]),
+        ("databricks", [_py, "setup_databricks.py"]),
     ]
 
     with ThreadPoolExecutor(max_workers=len(parallel_steps)) as executor:
@@ -487,7 +513,7 @@ def run_setup():
     # --- MLflow setup runs AFTER claude setup to avoid settings.json race ---
     # setup_mlflow.py merges env vars into ~/.claude/settings.json which
     # setup_claude.py also writes; running sequentially prevents clobbering.
-    _run_step("mlflow", ["uv", "run", "python", "setup_mlflow.py"])
+    _run_step("mlflow", [_py, "setup_mlflow.py"])
 
     # Sync latest token into all CLI configs — covers the race where PAT
     # rotation happened while a setup script was still installing (the

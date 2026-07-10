@@ -6,6 +6,7 @@ tracing in their respective setup scripts. Traces land in
 """
 
 import os
+import sys
 import json
 from pathlib import Path
 
@@ -46,9 +47,11 @@ settings["env"]["MLFLOW_EXPERIMENT_NAME"] = experiment_name
 settings["env"]["OTEL_EXPORTER_OTLP_ENDPOINT"] = ""
 
 # Add Stop hook (processes full transcript at session end).
-# The hook is harmless when MLFLOW_CLAUDE_TRACING_ENABLED=false — mlflow's
+# The hook is harmless when MLFLOW_CLAUDE_TRACING_ENABLED=false â mlflow's
 # stop_hook_handler short-circuits if tracing isn't enabled.
-python_cmd = "uv run python"
+# Use the app's venv interpreter (has mlflow-skinny) so the hook doesn't
+# depend on `uv run` re-resolving the environment on every session end.
+python_cmd = os.environ.get("CODA_VENV_PYTHON") or sys.executable or "python3"
 mlflow_hook = {
     "hooks": [
         {
