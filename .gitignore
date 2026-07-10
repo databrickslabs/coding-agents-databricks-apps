@@ -47,3 +47,6 @@ tests/e2e/.cache/
 # Playwright browser snapshots / traces from failed runs
 tests/e2e/test-results/
 tests/e2e/playwright-report/
+
+# Local env-specific app.yaml overrides (real workspace wiring — never commit)
+app.yaml.*.local

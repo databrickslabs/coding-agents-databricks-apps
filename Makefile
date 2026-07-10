@@ -22,7 +22,9 @@ APP_NAME      ?= coding-agents
 USER_EMAIL    = $(shell databricks current-user me --profile $(PROFILE) --output json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('userName',''))")
 WORKSPACE_PATH = /Workspace/Users/$(USER_EMAIL)/apps/$(APP_NAME)
 
-.PHONY: help test integration-test e2e-test e2e-auth deploy redeploy create-app create-pat sync deploy-app status open clean enterprise-doctor
+.PHONY: help test integration-test e2e-test e2e-auth deploy redeploy create-app create-pat sync deploy-app status open clean enterprise-doctor \
+	deploy-workshop redeploy-workshop guard-workshop-name create-app-workshop workshop-yaml workshop-secret \
+	deploy-<dev-profile> redeploy-<dev-profile> <dev-profile>-yaml
 
 # ── Help ─────────────────────────────────────────────
 
@@ -98,6 +100,90 @@ sync: ## Sync local files to Databricks workspace
 deploy-app: ## Deploy the app from workspace
 	@echo "==> Deploying app '$(APP_NAME)'..."
 	@databricks apps deploy $(APP_NAME) --source-code-path $(WORKSPACE_PATH) --profile $(PROFILE) --no-wait
+
+# ── Workshop (spec-A M1) ─────────────────────────────
+# Usage: make deploy-workshop PROFILE=<dev-profile> APP_NAME=coding-agents-01
+# Creates the app at LARGE compute and swaps app.yaml.workshop in as the
+# deployed app.yaml (host-register OFF, 10 sessions, preloaded challenge repo).
+
+WS_COMPUTE_SIZE ?= LARGE
+WS_SECRET_SCOPE ?= coda-workshop
+WS_SECRET_KEY   ?= challenge-repo-read-token
+
+deploy-workshop: guard-workshop-name create-app-workshop sync workshop-yaml deploy-app ## Deploy a workshop instance (LARGE + app.yaml.workshop)
+	@echo ""
+	@echo "Workshop deployment complete! App URL:"
+	@databricks apps get $(APP_NAME) --profile $(PROFILE) --output json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('url','(pending)'))"
+
+redeploy-workshop: guard-workshop-name sync workshop-yaml deploy-app ## Redeploy a workshop instance (skip app creation)
+	@echo ""
+	@echo "Workshop redeployment complete!"
+
+guard-workshop-name: ## Refuse to deploy the workshop config over the main instance
+	@if [ "$(APP_NAME)" = "coding-agents" ]; then \
+		echo "ERROR: workshop deploy would overwrite the main 'coding-agents' app."; \
+		echo "       Pass APP_NAME=coding-agents-01 (or -02..-06)."; \
+		exit 1; \
+	fi
+
+create-app-workshop: ## Create the workshop app at $(WS_COMPUTE_SIZE) compute (idempotent)
+	@echo "==> Checking if app '$(APP_NAME)' exists..."
+	@state=$$(databricks apps get $(APP_NAME) --profile $(PROFILE) --output json 2>/dev/null \
+		| python3 -c "import sys,json; print(json.load(sys.stdin).get('compute_status',{}).get('state',''))" 2>/dev/null); \
+	if [ -n "$$state" ]; then \
+		echo "    App '$(APP_NAME)' already exists (state: $$state), skipping create."; \
+	else \
+		echo "    Creating app '$(APP_NAME)' (compute size: $(WS_COMPUTE_SIZE))..."; \
+		databricks apps create $(APP_NAME) --compute-size $(WS_COMPUTE_SIZE) --profile $(PROFILE); \
+	fi
+
+workshop-yaml: ## Overwrite the synced app.yaml with the workshop variant
+	@echo "==> Swapping in app.yaml.workshop as $(WORKSPACE_PATH)/app.yaml..."
+	@databricks workspace import $(WORKSPACE_PATH)/app.yaml --file app.yaml.workshop --format AUTO --overwrite --profile $(PROFILE)
+
+# Reads the token from stdin so it never appears on a command line:
+#   gh auth token | make workshop-secret PROFILE=<dev-profile> APP_NAME=coding-agents-01
+# NOTE: `apps update` REPLACES the app's resources list — workshop apps have
+# only this one resource, so a plain write is correct here.
+workshop-secret: guard-workshop-name ## Store the challenge-repo read token (from stdin) and attach it to the app
+	@databricks secrets create-scope $(WS_SECRET_SCOPE) --profile $(PROFILE) 2>/dev/null || true
+	@printf '%s' "$$(cat)" | databricks secrets put-secret $(WS_SECRET_SCOPE) $(WS_SECRET_KEY) --profile $(PROFILE)
+	@databricks apps update $(APP_NAME) --profile $(PROFILE) --json '{"resources": [{"name": "challenge-repo-token", "secret": {"scope": "$(WS_SECRET_SCOPE)", "key": "$(WS_SECRET_KEY)", "permission": "READ"}}]}' > /dev/null
+	@echo "    Secret stored ($(WS_SECRET_SCOPE)/$(WS_SECRET_KEY)) and attached as app resource 'challenge-repo-token'."
+	@echo "    Redeploy the app for the env var to take effect."
+
+# ── Lakemeter deploy (Omnigent host ON) ──────────────
+# The committed app.yaml keeps Omnigent OFF/commented for the upstream PR.
+# These targets swap app.yaml.<dev-profile> in as the deployed app.yaml so the
+# <dev-profile> app self-registers as an always-on Omnigent host, without
+# re-poisoning the committed config.
+#   make deploy-<dev-profile> PROFILE=<dev-profile>
+#   make redeploy-<dev-profile> PROFILE=<dev-profile>
+
+deploy-<dev-profile>: create-app sync <dev-profile>-yaml deploy-app ## Deploy to <dev-profile> (app.yaml.<dev-profile>, Omnigent host ON)
+	@echo ""
+	@echo "Lakemeter deployment complete! App URL:"
+	@databricks apps get $(APP_NAME) --profile $(PROFILE) --output json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('url','(pending)'))"
+
+redeploy-<dev-profile>: sync <dev-profile>-yaml deploy-app ## Redeploy to <dev-profile> (skip app creation)
+	@echo ""
+	@echo "Lakemeter redeployment complete!"
+
+# Prefer the git-ignored .local override (real workspace values) over the
+# committed template (which has <placeholders>). Deploying the template would
+# dial <your-omnigent-app> and fail — so require .local to exist.
+LAKEMETER_YAML := $(shell [ -f app.yaml.<dev-profile>.local ] && echo app.yaml.<dev-profile>.local || echo app.yaml.<dev-profile>)
+
+<dev-profile>-yaml: ## Overwrite the synced app.yaml with the <dev-profile> variant (.local preferred)
+	@if [ "$(LAKEMETER_YAML)" = "app.yaml.<dev-profile>" ]; then \
+		echo "ERROR: app.yaml.<dev-profile>.local not found — the committed template has"; \
+		echo "       <placeholders>, not real values. Copy app.yaml.<dev-profile> to"; \
+		echo "       app.yaml.<dev-profile>.local and fill in your OMNIGENTS_SERVER_URL /"; \
+		echo "       OMNIGENTS_WHEEL_SPEC before deploying."; \
+		exit 1; \
+	fi
+	@echo "==> Swapping in $(LAKEMETER_YAML) as $(WORKSPACE_PATH)/app.yaml..."
+	@databricks workspace import $(WORKSPACE_PATH)/app.yaml --file $(LAKEMETER_YAML) --format AUTO --overwrite --profile $(PROFILE)
 
 # ── Monitoring ───────────────────────────────────────
 

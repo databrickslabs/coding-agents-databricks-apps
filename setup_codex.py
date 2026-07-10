@@ -7,6 +7,9 @@ or via the AI Gateway at /openai/v1.
 
 Config: ~/.codex/config.toml with custom model_providers for Databricks.
 Auth: Bearer token via DATABRICKS_TOKEN environment variable.
+
+Opt-out:
+  Set ENABLE_CODEX=false in app.yaml to skip installation entirely.
 """
 import json
 import os
@@ -17,10 +20,14 @@ from pathlib import Path
 from utils import (
     adapt_instructions_file,
     ensure_https,
-    get_gateway_host,
     get_npm_version,
     resolve_mlflow_experiment_id,
 )
+
+# Opt-out: allow operators to disable Codex bundling without removing the file.
+if os.environ.get("ENABLE_CODEX", "true").strip().lower() in ("false", "0", "no"):
+    print("ENABLE_CODEX=false — skipping Codex CLI setup")
+    raise SystemExit(0)
 
 # Set HOME if not properly set
 if not os.environ.get("HOME") or os.environ["HOME"] == "/":
@@ -81,20 +88,15 @@ if not host or not token:
 # Strip trailing slash and ensure https:// prefix
 host = ensure_https(host.rstrip("/"))
 
-gateway_host = get_gateway_host()
-gateway_token = os.environ.get("DATABRICKS_TOKEN", "") if gateway_host else ""
-if gateway_host and not gateway_token:
-    print("Warning: AI Gateway resolved but DATABRICKS_TOKEN missing, falling back to DATABRICKS_HOST")
-    gateway_host = ""
-
-if gateway_host:
-    codex_base_url = f"{gateway_host}/openai/v1"
-    auth_token = gateway_token
-    print(f"Using Databricks AI Gateway: {gateway_host}")
-else:
-    codex_base_url = f"{host}/serving-endpoints"
-    auth_token = token
-    print(f"Using Databricks Host: {host}")
+# Codex speaks the Responses API (wire_api="responses" below). Only the
+# workspace's /serving-endpoints/v1/responses path serves it — the AI Gateway's
+# /openai/v1 route is Chat Completions and 404s on /responses. So pin the base
+# URL to serving-endpoints/v1 unconditionally; codex appends "/responses".
+# (Chat-completions models 400 with "only supports the Responses API" here, so
+# CODEX_MODEL must be a -codex endpoint, e.g. databricks-gpt-5-3-codex.)
+codex_base_url = f"{host}/serving-endpoints/v1"
+auth_token = token
+print(f"Using Databricks serving-endpoints Responses API: {codex_base_url}")
 
 # 3. Create ~/.codex directory and write config.toml
 codex_dir = home / ".codex"

@@ -1,0 +1,59 @@
+# Workshop variant of app.yaml (spec-A-coda-workshop-layer.md, milestone M1).
+# Deployed by `make deploy-workshop` which swaps this in as app.yaml in the
+# workspace copy. Differences from the standard app.yaml:
+#   - Claude Code ONLY: ENABLE_CODEX/OPENCODE/GEMINI/HERMES/PI all "false"
+#     (workshop uses one agent; fewer deps to install/fail at boot)
+#   - MAX_CONCURRENT_SESSIONS raised to 10 (A-C1; fleet sizing decision)
+#   - OMNIGENTS_SERVER_URL/OMNIGENTS_WHEEL_SPEC omitted -> boot host-register
+#     no-ops (A-R3: attendees use CoDA's own terminal, not the Omnigent tunnel)
+#   - CHALLENGE_REPO_URL + CHALLENGE_REPO_READ_TOKEN added: the ONE config
+#     spot for the preloaded private challenge repo (A-R7). Compute size is
+#     NOT set here — it's a create-time property
+#     (`databricks apps create --compute-size LARGE`, see Makefile).
+command:
+  - gunicorn
+  - app:app
+env:
+  - name: HOME
+    value: /app/python/source_code
+  - name: ANTHROPIC_MODEL
+    value: databricks-claude-opus-4-8
+  # ── Claude Code only ─────────────────────────────────────────────────────
+  # The workshop uses Claude Code exclusively — skip installing the other
+  # agent CLIs (fewer npm downloads, faster setup, smaller failure surface).
+  - name: ENABLE_CODEX
+    value: "false"
+  - name: ENABLE_OPENCODE
+    value: "false"
+  - name: ENABLE_GEMINI
+    value: "false"
+  - name: ENABLE_HERMES
+    value: "false"
+  - name: ENABLE_PI
+    value: "false"
+  - name: CLAUDE_CODE_DISABLE_AUTO_MEMORY
+    value: 0
+  # OTEL export off by default. To enable, set "true" and point
+  # CLAUDE_CODE_OTEL_CATALOG_SCHEMA at a <catalog>.<schema> the app SP can write to.
+  - name: CLAUDE_CODE_OTEL_ENABLED
+    value: "false"
+  # - name: CLAUDE_CODE_OTEL_CATALOG_SCHEMA
+  #   value: <catalog>.<schema>
+  # 10 concurrent browser-terminal sessions per instance (assumed for LARGE,
+  # validated by the day-of smoke test — A-O1/A-O2).
+  - name: MAX_CONCURRENT_SESSIONS
+    value: "10"
+  # ── Challenge repo (A-R7) — the one config spot ─────────────────────────
+  # PRIVATE repo cloned from its main branch at container startup into
+  # ~/projects/<name>; the terminal opens directly inside it. The read token
+  # is a repo-scoped READ-ONLY GitHub token stored in a Databricks secret and
+  # attached to the app as a secret resource named "challenge-repo-token"
+  # (`make workshop-secret` does both). Token is used for the clone only and
+  # is stripped from attendee terminal sessions.
+  # STAND-IN: points at an existing private sandbox repo for M1 verification.
+  # Swap the URL (and the secret value) for the real challenge repo, then
+  # redeploy.
+  - name: CHALLENGE_REPO_URL
+    value: "https://github.com/david-okeeffe_data/dok-sandbox"
+  - name: CHALLENGE_REPO_READ_TOKEN
+    valueFrom: challenge-repo-token

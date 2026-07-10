@@ -4,7 +4,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from utils import ensure_https
+from utils import ensure_https, read_non_default_databrickscfg_sections
 
 # Set HOME if not properly set
 if not os.environ.get("HOME") or os.environ["HOME"] == "/":
@@ -22,12 +22,18 @@ if not host or not token:
 
 host = ensure_https(host)
 
-# Create ~/.databrickscfg with DEFAULT profile using PAT auth
+# Create ~/.databrickscfg with DEFAULT profile using PAT auth.
+# Preserve any co-owned non-DEFAULT sections (e.g. the Omnigent host's
+# [omnigents-host] OAuth profile). On a container restart this setup step
+# re-runs; a naive DEFAULT-only write_text() truncated that block, so a runner
+# spawned before the host re-appended it failed to authenticate. Rewrite only
+# [DEFAULT] and carry everything else through, matching pat_rotator's contract.
 databrickscfg = home / ".databrickscfg"
+preserved = read_non_default_databrickscfg_sections(databrickscfg)
 config_content = f"""[DEFAULT]
 host = {host}
 token = {token}
-"""
+""" + preserved
 
 databrickscfg.write_text(config_content)
 databrickscfg.chmod(0o600)  # Restrict permissions
