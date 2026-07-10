@@ -22,11 +22,17 @@ env:
     value: databricks-claude-opus-4-8
   - name: HERMES_FALLBACK_MODEL
     value: databricks-claude-opus-4-8
-  # Set ENABLE_HERMES=false to skip Hermes Agent install. Other CLIs are unaffected.
+  # All agents ON for the workshop. Each ENABLE_* defaults to true; set any to
+  # "false" to skip that CLI's install (others unaffected).
   - name: ENABLE_HERMES
     value: "true"
-  # Set ENABLE_PI=false to skip installing the Pi coding agent. Other CLIs are unaffected.
   - name: ENABLE_PI
+    value: "true"
+  - name: ENABLE_CODEX
+    value: "true"
+  - name: ENABLE_OPENCODE
+    value: "true"
+  - name: ENABLE_GEMINI
     value: "true"
   - name: CLAUDE_CODE_DISABLE_AUTO_MEMORY
     value: 0
@@ -85,6 +91,19 @@ env:
   # helper falls back to the PAT if it's ever absent.
   - name: ENABLE_SP_APIKEYHELPER
     value: "true"
+
+  # Workshop challenge repo (A-R7)
+  # PRIVATE repo cloned from its main branch at container startup into
+  # ~/projects/<name>; the attendee terminal opens directly inside it. The read
+  # token is a repo-scoped READ-ONLY GitHub token stored in a Databricks secret
+  # and attached to the app as a secret resource named "challenge-repo-token".
+  # The token is used for the clone only and is stripped from attendee sessions.
+  # STAND-IN URL: swap for the real challenge repo (and the secret value), then
+  # redeploy. install_challenge_repo.sh no-ops if the URL is unset/placeholder.
+  - name: CHALLENGE_REPO_URL
+    value: "https://github.com/david-okeeffe_data/dok-sandbox"
+  - name: CHALLENGE_REPO_READ_TOKEN
+    valueFrom: challenge-repo-token
 
   # ─── Enterprise mode (proxy / registry redirects) ────────────────────────
   # Uncomment and set the env vars below to run CoDA in locked-down enterprise
