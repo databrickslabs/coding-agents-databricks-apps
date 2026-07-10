@@ -91,12 +91,45 @@ emitted trace, handler returned: 'handled: part3-proof-...'
 > (tens of seconds); the script therefore reads back via the REST v3 endpoint,
 > which returns instantly.
 
-### 2b. Live agent hook demo (Part 3 live moment) — see the runbook
+### 2b. Live agent hook demo (Part 3 live moment) — PROVEN ✅
 
-`docs/part3-tracing-runbook.md` walks through running a real Claude Code session
-so its **Stop hook** fires and a genuine agent trace appears in the experiment —
-the "hook demonstration" for the Part 3 session. Same experiment, but now
-populated by the agent itself rather than a proof script.
+⚠️ **Critical fix — the old Python Stop-hook is a no-op in MLflow 3.14.**
+`setup_mlflow.py` wires `mlflow.claude_code.hooks.stop_hook_handler()` as a Stop
+hook. In MLflow 3.14 that handler was **deprecated** — it fires, returns
+`{"continue": true}`, and prints *"MLflow Claude tracing has moved to the
+marketplace plugin runtime"* but writes **no trace**. This is why the experiment
+showed no *new* agent traces after the flag was flipped.
+
+**The current mechanism is the marketplace plugin**, installed with:
+
+```bash
+/app/python/source_code/.venv/bin/python -m mlflow autolog claude \
+  -u databricks -e <experiment-id> -y
+# verify:
+/app/python/source_code/.venv/bin/python -m mlflow autolog claude --status
+```
+
+This installs the MLflow Claude plugin into Claude Code and writes the tracking
+config into `.claude/settings.json`. After that, running `claude` normally
+produces traces via the plugin runtime.
+
+**Verified 2026-07-10:** after `mlflow autolog claude` + a real `claude -p "..."`
+session, a `claude_code_conversation`-style trace with the exact prompt
+("Say hello and name one file in this repo…", duration 2.6s) landed in experiment
+`<experiment-id>`. The experiment also holds 16 older `claude_code_conversation`
+traces from April (pre-3.14, when the old hook still worked) — historical proof
+the channel is real; the plugin restores it under 3.14.
+
+**Gotcha:** `mlflow.search_traces(...)` (SDK) **hangs** from this container (killed
+at 45s). Read traces back via the REST v3 endpoint instead, which returns
+instantly:
+
+```bash
+databricks api post /api/3.0/mlflow/traces/search --json \
+  '{"locations":[{"mlflow_experiment":{"experiment_id":"<experiment-id>"}}],"max_results":20}'
+```
+
+`docs/part3-tracing-runbook.md` has the full live-demo runbook.
 
 ---
 
