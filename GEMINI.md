@@ -1,4 +1,4 @@
-# CLAUDE.md
+# GEMINI.md
 
 Agent guidance for this repo lives in one canonical file:
 
