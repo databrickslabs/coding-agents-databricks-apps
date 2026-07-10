@@ -151,8 +151,8 @@ if gateway_host:
                     "apiKey": "{env:DATABRICKS_TOKEN}"
                 },
                 "models": {
-                    "databricks-claude-opus-4-6": {
-                        "name": "Claude Opus 4.6 (Databricks)",
+                    "databricks-claude-opus-4-8": {
+                        "name": "Claude Opus 4.8 (Databricks)",
                         "limit": {
                             "context": 200000,
                             "output": 16384
@@ -167,13 +167,6 @@ if gateway_host:
                     },
                     "databricks-gemini-2-5-flash": {
                         "name": "Gemini 2.5 Flash (Databricks)",
-                        "limit": {
-                            "context": 1000000,
-                            "output": 8192
-                        }
-                    },
-                    "databricks-gemini-2-5-pro": {
-                        "name": "Gemini 2.5 Pro (Databricks)",
                         "limit": {
                             "context": 1000000,
                             "output": 8192
@@ -231,8 +224,8 @@ else:
                     "apiKey": "{env:DATABRICKS_TOKEN}"
                 },
                 "models": {
-                    "databricks-claude-opus-4-6": {
-                        "name": "Claude Opus 4.6 (Databricks)",
+                    "databricks-claude-opus-4-8": {
+                        "name": "Claude Opus 4.8 (Databricks)",
                         "limit": {
                             "context": 200000,
                             "output": 16384
@@ -247,13 +240,6 @@ else:
                     },
                     "databricks-gemini-2-5-flash": {
                         "name": "Gemini 2.5 Flash (Databricks)",
-                        "limit": {
-                            "context": 1000000,
-                            "output": 8192
-                        }
-                    },
-                    "databricks-gemini-2-5-pro": {
-                        "name": "Gemini 2.5 Pro (Databricks)",
                         "limit": {
                             "context": 1000000,
                             "output": 8192
