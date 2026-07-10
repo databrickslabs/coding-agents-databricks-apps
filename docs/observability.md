@@ -100,35 +100,61 @@ populated by the agent itself rather than a proof script.
 
 ---
 
-## 3. AI Gateway on the model endpoints — usage vs. payload logging
+## 3. AI Gateway logging — trace ALL requests, but not the payloads
 
-**Finding (opus-4-8):** the `databricks-claude-opus-4-8` serving endpoint
-already has AI Gateway enabled, with **both**:
+Goal (per team guidance): **usage tracking on for every endpoint the agents can
+hit, so no request is invisible** — while NOT hoarding sensitive payloads.
 
-- `usage_tracking_config.enabled = true`  ← cost/token analytics, no payloads. **Keep.**
-- `inference_table_config.enabled = true` → writes full request+response
-  **payloads** to `edp_aisandbox_aisandbox_dev.ppcs.all_anthropic-opus-4-8_payload`.
+Gateway logging has two independent switches, and they matter very differently:
 
-The payload table is live and accumulating data.
+- `usage_tracking_config` → tokens, cost, latency, model, caller. **No content.**
+  This is the "trace all requests so you know" switch. **ON everywhere.**
+- `inference_table_config` → full request+response **payloads** (the actual
+  prompts/responses, incl. promo/customer/pricing data). Envelope-sensitive.
+  **OFF everywhere.**
 
-**Policy conflict.** The PPCS operating envelope forbids logging sensitive
-promo / customer / member / pricing payloads into telemetry
-(`00-participant-guide.md`). opus-4-8 is the model behind Claude Code, Pi, and
-Hermes, so every attendee's prompts + model responses — which contain exactly
-that pricing data — are being written to the payload table in cleartext.
+### Full audit (all chat endpoints agents can route to, 2026-07-10)
 
-**Recommended action (Part 3 correct):** keep usage tracking ON (you still get
-cost/analytics), turn **payload inference-table logging OFF**. This is the
-opposite of "turn gateway logging on" — the gateway is already on; the fix is to
-stop capturing sensitive payloads. Catching this boundary is scored higher in
-Round 2/3 than shipping a feature.
+| Endpoint | usage tracking | payload logging |
+|----------|:--------------:|:---------------:|
+| databricks-claude-opus-4-8 | ✅ on | ⚠️ **ON → disable** |
+| databricks-claude-opus-4-7 | ✅ on | off |
+| databricks-claude-opus-4-6 | ✅ on | ⚠️ **ON → disable** |
+| databricks-claude-sonnet-4-6 | ✅ on | off |
+| databricks-claude-sonnet-4-5 | ✅ on | off |
+| databricks-claude-haiku-4-5 | ✅ on | off |
+| databricks-gpt-oss-120b | ✅ on | off |
+| databricks-gpt-oss-20b | ✅ on | off |
+| databricks-gemma-3-12b | ✅ on | off |
+| claude-opus-4-7 (external) | ✅ on | ⚠️ **ON → disable** |
 
-Apply with:
+**Good news:** usage tracking is **already on across all 10 endpoints** — so
+every agent request (Claude Code, Codex, Gemini, Hermes, Pi, OpenCode, Omnigent)
+is already logged at the gateway for cost/usage, regardless of whether that agent
+has a per-turn MLflow/OTEL hook. This is the universal safety net that covers the
+5 un-hooked agents from §1.
+
+> Note: `databricks-gpt-5-3-codex` and `databricks-gemini-2-5-pro` (the Codex /
+> Gemini model names in app.yaml) are **not served in this workspace**. In-geo
+> discovery remaps those agents to a served Claude endpoint, so their traffic is
+> already covered by the endpoints above.
+
+**Envelope catch:** 3 endpoints (opus-4-8, opus-4-6, external claude-opus-4-7)
+also have payload logging on — writing full prompts/responses to inference
+tables (e.g. `edp_aisandbox_aisandbox_dev.ppcs.all_anthropic-opus-4-8_payload`).
+The `00-participant-guide.md` envelope forbids sensitive payloads in telemetry.
+At audit time these payload tables were still **0 rows** (armed, not yet
+capturing) — so this is a fix-before-it-fills, not a cleanup.
+
+### Enforce the policy
 
 ```bash
-scripts/fix_opus48_gateway.sh --apply       # disables payload logging, keeps usage tracking
-scripts/fix_opus48_gateway.sh               # dry-run: prints the PUT body, changes nothing
+scripts/gateway_logging.sh            # AUDIT — prints the matrix above, changes nothing
+scripts/gateway_logging.sh --apply    # ensure usage-tracking ON + payload logging OFF on all
 ```
+
+The script is idempotent: it only PUTs to endpoints that aren't already
+compliant, and re-verifies each after applying.
 
 If the team decides payloads MUST be captured for eval, the compliant path is:
 redact before logging (OTEL collector redaction — see PPCS-027), or point the
