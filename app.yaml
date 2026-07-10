@@ -57,6 +57,19 @@ env:
   # SELECT + CREATE_TABLE here; OTEL export writes claude_otel_{spans,logs,metrics}.
   - name: CLAUDE_CODE_OTEL_CATALOG_SCHEMA
     value: edp_aisandbox_aisandbox_dev.ppcs
+  # ─── MLflow tracing (workshop Part 3: observability / policy / cost) ───────
+  # Master switch. When true, agent sessions are traced into the experiment
+  # /Users/{APP_OWNER}/{DATABRICKS_APP_NAME} for later analytics (harness
+  # comparison, token/cost, trace review — see ppcs-challenge Round 3).
+  #   COVERAGE (verified against the setup scripts, NOT the marketing copy):
+  #     • Claude Code — traced via Stop hook (setup_mlflow.py) AND OTEL→UC above
+  #     • Codex       — traced via @mlflow/codex notify hook (setup_codex.py)
+  #     • Gemini / Hermes / Pi / OpenCode / Omnigent host — NOT MLflow-traced
+  #       (no first-party MLflow hook exists for these CLIs yet). Their
+  #       endpoint-level usage/cost is still captured by AI Gateway usage
+  #       tracking on the model endpoints (enable per docs/observability).
+  - name: MLFLOW_TRACING_ENABLED
+    value: "true"
   - name: MAX_CONCURRENT_SESSIONS
     value: "10"
   # WORKSHOP / shared-app mode (TEMPORARY): disable the single-user owner
