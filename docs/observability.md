@@ -18,14 +18,19 @@ traces to the experiment `/Users/{APP_OWNER}/{DATABRICKS_APP_NAME}`.
 
 | Agent          | MLflow trace? | Mechanism                                        |
 |----------------|:-------------:|--------------------------------------------------|
-| Claude Code    | ✅ yes        | Stop hook — `mlflow.claude_code.hooks` (`setup_mlflow.py`) |
-| Claude Code    | ✅ (also)     | Native OTEL → UC tables (`CLAUDE_CODE_OTEL_ENABLED=true`) |
+| Claude Code    | ✅ **PROVEN** | MLflow Claude *plugin* (`mlflow autolog claude`) — trace verified landing 2026-07-10 |
+| Claude Code    | ⚠️ config only | Native OTEL → UC tables (`CLAUDE_CODE_OTEL_ENABLED=true`) — **not observed flowing**, see §OTEL |
 | Codex          | ✅ yes        | `@mlflow/codex` notify hook (`setup_codex.py`)   |
 | Gemini         | ❌ no         | No first-party MLflow hook in `setup_gemini.py`  |
 | Hermes         | ❌ no         | No MLflow wiring in `setup_hermes.py`            |
 | Pi             | ❌ no         | No MLflow wiring in `setup_pi.py`                |
 | OpenCode       | ❌ no         | No MLflow wiring in `setup_opencode.py`          |
 | Omnigent host  | ❌ no         | No MLflow wiring in `omnigents_host.py`          |
+
+> ⚠️ **MLflow 3.14 changed the mechanism.** The old Stop hook
+> (`mlflow.claude_code.hooks.stop_hook_handler`) is a **no-op** on 3.14 — it was
+> replaced by the marketplace plugin. `setup_mlflow.py` now installs the plugin
+> via `mlflow autolog claude` when tracing is enabled. See §2b for the proof.
 
 **Why the gap is acceptable for now:** the two agents used as governed
 dispatchers in the challenge (Claude Code, Codex) are the traced ones. For the
@@ -43,16 +48,34 @@ with no per-CLI hook. Pi/Hermes/Gemini go straight to the gateway with no such
 choke point. Tracked as a follow-up — do not claim these are traced until the
 round-trip in §2 passes for that agent.
 
-### ⚠️ Audit finding: configured ≠ flowing (both channels were EMPTY)
+### ⚠️ Audit finding: configured ≠ flowing — VERIFIED status per channel
 
-At the time of this audit, the tracing plumbing was wired but **no telemetry had
-actually landed** — verified by querying Databricks directly:
+Verified by querying Databricks directly, then re-testing after fixes:
 
-| Sink | Configured? | Rows / traces found |
+| Sink | Configured? | Status after testing |
 |------|:-----------:|---------------------|
-| `edp_aisandbox_aisandbox_dev.ppcs.claude_otel_metrics` (Claude OTEL) | ✅ real OTEL schema | **0 rows** |
-| MLflow experiment `122546556359397` (agent traces) | ✅ flag on | **no agent traces** (only a stray `RandomForestRegressor` ML run) |
-| `edp_aisandbox_aisandbox_dev.ppcs.all_anthropic-opus-4-8_payload` (gateway payload) | ✅ enabled | **0 rows** (armed, not yet capturing) |
+| MLflow experiment `122546556359397` (agent traces) | ✅ | ✅ **FLOWING** — live Claude session trace landed via plugin (2026-07-10); 16 historical April traces also present |
+| `edp_aisandbox_aisandbox_dev.ppcs.claude_otel_metrics` (Claude OTEL) | ✅ real OTEL schema | ❌ **NOT FLOWING — 0 rows.** Root cause below. |
+| `edp_aisandbox_aisandbox_dev.ppcs.all_anthropic-opus-4-8_payload` (gateway payload) | ✅ enabled | **0 rows** (armed, not yet capturing) — see §3 |
+
+**OTEL root cause (verified, not guessed):** The OTLP ingest endpoint
+(`{host}/api/2.0/otel/v1/{traces,logs,metrics}`) is **reachable and authenticates**
+— a direct probe returned an HTTP 400 *content* error, not 401/404, proving token
++ routing work. The break is **client-side**: Claude Code **2.1.200** in headless
+`-p` mode does **not initialize the OTEL SDK** in this environment — with
+`OTEL_LOG_LEVEL=debug` + `ANTHROPIC_LOG=debug` the process emitted **zero** OTEL
+init/export lines, so no metrics are ever created to export. Wiring the env vars
+(via `claude_otel.py` / `CLAUDE_CODE_OTEL_ENABLED=true`) is necessary but not
+sufficient on this build.
+
+What this means for Part 3:
+- **Use the MLflow plugin channel for the live trace demo** — it is proven and
+  impressive (full conversation, tool calls, timings visible in the experiment).
+- **Do not claim OTEL metrics are flowing.** Either (a) test with a *full
+  interactive* Claude session (not `-p`) which lives long enough for the periodic
+  metric reader to flush, and re-check `claude_otel_metrics`, or (b) treat OTEL as
+  a known gap on Claude Code 2.1.200 headless and rely on MLflow traces + gateway
+  usage tracking for the cost/observability story.
 
 Takeaway: flipping `MLFLOW_TRACING_ENABLED=true` and enabling OTEL is necessary
 but **not sufficient** — until an agent session actually runs through the
