@@ -257,11 +257,139 @@ def _build_terminal_shell_env(base_env: dict) -> dict:
     return shell_env
 
 
+# Home-level agent context, fanned out to GEMINI.md / PI.md by the setup_*.py
+# scripts (they read this exact path). Regenerated at every boot so the
+# ephemeral-container operating rules survive a disk recycle — a hand-edited
+# ~/CLAUDE.md would not (home is not a git repo, so it is never synced).
+_HOME_CLAUDE_MD = '''# Coding Agents on Databricks (CoDA)
+
+Global operating context for every AI coding agent in this environment — Claude
+Code, Codex, Gemini CLI, Hermes Agent, OpenCode. (This file is fanned out to
+`GEMINI.md` / `PI.md` at boot, so all agents inherit what's here.)
+
+---
+
+## \u26a0\ufe0f 0. This is an EPHEMERAL container — a git commit is your only backup
+
+CoDA runs inside a Databricks App container whose disk can be recycled at any
+time (redeploy, restart, timeout, platform recycle). Local disk is scratch.
+
+A `post-commit` hook auto-syncs every repo under `~/projects/` to Databricks
+Workspace at `/Workspace/Users/{you}/projects/{repo}/`. **Nothing that isn't
+committed survives a recycle.** So:
+
+1. **Commit small and commit often.** After every self-contained change — a
+   working function, a passing test, a fixed bug — commit. Never batch a whole
+   session into one commit; a recycle mid-session loses all of it.
+2. **A commit == a backup.** The commit triggers the sync. "I'll commit at the
+   end" is how work gets lost here.
+3. **Verify the sync happened.** After committing, check `tail ~/.sync.log` for
+   a `\u2713 Synced to /Workspace/...` line. If you see `\u26a0 Sync failed`, fix it
+   before continuing — an unsynced commit is not a backup.
+4. **After a recycle, restore before new work.** If a project dir is missing or
+   stale, rehydrate it from Workspace with
+   `python /app/python/source_code/restore_from_workspace.py <repo-name>`
+   *before* rebuilding from memory.
+5. **NEVER move or import `.git` into the Workspace.** If you run
+   `databricks workspace import`, exclude `.git` — moving it corrupts the repo
+   and breaks the sync/restore round-trip. This rule has bitten people
+   repeatedly.
+
+Recovery cheat-sheet:
+```bash
+tail -n 20 ~/.sync.log                                   # did my commits sync?
+python /app/python/source_code/restore_from_workspace.py <repo-name>   # rehydrate
+python /app/python/source_code/sync_to_workspace.py "$(git rev-parse --show-toplevel)"  # manual re-sync
+```
+
+---
+
+## 1. Start every project in git
+
+Before creating any new project or docs, initialize git first — that's what
+makes the workspace backup work:
+```bash
+mkdir ~/projects/my-project && cd ~/projects/my-project && git init
+# or: git clone https://github.com/user/repo.git   (into ~/projects/)
+```
+Only repos inside `~/projects/` are synced.
+
+---
+
+## 2. Working conventions (shared)
+
+- One logical change per commit; imperative commit messages; work on a branch.
+- Make the smallest change that satisfies the task — no unrequested refactors.
+- Understand every line you submit; code review is the bottleneck.
+- Never commit secrets, `.env` files, or credentials.
+- A repo may have its own `AGENTS.md` / `CLAUDE.md` — those take precedence for
+  project-specific setup, conventions, and gotchas.
+
+---
+
+## 3. Databricks CLI
+
+Pre-configured with your credentials. Test: `databricks current-user me`.
+Authenticate with a PAT **or** a `CLIENT_ID`/`CLIENT_SECRET` pair — not both. If
+login misbehaves, unset `DATABRICKS_CLIENT_ID` + `DATABRICKS_CLIENT_SECRET` and
+retry so access is based only on the owner's credentials.
+```bash
+databricks workspace list /Workspace/Users/
+databricks jobs list
+databricks clusters list
+```
+
+---
+
+## 4. What's installed
+
+- **5 agents**: Claude Code, Codex, Gemini CLI, Hermes Agent (`hermes chat`),
+  OpenCode.
+- **Skills**: Databricks skills (ai-dev-kit) + Superpowers dev-workflow skills.
+- **MCP servers**: DeepWiki (ask any GitHub repo), Exa (web search).
+- **Micro editor**, GitHub CLI, tmux.
+
+---
+
+## 5. Architecture (one-liner)
+
+Real-time terminal I/O over WebSocket (Flask-SocketIO) with HTTP-polling
+fallback. Single gunicorn worker (PTY fds are process-local), 16 gthread
+threads. Parallel agent setup at startup via ThreadPoolExecutor.
+
+---
+
+## Credits
+- Databricks skills: [databricks-solutions/ai-dev-kit](https://github.com/databricks-solutions/ai-dev-kit)
+- Dev-workflow skills: [obra/superpowers](https://github.com/obra/superpowers)
+'''
+
+
+def _write_home_claude_md():
+    """Write the home-level CLAUDE.md that all agents inherit.
+
+    Regenerated at boot because home is not a git repo (never synced), so a
+    hand-edited copy would evaporate on the next container recycle. The
+    setup_*.py fan-out reads this exact path to derive GEMINI.md / PI.md.
+    """
+    target = "/app/python/source_code/CLAUDE.md"
+    try:
+        with open(target, "w") as f:
+            f.write(_HOME_CLAUDE_MD)
+        logger.info(f"Home-level agent context written to {target}")
+    except Exception as e:
+        logger.warning(f"Could not write home-level CLAUDE.md: {e}")
+
+
 def _setup_git_config():
     """Configure git identity and hooks by writing files directly (no subprocess)."""
     home = os.environ.get("HOME", "/app/python/source_code")
     if not home or home == "/":
         home = "/app/python/source_code"
+
+    # Regenerate the home-level agent context (all agents inherit it; fanned out
+    # to GEMINI.md / PI.md). Done here so it's refreshed on every boot/recycle.
+    _write_home_claude_md()
 
     # Get user identity from Databricks token
     user_email = None
