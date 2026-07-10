@@ -1,7 +1,8 @@
 """Wire up Claude Code's Stop hook for MLflow tracing.
 
-Gated on MLFLOW_TRACING_ENABLED — the same switch enables Codex and Gemini
-tracing in their respective setup scripts. Traces land in
+Gated on MLFLOW_TRACING_ENABLED. The SAME switch also enables Codex tracing in
+setup_codex.py. (Gemini/Hermes/Pi/OpenCode have no first-party MLflow hook — see
+docs/observability.md §1; do not claim they are traced.) Traces land in
 /Users/{app_owner}/{app_name}.
 """
 
@@ -78,4 +79,4 @@ print(f"MLflow tracing {'ENABLED' if tracing_enabled else 'disabled'}: experimen
 print(f"  Tracking URI: databricks")
 print(f"  Settings updated: {settings_path}")
 if not tracing_enabled:
-    print("  Set MLFLOW_TRACING_ENABLED=true (in app.yaml) to enable Claude + Codex + Gemini tracing.")
+    print("  Set MLFLOW_TRACING_ENABLED=true (in app.yaml) to enable Claude + Codex tracing.")
