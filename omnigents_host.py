@@ -392,9 +392,10 @@ def _ensure_claude_settings(sp_creds: dict[str, str]) -> None:
 
     ``setup_claude.py`` gates its settings.json write on ``DATABRICKS_TOKEN``
     (used once to discover serving endpoints), so mint an SP OAuth bearer and
-    pass it in. Going forward the installed apiKeyHelper (spec C, gated on
-    ``ENABLE_SP_APIKEYHELPER``) re-mints per-TTL from the ``omnigents-host``
-    profile, so the one-shot token is only needed for the initial write.
+    pass it in. Going forward the installed apiKeyHelper (spec C, now on by
+    default) re-mints per-TTL from the ``omnigents-host`` profile, so the
+    one-shot token is only needed for the initial write. Set
+    ``DISABLE_SP_APIKEYHELPER=true`` to force the legacy static-token path.
     Idempotent; never blocks host launch on failure.
     """
     try:
@@ -404,7 +405,8 @@ def _ensure_claude_settings(sp_creds: dict[str, str]) -> None:
         return
     env = os.environ.copy()
     env["DATABRICKS_TOKEN"] = token
-    env.setdefault("ENABLE_SP_APIKEYHELPER", "true")
+    # apiKeyHelper is on by default now; nothing to enable here. (An operator
+    # can still force the legacy static-token path with DISABLE_SP_APIKEYHELPER.)
     env.setdefault("CODA_VENV_PYTHON", sys.executable)
     home = env.get("HOME", "/app/python/source_code")
     local_bin = os.path.join(home, ".local", "bin")
@@ -485,10 +487,12 @@ def _ensure_pi_settings(sp_creds: dict[str, str]) -> None:
     Mirrors ``_ensure_claude_settings``: the auto host-connect path never runs
     ``run_setup()``, so ``setup_pi.py``'s config write doesn't happen there.
     ``setup_pi.py`` gates its config write on ``DATABRICKS_TOKEN``, so mint an SP
-    OAuth bearer and pass it in, then re-run the script — single source of truth
+    OAuth bearer and pass it in, then re-run the script -- single source of truth
     for the models.json schema and gateway/model resolution, exactly like Claude.
-    Pi has no apiKeyHelper, so ``_start_pi_token_refresher`` keeps the static
-    token fresh afterward. Idempotent; never blocks host launch on failure.
+    setup_pi.py writes a per-request ``!command`` apiKey that runs the shared
+    token helper (SP OAuth from the omnigents-host profile here), so there is no
+    static token to refresh afterward. Idempotent; never blocks host launch on
+    failure.
     """
     try:
         token = _sp_bearer(sp_creds)
@@ -616,55 +620,6 @@ def _start_runner_log_tailer() -> None:
             time.sleep(1.0)
 
     threading.Thread(target=_tail, daemon=True, name="omnigent-runner-log-tail").start()
-
-
-_pi_refresher_started = False
-
-
-def _start_pi_token_refresher(sp_creds: dict[str, str]) -> None:
-    """Keep ~/.pi/agent/models.json's static apiKey fresh (best-effort).
-
-    Pi's config holds a static ``apiKey`` with no apiKeyHelper, and the host
-    path authenticates with SP OAuth tokens that expire in ~1h — so a dispatched
-    Pi session outliving the token would 401 mid-run. The PAT rotator (the
-    interactive path's freshness mechanism, via ``cli_auth._update_pi``) is not
-    active here. So re-mint on an interval well under the TTL and rewrite only
-    the token in models.json, matching how ucode keeps Pi fresh and Claude's
-    900000ms helper cadence. Idempotent (starts at most one refresher); never
-    lets an exception kill the thread.
-
-    NOTE: this only helps if a running ``pi`` re-reads models.json per request.
-    If Pi caches the apiKey at launch, only newly-spawned runners pick up the
-    new token (a long single session could still expire). Verify against the pi
-    runtime — see the plan's verification item (c).
-    """
-    global _pi_refresher_started
-    with _lock:
-        if _pi_refresher_started:
-            return
-        _pi_refresher_started = True
-
-    home = os.environ.get("HOME", "/app/python/source_code")
-    models_path = os.path.join(home, ".pi", "agent", "models.json")
-
-    def _refresh() -> None:
-        while True:
-            time.sleep(900)  # < the ~1h SP OAuth TTL; matches Claude's helper cadence
-            try:
-                token = _sp_bearer(sp_creds)
-                with open(models_path) as f:
-                    config = json.load(f)
-                provider = config.get("providers", {}).get("databricks-claude")
-                if isinstance(provider, dict) and provider.get("apiKey") != token:
-                    provider["apiKey"] = token
-                    tmp = f"{models_path}.tmp"
-                    with open(tmp, "w") as f:
-                        json.dump(config, f, indent=2)
-                    os.replace(tmp, models_path)  # atomic
-            except Exception:  # never let a refresh error take down the thread
-                pass
-
-    threading.Thread(target=_refresh, daemon=True, name="pi-token-refresh").start()
 
 
 def _run_setup_once() -> None:
@@ -860,12 +815,14 @@ def _supervise(
     _set(stage="configuring_harnesses")
     _ensure_claude()
     _ensure_claude_settings(sp_creds)
-    # Pi harness (host path): install the binary + write models.json, then keep
-    # its static token fresh. Gated by ENABLE_PI, mirroring the interactive path.
+    # Pi harness (host path): install the binary + write models.json. Pi's
+    # apiKey is a per-request `!command` that runs the shared token helper (SP
+    # OAuth from the omnigents-host profile here), so there is no static token
+    # to refresh -- a long-running pi resolves a live token each request. Gated
+    # by ENABLE_PI, mirroring the interactive path.
     if _pi_enabled():
         _ensure_pi()
         _ensure_pi_settings(sp_creds)
-        _start_pi_token_refresher(sp_creds)
     _ensure_tmux()
     _run_setup_once()
     # Pin omnigent's auth to the databricks host profile so the runner's native
