@@ -30,6 +30,18 @@ env:
     value: "true"
   - name: CLAUDE_CODE_DISABLE_AUTO_MEMORY
     value: 0
+  # Firewalled network: install Claude Code from the npm registry instead of the
+  # claude.ai installer host. Same CLI (@anthropic-ai/claude-code); use when npm
+  # is allowlisted but claude.ai / its install CDN is blocked. Default (unset)
+  # keeps the curl claude.ai path.
+  - name: CLAUDE_INSTALL_METHOD
+    value: npm
+  # This workspace has no AI Gateway — force the legacy serving-endpoints path.
+  # Empty value skips the gateway probe and routes model calls to
+  # {DATABRICKS_HOST}/serving-endpoints. Do NOT set a non-empty value here unless
+  # the gateway actually exists (it's trusted with no reachability probe).
+  - name: DATABRICKS_GATEWAY_HOST
+    value: ""
   # Set CLAUDE_CODE_OTEL_ENABLED=true to send Claude Code OTEL signals to Unity
   # Catalog. Off by default; requires CLAUDE_CODE_OTEL_CATALOG_SCHEMA pointing at
   # a <catalog>.<schema> your app SP can write to.
