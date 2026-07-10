@@ -50,7 +50,7 @@ env:
   # - name: CLAUDE_CODE_OTEL_CATALOG_SCHEMA
   #   value: <catalog>.<schema>
   - name: MAX_CONCURRENT_SESSIONS
-    value: "20"
+    value: "10"
   # WORKSHOP / shared-app mode (TEMPORARY): disable the single-user owner
   # binding so every attendee can use the terminal as the single injected PAT
   # identity. Isolation then rests entirely on the UC grants of that identity —
