@@ -12,5 +12,5 @@ cheat-sheet.
 Human/onboarding detail (feature catalog, skills, endpoints, env vars) is in
 [`README.md`](README.md).
 
-Edit guidance in `.agents/instructions.md`, not here — this stub only points to
+Edit guidance in `docs/agent-instructions.md`, not here — this stub only points to
 it so `CLAUDE.md`, `GEMINI.md`, and `AGENTS.md` never drift.
