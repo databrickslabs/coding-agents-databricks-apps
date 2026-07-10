@@ -22,9 +22,19 @@ APP_NAME      ?= coding-agents
 USER_EMAIL    = $(shell databricks current-user me --profile $(PROFILE) --output json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('userName',''))")
 WORKSPACE_PATH = /Workspace/Users/$(USER_EMAIL)/apps/$(APP_NAME)
 
+# Omnigent host grants (see the grant-omnigent-host target). The server app
+# hosts the *.databricksapps.com Omnigent URL; the wheel volume holds the
+# omnigent CLI wheel. WHEEL_VOLUME (catalog.schema.volume) is derived from the
+# LOCAL app.yaml being deployed (its OMNIGENTS_WHEEL_SPEC = /Volumes/cat/sch/vol)
+# unless set explicitly. Reads the local file so it works before the first sync.
+# GRANT_YAML lets the workshop/<dev-profile> targets point at their own variant.
+OMNIGENT_SERVER_APP ?= omnigent
+GRANT_YAML ?= app.yaml
+WHEEL_VOLUME ?= $(shell python3 -c "import sys,yaml; e={v['name']:v.get('value','') for v in (yaml.safe_load(open('$(GRANT_YAML)')) or {}).get('env',[])}; p=e.get('OMNIGENTS_WHEEL_SPEC','').strip('/').split('/'); print('.'.join(p[1:4]) if len(p)>=4 and p[0]=='Volumes' else '')" 2>/dev/null)
+
 .PHONY: help test integration-test e2e-test e2e-auth deploy redeploy create-app create-pat sync deploy-app status open clean enterprise-doctor \
 	deploy-workshop redeploy-workshop guard-workshop-name create-app-workshop workshop-yaml workshop-secret \
-	deploy-<dev-profile> redeploy-<dev-profile> <dev-profile>-yaml
+	deploy-<dev-profile> redeploy-<dev-profile> <dev-profile>-yaml grant-omnigent-host
 
 # ── Help ─────────────────────────────────────────────
 
@@ -53,12 +63,12 @@ help: ## Show this help
 
 # ── Workflows ────────────────────────────────────────
 
-deploy: create-app sync deploy-app ## Full deploy (create app, sync, deploy)
+deploy: create-app grant-omnigent-host sync deploy-app ## Full deploy (create app, grant Omnigent host IAM, sync, deploy)
 	@echo ""
 	@echo "Deployment complete! App URL:"
 	@databricks apps get $(APP_NAME) --profile $(PROFILE) --output json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('url','(pending)'))"
 
-redeploy: sync deploy-app ## Redeploy: sync + deploy (skip secret setup)
+redeploy: grant-omnigent-host sync deploy-app ## Redeploy: (re)grant Omnigent host IAM + sync + deploy
 	@echo ""
 	@echo "Redeployment complete!"
 
@@ -110,12 +120,14 @@ WS_COMPUTE_SIZE ?= LARGE
 WS_SECRET_SCOPE ?= coda-workshop
 WS_SECRET_KEY   ?= challenge-repo-read-token
 
-deploy-workshop: guard-workshop-name create-app-workshop sync workshop-yaml deploy-app ## Deploy a workshop instance (LARGE + app.yaml.workshop)
+deploy-workshop: GRANT_YAML=app.yaml.workshop
+deploy-workshop: guard-workshop-name create-app-workshop grant-omnigent-host sync workshop-yaml deploy-app ## Deploy a workshop instance (LARGE + app.yaml.workshop)
 	@echo ""
 	@echo "Workshop deployment complete! App URL:"
 	@databricks apps get $(APP_NAME) --profile $(PROFILE) --output json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('url','(pending)'))"
 
-redeploy-workshop: guard-workshop-name sync workshop-yaml deploy-app ## Redeploy a workshop instance (skip app creation)
+redeploy-workshop: GRANT_YAML=app.yaml.workshop
+redeploy-workshop: guard-workshop-name grant-omnigent-host sync workshop-yaml deploy-app ## Redeploy a workshop instance (skip app creation)
 	@echo ""
 	@echo "Workshop redeployment complete!"
 
@@ -160,12 +172,14 @@ workshop-secret: guard-workshop-name ## Store the challenge-repo read token (fro
 #   make deploy-<dev-profile> PROFILE=<dev-profile>
 #   make redeploy-<dev-profile> PROFILE=<dev-profile>
 
-deploy-<dev-profile>: create-app sync <dev-profile>-yaml deploy-app ## Deploy to <dev-profile> (app.yaml.<dev-profile>, Omnigent host ON)
+deploy-<dev-profile>: GRANT_YAML=$(LAKEMETER_YAML)
+deploy-<dev-profile>: create-app grant-omnigent-host sync <dev-profile>-yaml deploy-app ## Deploy to <dev-profile> (app.yaml.<dev-profile>, Omnigent host ON)
 	@echo ""
 	@echo "Lakemeter deployment complete! App URL:"
 	@databricks apps get $(APP_NAME) --profile $(PROFILE) --output json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('url','(pending)'))"
 
-redeploy-<dev-profile>: sync <dev-profile>-yaml deploy-app ## Redeploy to <dev-profile> (skip app creation)
+redeploy-<dev-profile>: GRANT_YAML=$(LAKEMETER_YAML)
+redeploy-<dev-profile>: grant-omnigent-host sync <dev-profile>-yaml deploy-app ## Redeploy to <dev-profile> (skip app creation)
 	@echo ""
 	@echo "Lakemeter redeployment complete!"
 
@@ -186,6 +200,28 @@ LAKEMETER_YAML := $(shell [ -f app.yaml.<dev-profile>.local ] && echo app.yaml.<
 	@databricks workspace import $(WORKSPACE_PATH)/app.yaml --file $(LAKEMETER_YAML) --format AUTO --overwrite --profile $(PROFILE)
 
 # ── Monitoring ───────────────────────────────────────
+
+grant-omnigent-host: ## Grant the CoDA app SP the IAM to register as an Omnigent host (CAN_USE + READ_VOLUME)
+	@# A deployed CoDA app registers as an Omnigent host by running
+	@# `omnigent host <server>` as its own service principal. That SP starts with
+	@# ZERO privileges, so it needs two one-time grants or the host tunnel 302s at
+	@# /v1/me and never appears in the Omnigent picker:
+	@#   1. CAN_USE on the Omnigent server app  (so the Apps edge accepts its token)
+	@#   2. READ_VOLUME on the wheel volume      (so it can install the omnigent CLI)
+	@# grant_omnigent_host.sh does both idempotently. OMNIGENT_SERVER_APP defaults
+	@# to "omnigent"; WHEEL_VOLUME is derived from the deployed app.yaml's
+	@# OMNIGENTS_WHEEL_SPEC unless overridden. See the vars above 'status:'.
+	@if [ -z "$(WHEEL_VOLUME)" ]; then \
+		echo "==> Omnigent host not enabled in $(GRANT_YAML) (no OMNIGENTS_WHEEL_SPEC) - skipping grant."; \
+		echo "    (Pass WHEEL_VOLUME=<catalog>.<schema>.<volume> to force it.)"; \
+	else \
+		echo "==> Granting Omnigent host IAM to '$(APP_NAME)' SP (server='$(OMNIGENT_SERVER_APP)', volume='$(WHEEL_VOLUME)')..."; \
+		./grant_omnigent_host.sh \
+			--profile $(PROFILE) \
+			--coda-app $(APP_NAME) \
+			--server-app $(OMNIGENT_SERVER_APP) \
+			--wheel-volume $(WHEEL_VOLUME); \
+	fi
 
 status: ## Check app status
 	@databricks apps get $(APP_NAME) --profile $(PROFILE)
