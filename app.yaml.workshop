@@ -53,15 +53,15 @@ env:
   # owner-only even in this mode.
   - name: CODA_DISABLE_OWNER_CHECK
     value: "true"
-  # PAT rotation stretched to ~8h for the workshop: because that injected SP
+  # PAT rotation stretched to ~1h for the workshop: because that injected SP
   # token is disposable and revoked post-workshop, the longer lifetime is an
   # accepted trade for fewer mid-session rotations. token_lifetime must stay
-  # > rotation_interval so the token never expires between mints — 8h15m
+  # > rotation_interval so the token never expires between mints — 1h15m
   # lifetime gives a 15-min overlap. Secure boxes keep the 600/900 default.
   - name: PAT_ROTATION_INTERVAL
-    value: "28800"   # 8h — mint a fresh token every 8 hours
+    value: "3600"    # 1h — mint a fresh token every hour
   - name: PAT_TOKEN_LIFETIME
-    value: "29700"   # 8h15m — outlives the interval so no expiry gap
+    value: "4500"    # 1h15m — outlives the interval so no expiry gap
   # ── Challenge repo (A-R7) — the one config spot ─────────────────────────
   # PRIVATE repo cloned from its main branch at container startup into
   # ~/projects/<name>; the terminal opens directly inside it. The read token
