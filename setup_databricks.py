@@ -4,7 +4,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from utils import ensure_https, read_non_default_databrickscfg_sections
+from utils import ensure_https, pat_only_env, read_non_default_databrickscfg_sections
 
 # Set HOME if not properly set
 if not os.environ.get("HOME") or os.environ["HOME"] == "/":
@@ -44,12 +44,8 @@ result = subprocess.run(
     ["databricks", "current-user", "me", "--output", "json"],
     capture_output=True,
     text=True,
-    env={
-        **os.environ,
-        # Remove OAuth vars to force PAT auth
-        "DATABRICKS_CLIENT_ID": "",
-        "DATABRICKS_CLIENT_SECRET": ""
-    }
+    # Neutralize ambient OAuth vars so the CLI uses the PAT we just wrote.
+    env=pat_only_env(),
 )
 
 if result.returncode == 0:

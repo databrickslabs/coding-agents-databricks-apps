@@ -30,11 +30,14 @@ import logging
 import os
 import select
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 
 import yaml
+
+from utils import config_profile_env, ensure_https
 
 logger = logging.getLogger(__name__)
 
@@ -276,11 +279,13 @@ def ensure_installed(sp_creds: dict[str, str] | None = None) -> bool:
 
 
 def _ensure_https(host: str) -> str:
-    """Prefix https:// if absent — Databricks config requires the scheme."""
-    host = host.strip().rstrip("/")
-    if host and not host.startswith(("http://", "https://")):
-        return f"https://{host}"
-    return host
+    """Normalize a host and prefix https:// if absent.
+
+    Wraps the shared ``utils.ensure_https`` but first trims whitespace and a
+    trailing slash (the host/server values here arrive from env vars and config
+    that may carry either).
+    """
+    return ensure_https(host.strip().rstrip("/"))
 
 
 def capture_sp_credentials() -> dict[str, str] | None:
@@ -400,13 +405,14 @@ def _ensure_claude_settings(sp_creds: dict[str, str]) -> None:
     env = os.environ.copy()
     env["DATABRICKS_TOKEN"] = token
     env.setdefault("ENABLE_SP_APIKEYHELPER", "true")
+    env.setdefault("CODA_VENV_PYTHON", sys.executable)
     home = env.get("HOME", "/app/python/source_code")
     local_bin = os.path.join(home, ".local", "bin")
     if local_bin not in env.get("PATH", ""):
         env["PATH"] = f"{local_bin}:{env.get('PATH', '')}"
     try:
         result = subprocess.run(
-            ["uv", "run", "python", "setup_claude.py"],
+            [sys.executable, "setup_claude.py"],
             env=env,
             cwd=os.path.dirname(os.path.abspath(__file__)),
             check=False,
@@ -491,13 +497,14 @@ def _ensure_pi_settings(sp_creds: dict[str, str]) -> None:
         return
     env = os.environ.copy()
     env["DATABRICKS_TOKEN"] = token
+    env.setdefault("CODA_VENV_PYTHON", sys.executable)
     home = env.get("HOME", "/app/python/source_code")
     local_bin = os.path.join(home, ".local", "bin")
     if local_bin not in env.get("PATH", ""):
         env["PATH"] = f"{local_bin}:{env.get('PATH', '')}"
     try:
         result = subprocess.run(
-            ["uv", "run", "python", "setup_pi.py"],
+            [sys.executable, "setup_pi.py"],
             env=env,
             cwd=os.path.dirname(os.path.abspath(__file__)),
             check=False,
@@ -756,7 +763,6 @@ def _run_host_once(server_url: str, stop_event: threading.Event | None = None) -
     # already present and get forwarded host→runner via Omnigents'
     # HARNESS_CREDENTIAL_ENV_VARS. We do NOT inject the SP secret here — the
     # host resolves it from the OAuth profile we wrote.
-    env = os.environ.copy()
     # Omnigents' token factory calls _resolve_databricks_auth() WITHOUT a
     # profile, so `--profile` is ignored for the tunnel token; it uses the
     # SDK's default resolution. Point that resolution at our M2M profile via
@@ -764,8 +770,9 @@ def _run_host_once(server_url: str, stop_event: threading.Event | None = None) -
     # would otherwise shadow the profile in the SDK's unified-auth resolution.
     # In particular DATABRICKS_WORKSPACE_ID + the DATABRICKS_APP_* vars (which
     # Apps injects) steer auth to the app's ambient identity and cause the
-    # tunnel to 302 → OIDC even with the M2M profile present. Verified: a clean
+    # tunnel to 302 â OIDC even with the M2M profile present. Verified: a clean
     # env with only the profile vars connects; leaving these in does not.
+    env = config_profile_env(_HOST_PROFILE)
     local_bin = os.path.join(home, ".local", "bin")
     if local_bin not in env.get("PATH", ""):
         env["PATH"] = f"{local_bin}:{env.get('PATH', '')}"
@@ -773,17 +780,6 @@ def _run_host_once(server_url: str, stop_event: threading.Event | None = None) -
     if stable_identity is not None:
         env.setdefault("OMNIGENT_HOST_ID", stable_identity[0])
         env.setdefault("OMNIGENT_HOST_NAME", stable_identity[1])
-    env["DATABRICKS_CONFIG_PROFILE"] = _HOST_PROFILE
-    for shadowing in (
-        "DATABRICKS_TOKEN",
-        "DATABRICKS_HOST",
-        "DATABRICKS_WORKSPACE_ID",
-        "DATABRICKS_APP_NAME",
-        "DATABRICKS_APP_URL",
-        "DATABRICKS_CLIENT_ID",
-        "DATABRICKS_CLIENT_SECRET",
-    ):
-        env.pop(shadowing, None)
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
