@@ -149,7 +149,13 @@ config["providers"]["databricks-claude"] = {
     "apiKey": auth_token,
     "authHeader": True,
     "compat": {"supportsEagerToolInputStreaming": False},
-    "models": [{"id": active_model}],
+    # contextWindow is explicit: Pi defaults a custom provider's model to 131072
+    # (128K) when absent. The Databricks FMAPI-served Claude model has a ~1.05M
+    # total-token context window (per Databricks Foundation Model APIs supported-
+    # models docs), so the 128K default badly under-uses it. Set the real window.
+    # NB: the FMAPI *rate* limits are separate (e.g. ~200k input tokens/minute on
+    # the default tier) — that's throughput, not context, and is not fixed here.
+    "models": [{"id": active_model, "contextWindow": 1000000}],
 }
 
 models_path.write_text(json.dumps(config, indent=2))
