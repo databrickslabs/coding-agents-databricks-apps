@@ -23,7 +23,8 @@ USER_EMAIL    = $(shell databricks current-user me --profile $(PROFILE) --output
 WORKSPACE_PATH = /Workspace/Users/$(USER_EMAIL)/apps/$(APP_NAME)
 
 .PHONY: help test integration-test e2e-test e2e-auth deploy redeploy create-app create-pat sync deploy-app status open clean enterprise-doctor \
-	deploy-workshop redeploy-workshop guard-workshop-name create-app-workshop workshop-yaml workshop-secret
+	deploy-workshop redeploy-workshop guard-workshop-name create-app-workshop workshop-yaml workshop-secret \
+	deploy-lakemeter redeploy-lakemeter lakemeter-yaml
 
 # ── Help ─────────────────────────────────────────────
 
@@ -150,6 +151,39 @@ workshop-secret: guard-workshop-name ## Store the challenge-repo read token (fro
 	@databricks apps update $(APP_NAME) --profile $(PROFILE) --json '{"resources": [{"name": "challenge-repo-token", "secret": {"scope": "$(WS_SECRET_SCOPE)", "key": "$(WS_SECRET_KEY)", "permission": "READ"}}]}' > /dev/null
 	@echo "    Secret stored ($(WS_SECRET_SCOPE)/$(WS_SECRET_KEY)) and attached as app resource 'challenge-repo-token'."
 	@echo "    Redeploy the app for the env var to take effect."
+
+# ── Lakemeter deploy (Omnigent host ON) ──────────────
+# The committed app.yaml keeps Omnigent OFF/commented for the upstream PR.
+# These targets swap app.yaml.lakemeter in as the deployed app.yaml so the
+# lakemeter app self-registers as an always-on Omnigent host, without
+# re-poisoning the committed config.
+#   make deploy-lakemeter PROFILE=lakemeter
+#   make redeploy-lakemeter PROFILE=lakemeter
+
+deploy-lakemeter: create-app sync lakemeter-yaml deploy-app ## Deploy to lakemeter (app.yaml.lakemeter, Omnigent host ON)
+	@echo ""
+	@echo "Lakemeter deployment complete! App URL:"
+	@databricks apps get $(APP_NAME) --profile $(PROFILE) --output json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('url','(pending)'))"
+
+redeploy-lakemeter: sync lakemeter-yaml deploy-app ## Redeploy to lakemeter (skip app creation)
+	@echo ""
+	@echo "Lakemeter redeployment complete!"
+
+# Prefer the git-ignored .local override (real workspace values) over the
+# committed template (which has <placeholders>). Deploying the template would
+# dial <your-omnigent-app> and fail — so require .local to exist.
+LAKEMETER_YAML := $(shell [ -f app.yaml.lakemeter.local ] && echo app.yaml.lakemeter.local || echo app.yaml.lakemeter)
+
+lakemeter-yaml: ## Overwrite the synced app.yaml with the lakemeter variant (.local preferred)
+	@if [ "$(LAKEMETER_YAML)" = "app.yaml.lakemeter" ]; then \
+		echo "ERROR: app.yaml.lakemeter.local not found — the committed template has"; \
+		echo "       <placeholders>, not real values. Copy app.yaml.lakemeter to"; \
+		echo "       app.yaml.lakemeter.local and fill in your OMNIGENTS_SERVER_URL /"; \
+		echo "       OMNIGENTS_WHEEL_SPEC before deploying."; \
+		exit 1; \
+	fi
+	@echo "==> Swapping in $(LAKEMETER_YAML) as $(WORKSPACE_PATH)/app.yaml..."
+	@databricks workspace import $(WORKSPACE_PATH)/app.yaml --file $(LAKEMETER_YAML) --format AUTO --overwrite --profile $(PROFILE)
 
 # ── Monitoring ───────────────────────────────────────
 

@@ -1,0 +1,67 @@
+command:
+  - gunicorn
+  - app:app
+env:
+  - name: HOME
+    value: /app/python/source_code
+  - name: ANTHROPIC_MODEL
+    value: databricks-claude-opus-4-8
+  # Pi routes to the same /anthropic gateway route as Claude Code; PI_MODEL is
+  # the serving-endpoint name it addresses (validated against in-geo models).
+  - name: PI_MODEL
+    value: databricks-claude-opus-4-8
+  - name: GEMINI_MODEL
+    value: databricks-gemini-2-5-pro
+  # Must be a *-codex model served via the Responses API — the Codex harness
+  # (and CLI) speaks wire_api="responses", which only the -codex endpoints
+  # support. A general chat-completions model (e.g. databricks-gpt-5-5) 400s on
+  # /responses. See setup_codex.py base_url handling.
+  - name: CODEX_MODEL
+    value: databricks-gpt-5-3-codex
+  - name: HERMES_MODEL
+    value: databricks-claude-opus-4-8
+  - name: HERMES_FALLBACK_MODEL
+    value: databricks-claude-opus-4-8
+  # Set ENABLE_HERMES=false to skip Hermes Agent install. Other CLIs are unaffected.
+  - name: ENABLE_HERMES
+    value: "true"
+  # Set ENABLE_PI=false to skip installing the Pi coding agent. Other CLIs are unaffected.
+  - name: ENABLE_PI
+    value: "true"
+  - name: CLAUDE_CODE_DISABLE_AUTO_MEMORY
+    value: 0
+  - name: MAX_CONCURRENT_SESSIONS
+    value: "5"
+
+  # ─── Omnigent host integration (ON) — TEMPLATE ──────────────────────────
+  # This is the overlay-pattern example for deploying with the Omnigent host
+  # integration ENABLED, while the committed app.yaml stays neutralized for a
+  # clean upstream. `make deploy-lakemeter` swaps this file in as the deployed
+  # app.yaml (between sync and deploy) so your workspace-specific wiring never
+  # touches the committed app.yaml.
+  #
+  # Replace the <placeholders> below with YOUR values. For a real deploy, copy
+  # this file to app.yaml.lakemeter.local (git-ignored) with concrete values —
+  # `make deploy-lakemeter` prefers the .local override if present.
+  #
+  # Registers this app as a persistent Omnigent host on boot: initialize_app()
+  # -> start_host() dials the server as the app SP on every restart/redeploy.
+  - name: OMNIGENTS_SERVER_URL
+    value: "https://<your-omnigent-app>.<region>.databricksapps.com"
+  # Install source for the omnigent host CLI (downloaded from this UC Volume
+  # using the app SP's READ_VOLUME grant). Point at a volume holding the
+  # omnigent-*.whl / omnigent_client-*.whl / omnigent_ui_sdk-*.whl artifacts.
+  - name: OMNIGENTS_WHEEL_SPEC
+    value: "/Volumes/<catalog>/<schema>/artifacts/wheels"
+  # Force-reinstall the host CLI on boot so the current wheel is actually
+  # installed (uv tool install no-ops when the tool already exists). Safe to
+  # drop on later redeploys once the deployed wheel is stable.
+  - name: OMNIGENTS_FORCE_REINSTALL
+    value: "1"
+  # Claude Code fetches its gateway bearer via an apiKeyHelper that mints a
+  # fresh app-SP OAuth token per-TTL (spec C), instead of the PAT rotator
+  # pushing a static token into settings.json. Requires the [omnigents-host]
+  # OAuth profile, which OMNIGENTS_SERVER_URL above causes to be written; the
+  # helper falls back to the PAT if it's ever absent.
+  - name: ENABLE_SP_APIKEYHELPER
+    value: "true"
