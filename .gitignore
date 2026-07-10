@@ -21,12 +21,7 @@ uploads/
 # uv lockfile — not portable across PyPI proxies, generate locally with `uv lock`
 uv.lock
 
-# Codex CLI generated/cached files. The bundled model catalog
-# (.codex/databricks-models.json) is tracked. Listed file-by-file rather
-# than `.codex/* + !.codex/databricks-models.json` because `databricks sync`
-# (and several other gitignore-honoring tools) doesn't respect the negation
-# pattern — that broke the deploy of databricks-models.json to the app
-# workspace, which Codex needs to start.
+# Codex CLI generated/cached files (the bundled model catalog is tracked)
 .codex/config.toml
 .codex/.env
 .codex/AGENTS.md
@@ -43,5 +38,12 @@ uv.lock
 # Agent-plane reference clone
 agent-plane-ref/
 
-# Playwright storage state — live SSO cookies; must never be committed or synced
+video/
+
+# Playwright e2e SSO session state (workspace cookies — DO NOT commit)
 tests/e2e/auth.json
+tests/e2e/.cache/
+
+# Playwright browser snapshots / traces from failed runs
+tests/e2e/test-results/
+tests/e2e/playwright-report/

