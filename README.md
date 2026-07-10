@@ -155,6 +155,68 @@ Tracing setup is skipped gracefully when `APP_OWNER` is not set (e.g., local dev
 
 ---
 
+## Omnigent Host Integration
+
+CoDA can register itself as a persistent **[Omnigent](https://github.com/earendil-works) agent host** — an always-on target the Omnigent server can drive coding-agent sessions into. Those sessions run *inside this container*, using the same filesystem, AI-Gateway credentials, and Unity Catalog scope as the browser terminals. So a deployed CoDA app becomes both an interactive terminal **and** a headless host that survives restarts and redeploys.
+
+**Off by default.** With `OMNIGENTS_SERVER_URL` unset, none of this runs and CoDA behaves exactly as before. This is opt-in, environment-specific wiring — the committed `app.yaml` keeps it commented out.
+
+### Turning it on
+
+Set three variables in your deployed `app.yaml` (see `app.yaml.lakemeter` for a ready-to-copy overlay template):
+
+```yaml
+# app.yaml
+env:
+  # The Omnigent server this app registers against on boot.
+  - name: OMNIGENTS_SERVER_URL
+    value: "https://<your-omnigent-app>.<region>.databricksapps.com"
+  # UC Volume holding the omnigent host wheels (app SP needs READ_VOLUME).
+  - name: OMNIGENTS_WHEEL_SPEC
+    value: "/Volumes/<catalog>/<schema>/artifacts/wheels"
+  # Optional: force-reinstall the host CLI on boot while rolling out a new wheel.
+  - name: OMNIGENTS_FORCE_REINSTALL
+    value: "1"
+```
+
+On boot, `initialize_app()` calls `start_host()`, which — only when `OMNIGENTS_SERVER_URL` is set — installs the `omnigents host` CLI from the wheel volume and launches it as a supervised background process that dials the server over an outbound WSS tunnel.
+
+### Two credentials, two jobs
+
+The non-obvious part of this design is that the host uses **two separate credentials** (see `omnigents_host.py`):
+
+```
+┌─────────────────────── CoDA container ───────────────────────┐
+│                                                              │
+│  omnigents host  ──WSS tunnel──►  Omnigent server            │
+│      │              (auth: app-SP OAuth token)               │
+│      │                                                       │
+│      └── spawns runner ──►  AI Gateway                       │
+│                             (auth: CoDA's ANTHROPIC_* creds) │
+└──────────────────────────────────────────────────────────────┘
+```
+
+* **Host tunnel** authenticates `omnigents host` *to the server*. The Databricks Apps ingress proxy **rejects PATs (302 → OIDC) and accepts OAuth/service-principal tokens**, so the host must present an OAuth token minted from the app SP's `DATABRICKS_CLIENT_ID` / `DATABRICKS_CLIENT_SECRET`. CoDA captures those creds *before* stripping them from the environment and writes a short-lived `[omnigents-host]` OAuth profile.
+* **Harness LLM** — the runner the host spawns authenticates to AI Gateway via CoDA's already-injected `ANTHROPIC_*` env. No new LLM credential is minted.
+
+### Runtime controls
+
+Beyond boot registration, the host can be driven at runtime:
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/omnigents-status` | GET | Host-integration state (FR-9 observability) |
+| `/api/omnigent-host/status` | GET | Current runtime host state |
+| `/api/omnigent-host/connect` | POST | Start a host tunnel for a supplied `server_url` |
+| `/api/omnigent-host/disconnect` | POST | Stop the active host tunnel |
+| `/api/omnigent-host/share` | POST | Share the SP-owned host with a connecting user |
+
+### Related
+
+`ENABLE_SP_APIKEYHELPER=true` pairs naturally with this: it has Claude Code fetch its gateway bearer via an apiKeyHelper that mints a fresh app-SP OAuth token per TTL, reusing the same `[omnigents-host]` OAuth profile this integration writes.
+
+---
+
 ## Quick Start
 
 ### Deploy to Databricks Apps
@@ -321,6 +383,10 @@ Open [http://localhost:8000](http://localhost:8000) — type `claude`, `codex`, 
 | `MLFLOW_TRACING_ENABLED` | No | Set to `"true"` to enable MLflow tracing for Claude, Codex, and Gemini in one switch (default `"false"`) |
 | `CLAUDE_CODE_OTEL_ENABLED` | No | Set to `"true"` to enable Claude Code OTEL export to Unity Catalog (default `"false"`) |
 | `CLAUDE_CODE_OTEL_CATALOG_SCHEMA` | No | Target `<catalog>.<schema>` for `claude_otel_spans`, `claude_otel_logs`, and `claude_otel_metrics` |
+| `OMNIGENTS_SERVER_URL` | No | Omnigent server to register against on boot. Unset = host integration off (default). See [Omnigent Host Integration](#omnigent-host-integration) |
+| `OMNIGENTS_WHEEL_SPEC` | No | UC Volume path holding the `omnigents host` wheels (app SP needs `READ_VOLUME`). Required when `OMNIGENTS_SERVER_URL` is set |
+| `OMNIGENTS_FORCE_REINSTALL` | No | Set `"1"` to reinstall the host CLI on boot (for rolling out a new wheel); otherwise `uv tool install` no-ops on an existing binary |
+| `ENABLE_SP_APIKEYHELPER` | No | Set `"true"` so Claude Code mints a fresh app-SP OAuth token per TTL via apiKeyHelper (pairs with the Omnigent host OAuth profile) |
 | `DEEPWIKI_MCP_URL` | No | Override or disable the DeepWiki MCP server (set to `""` to remove) |
 | `EXA_MCP_URL` | No | Override or disable the Exa MCP server (set to `""` to remove) |
 | `TEAM_MEMORY_MCP_URL` | No | Optional shared-org-memory MCP server URL |
