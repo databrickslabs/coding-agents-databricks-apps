@@ -530,6 +530,107 @@ def _ensure_pi_settings(sp_creds: dict[str, str]) -> None:
         logger.warning("setup_pi.py failed (non-fatal): %s", e)
 
 
+def _opencode_enabled() -> bool:
+    """True unless ENABLE_OPENCODE is explicitly falsey (mirrors setup_opencode.py)."""
+    return os.environ.get("ENABLE_OPENCODE", "true").strip().lower() not in (
+        "false",
+        "0",
+        "no",
+    )
+
+
+def _ensure_opencode() -> None:
+    """Install the OpenCode CLI to ~/.local/bin if missing (best-effort).
+
+    Mirrors ``_ensure_pi``: the auto host-connect path (SP creds, no PAT) never
+    runs ``run_setup()``, so ``setup_opencode.py``'s npm install doesn't happen
+    there. Install here too so the ``opencode-native`` harness resolves the
+    ``opencode`` binary on the runner's PATH. Idempotent; never blocks the host.
+    """
+    home = os.environ.get("HOME", "/app/python/source_code")
+    opencode_path = os.path.join(home, ".local", "bin", "opencode")
+    if os.path.exists(opencode_path):
+        logger.info("opencode already present at %s", opencode_path)
+        return
+    try:
+        result = subprocess.run(
+            ["npm", "install", "-g",
+             f"--prefix={os.path.join(home, '.local')}",
+             "opencode-ai"],
+            env={**os.environ, "HOME": home},
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if result.returncode == 0 and os.path.exists(opencode_path):
+            logger.info("opencode installed to %s", opencode_path)
+        else:
+            logger.warning(
+                "opencode install did NOT land (rc=%s); the opencode-native "
+                "harness will report not-configured. stdout=%r stderr=%r",
+                result.returncode,
+                (result.stdout or "").strip()[-500:],
+                (result.stderr or "").strip()[-500:],
+            )
+    except Exception as e:  # never block host launch on opencode install
+        logger.warning("opencode install failed (non-fatal): %s", e)
+
+
+def _ensure_opencode_settings(sp_creds: dict[str, str]) -> None:
+    """Write ~/.config/opencode/opencode.json so opencode-native can auth (best-effort).
+
+    Mirrors ``_ensure_pi_settings``: the auto host-connect path never runs
+    ``run_setup()``, so ``setup_opencode.py``'s config write doesn't happen
+    there. ``setup_opencode.py`` gates its config write on ``DATABRICKS_TOKEN``,
+    so mint an SP OAuth bearer and pass it in, then re-run the script -- single
+    source of truth for the opencode.json schema and endpoint/model resolution.
+
+    Why this matters for opencode-native: unlike Pi (whose native resolver reads
+    ``~/.omnigent/config.yaml``), opencode-native reads its provider from
+    ``agent_spec.executor.config["profile"]`` — which CoDA can't set (server-side
+    spec) — and otherwise falls back to the user's GLOBAL
+    ``~/.config/opencode/opencode.json`` (via ``maybe_merge_user_provider_config``).
+    So this global config IS the credential path for opencode-native on the host.
+    setup_opencode.py points it at the content-filter proxy (which injects a fresh
+    ~/.databrickscfg token), lists only endpoints the workspace actually serves,
+    and pins a valid default model. Idempotent; never blocks host launch.
+    """
+    try:
+        token = _sp_bearer(sp_creds)
+    except Exception as e:
+        logger.warning("could not mint SP token for opencode settings: %s", e)
+        return
+    env = os.environ.copy()
+    env["DATABRICKS_TOKEN"] = token
+    home = env.get("HOME", "/app/python/source_code")
+    local_bin = os.path.join(home, ".local", "bin")
+    if local_bin not in env.get("PATH", ""):
+        env["PATH"] = f"{local_bin}:{env.get('PATH', '')}"
+    try:
+        result = subprocess.run(
+            [sys.executable, "setup_opencode.py"],
+            env=env,
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        config = os.path.join(home, ".config", "opencode", "opencode.json")
+        logger.info(
+            "setup_opencode.py rc=%s; opencode.json exists=%s",
+            result.returncode,
+            os.path.exists(config),
+        )
+        if result.returncode != 0:
+            logger.warning(
+                "setup_opencode.py stderr=%r", (result.stderr or "").strip()[-500:]
+            )
+    except Exception as e:  # never block host launch on opencode settings
+        logger.warning("setup_opencode.py failed (non-fatal): %s", e)
+
+
 def _ensure_tmux() -> None:
     """Install a static tmux to ~/.local/bin if missing (best-effort).
 
@@ -823,6 +924,16 @@ def _supervise(
     if _pi_enabled():
         _ensure_pi()
         _ensure_pi_settings(sp_creds)
+    # OpenCode harness (host path): install the binary + write the GLOBAL
+    # ~/.config/opencode/opencode.json. opencode-native reads its provider from
+    # the agent spec's executor.config.profile (which CoDA can't set) and else
+    # falls back to this global config, so it IS opencode's credential path on
+    # the host. setup_opencode.py routes through the content-filter proxy (fresh
+    # token injected), lists only served endpoints, and pins a valid default
+    # model. Gated by ENABLE_OPENCODE, mirroring the Pi/interactive path.
+    if _opencode_enabled():
+        _ensure_opencode()
+        _ensure_opencode_settings(sp_creds)
     _ensure_tmux()
     _run_setup_once()
     # Pin omnigent's auth to the databricks host profile so the runner's native
