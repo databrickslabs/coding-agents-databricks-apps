@@ -8,10 +8,14 @@ Pi-shaped config over the existing, proven auth path.
 
 Config file: ~/.pi/agent/models.json (JSON). We configure ONLY the
 `databricks-claude` provider (Pi's optional openai/gemini providers are left
-out). Pi has NO apiKeyHelper / token-command field — `apiKey` is a static
-string, so token freshness is handled elsewhere:
-  - interactive path: cli_auth._update_pi() rewrites it on PAT rotation.
-  - host path: omnigents_host._start_pi_token_refresher() rewrites it per-TTL.
+out). Token freshness: `apiKey` is written as a `!command` that reads the
+current token from ~/.databrickscfg. Pi resolves `!`-prefixed values as shell
+commands *fresh per request* (docs/models.md: "shell commands are resolved at
+request time"), so a long-running pi always sends a live token and survives PAT
+rotation without a restart -- the rotator keeps ~/.databrickscfg current
+(writing the new PAT before revoking the old one). cli_auth._update_pi()
+therefore leaves this command in place (it only rewrites a static literal),
+mirroring how Claude's apiKeyHelper owns its own auth.
 
 Opt-out:
   Set ENABLE_PI=false in app.yaml to skip installation entirely.
@@ -141,12 +145,20 @@ if models_path.exists():
 else:
     config = {}
 
+# apiKey as a per-request shell command, NOT a static literal: pi resolves a
+# `!`-prefixed value fresh on every request, so it always reads the current
+# token from ~/.databrickscfg (which the rotator keeps live, writing the new
+# PAT before revoking the old one). This is what lets a long-running pi survive
+# PAT rotation without a restart. awk pulls the value of the [DEFAULT] `token =`
+# line; `/^token /` (trailing space) avoids matching any `token_*` key.
+api_key_command = "!awk -F'= ' '/^token /{print $2; exit}' \"$HOME/.databrickscfg\""
+
 config["model"] = f"databricks-claude/{active_model}"
 config.setdefault("providers", {})
 config["providers"]["databricks-claude"] = {
     "baseUrl": base_url,
     "api": "anthropic-messages",
-    "apiKey": auth_token,
+    "apiKey": api_key_command,
     "authHeader": True,
     "compat": {"supportsEagerToolInputStreaming": False},
     # contextWindow is explicit: Pi defaults a custom provider's model to 131072
