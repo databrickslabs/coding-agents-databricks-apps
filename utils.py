@@ -315,6 +315,37 @@ def ensure_https(url: str) -> str:
     return url
 
 
+def read_non_default_databrickscfg_sections(path: str | Path) -> str:
+    """Return every ``~/.databrickscfg`` section except ``[DEFAULT]``.
+
+    The PAT rotator owns ``[DEFAULT]`` and rewrites it on every rotation; the
+    Omnigent host appends an ``[omnigents-host]`` OAuth (M2M) profile that its
+    runners re-read from this file. Any DEFAULT-only rewrite must preserve those
+    co-owned sections, or a fresh runner (or CLI call) after the rewrite can't
+    authenticate. Both the rotator (pat_rotator.py) and the boot-time writer
+    (setup_databricks.py) call this so they honor the same contract.
+
+    Returns ``""`` when the file is absent or has no non-DEFAULT sections;
+    otherwise the preserved text wrapped in leading/trailing newlines so it can
+    be concatenated directly after a freshly built ``[DEFAULT]`` block.
+    """
+    try:
+        with open(path) as f:
+            lines = f.readlines()
+    except OSError:
+        return ""
+    out: list[str] = []
+    in_default = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_default = stripped == "[DEFAULT]"
+        if not in_default:
+            out.append(line)
+    text = "".join(out).strip()
+    return f"\n{text}\n" if text else ""
+
+
 def resolve_mlflow_experiment_id(host: str, token: str, experiment_name: str) -> str | None:
     """Look up (or create) a Databricks MLflow experiment by name and return its ID.
 

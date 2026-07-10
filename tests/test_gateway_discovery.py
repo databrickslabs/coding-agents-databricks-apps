@@ -149,6 +149,7 @@ class TestEndpointConstruction:
             "PYTHONPATH": str(SETUP_DIR),
             # Pre-resolve gateway so subprocess skips the network probe
             "_GATEWAY_RESOLVED": "",
+            "CODA_SKIP_CLAUDE_INSTALL": "true",
         }
         # Ensure DATABRICKS_GATEWAY_HOST is NOT set (test auto-discovery)
         env.pop("DATABRICKS_GATEWAY_HOST", None)

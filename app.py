@@ -22,6 +22,7 @@ import requests
 
 import app_state
 import enterprise_config
+from claude_otel import apply_claude_otel_env
 from utils import ensure_https, get_gateway_host
 from pat_rotator import PATRotator
 from telemetry import log_telemetry, set_product_info
@@ -109,6 +110,7 @@ setup_state = {
         {"id": "dbcli",     "label": "Upgrading Databricks CLI",     "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "proxy",   "label": "Starting content-filter proxy", "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "claude",     "label": "Configuring Claude CLI",       "status": "pending", "started_at": None, "completed_at": None, "error": None},
+        {"id": "pi",         "label": "Configuring Pi CLI",           "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "codex",      "label": "Configuring Codex CLI",        "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "opencode",   "label": "Configuring OpenCode CLI",     "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "gemini",     "label": "Configuring Gemini CLI",       "status": "pending", "started_at": None, "completed_at": None, "error": None},
@@ -117,6 +119,14 @@ setup_state = {
         {"id": "mlflow",     "label": "Enabling MLflow tracing",       "status": "pending", "started_at": None, "completed_at": None, "error": None},
     ]
 }
+
+# Workshop deploys (app.yaml.workshop) preload the private challenge repo at
+# container startup (spec A-R7). Register the step in the setup UI only when
+# configured so normal deploys are unaffected.
+if os.environ.get("CHALLENGE_REPO_URL"):
+    setup_state["steps"].append(
+        {"id": "challenge", "label": "Preloading challenge repo", "status": "pending", "started_at": None, "completed_at": None, "error": None}
+    )
 
 
 def _update_step(step_id, **kwargs):
@@ -134,6 +144,7 @@ def _get_setup_state_snapshot():
 
 # Single-user security: only the token owner can access the terminal
 app_owner = None
+_omnigent_sp_creds = None
 
 
 def _run_step(step_id, command):
@@ -181,6 +192,9 @@ def _build_terminal_shell_env(base_env: dict) -> dict:
       still work because ``~/.npmrc`` (written by
       ``enterprise_config.bootstrap``) holds the registry config — they
       just can't see the bearer token in plaintext. (F-01)
+    - ``CHALLENGE_REPO_READ_TOKEN`` — workshop-only read token for the
+      startup challenge-repo clone; must never be exposed in attendee
+      terminals.
     """
     shell_env = base_env.copy()
     shell_env["TERM"] = "xterm-256color"
@@ -191,6 +205,7 @@ def _build_terminal_shell_env(base_env: dict) -> dict:
         "DATABRICKS_TOKEN", "DATABRICKS_HOST",
         "GEMINI_API_KEY",
         "NPM_TOKEN", "UV_DEFAULT_INDEX",
+        "CHALLENGE_REPO_READ_TOKEN",
     ):
         shell_env.pop(key, None)
 
@@ -349,14 +364,22 @@ def _configure_all_cli_auth(token):
         settings = {}
 
     settings.setdefault("env", {})
-    settings["env"]["ANTHROPIC_MODEL"] = os.environ.get("ANTHROPIC_MODEL", "databricks-claude-opus-4-7")
+    settings["env"]["ANTHROPIC_MODEL"] = os.environ.get("ANTHROPIC_MODEL", "databricks-claude-opus-4-8")
     settings["env"]["ANTHROPIC_BASE_URL"] = anthropic_base_url
-    settings["env"]["ANTHROPIC_AUTH_TOKEN"] = token
-    settings["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = "databricks-claude-opus-4-7"
+    # Respect the spec-C apiKeyHelper: when it owns model auth (setup_claude.py
+    # installed the "apiKeyHelper" key), don't re-pin a static token here — the
+    # helper fetches its own per-TTL. Otherwise write the PAT as before.
+    if settings.get("apiKeyHelper"):
+        settings["env"].pop("ANTHROPIC_AUTH_TOKEN", None)
+    else:
+        settings["env"]["ANTHROPIC_AUTH_TOKEN"] = token
+    settings["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = "databricks-claude-opus-4-8"
     settings["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = "databricks-claude-sonnet-4-6"
     settings["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = "databricks-claude-haiku-4-5"
     settings["env"]["ANTHROPIC_CUSTOM_HEADERS"] = "x-databricks-use-coding-agent-mode: true"
     settings["env"]["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] = "1"
+    if apply_claude_otel_env(settings, token, databricks_host):
+        logger.info("Claude Code OTEL export configured")
 
     with open(settings_path, "w") as f:
         json.dump(settings, f, indent=2)
@@ -371,7 +394,7 @@ def _configure_all_cli_auth(token):
     # 3. Re-run Codex, OpenCode, Gemini setup scripts with token in env
     #    They are idempotent: detect CLI already installed, just write config files
     env = {**os.environ, "DATABRICKS_TOKEN": token}
-    for script in ["setup_codex.py", "setup_opencode.py", "setup_gemini.py", "setup_hermes.py"]:
+    for script in ["setup_pi.py", "setup_codex.py", "setup_opencode.py", "setup_gemini.py", "setup_hermes.py"]:
         try:
             result = subprocess.run(
                 ["uv", "run", "python", script],
@@ -414,6 +437,11 @@ def run_setup():
 
     _run_step("gh", ["bash", "install_gh.sh"])
 
+
+    # tmux — required by Omnigent's native claude/codex harnesses (they launch
+    # the agent through a local tmux terminal and refuse to start without it).
+    _run_step("tmux", ["bash", "install_tmux.sh"])
+
     # --- Upgrade Databricks CLI (runtime image ships an older version) ---
     _run_step("dbcli", ["bash", "install_databricks_cli.sh"])
 
@@ -425,6 +453,7 @@ def run_setup():
     # --- Parallel agent setup (all independent of each other) ---
     parallel_steps = [
         ("claude",     ["uv", "run", "python", "setup_claude.py"]),
+        ("pi",         ["uv", "run", "python", "setup_pi.py"]),
         ("codex",      ["uv", "run", "python", "setup_codex.py"]),
         ("opencode",   ["uv", "run", "python", "setup_opencode.py"]),
         ("gemini",     ["uv", "run", "python", "setup_gemini.py"]),
@@ -976,6 +1005,76 @@ def get_version():
     return jsonify({"version": APP_VERSION})
 
 
+@app.route("/api/omnigents-status")
+def omnigents_status():
+    """Report Omnigents host-integration state (FR-9 observability)."""
+    from omnigents_host import get_status
+    return jsonify(get_status())
+
+
+@app.route("/api/omnigent-host/status")
+def omnigent_host_status():
+    """Report runtime Omnigent host state."""
+    from omnigents_host import get_status
+    return jsonify(get_status())
+
+
+@app.route("/api/omnigent-host/connect", methods=["POST"])
+def omnigent_host_connect():
+    """Start a runtime Omnigent host tunnel for a supplied server URL."""
+    data = request.get_json(silent=True) or {}
+    server_url = (data.get("server_url") or "").strip()
+    if not server_url:
+        return jsonify({"error": "server_url required"}), 400
+
+    from omnigents_host import connect_host
+    ok, status = connect_host(server_url, _omnigent_sp_creds)
+    if not ok:
+        code = 409 if status.get("last_error") == "host already running" else 400
+        return jsonify(status), code
+    return jsonify(status)
+
+
+@app.route("/api/omnigent-host/disconnect", methods=["POST"])
+def omnigent_host_disconnect():
+    """Stop the active runtime Omnigent host tunnel, if any."""
+    from omnigents_host import disconnect_host
+    return jsonify(disconnect_host())
+
+
+@app.route("/api/omnigent-host/share", methods=["POST"])
+def omnigent_host_share():
+    """Share this SP-owned host with the app owner so it shows in their picker.
+
+    The host is owned by the app SP, so the operator's personal Omnigent UI
+    can't see it until the owner (SP) grants them ``use``. This issues that
+    grant — and optionally launches a runner — using the captured SP creds.
+    Owner-gated identically to configure-pat: only the resolved app owner may
+    invoke it, since it acts with the SP's authority.
+    """
+    if _is_databricks_apps() and app_owner:
+        if get_request_user() != app_owner:
+            return jsonify({"error": "Forbidden"}), 403
+
+    from omnigents_host import get_status
+    server_url = os.environ.get("OMNIGENTS_SERVER_URL", "").strip() or str(
+        get_status().get("server_url") or ""
+    ).strip()
+    if not server_url:
+        return jsonify({"error": "no server_url; connect the host first"}), 400
+
+    grant_user = get_request_user() or app_owner
+    if not grant_user:
+        return jsonify({"error": "could not resolve a user to grant"}), 400
+
+    data = request.get_json(silent=True) or {}
+    launch = bool(data.get("launch", True))
+
+    from omnigents_host import share_and_launch
+    result = share_and_launch(server_url, _omnigent_sp_creds, grant_user, launch=launch)
+    return jsonify(result), (200 if result.get("ok") else 502)
+
+
 @app.route("/api/pat-status")
 def pat_status():
     """Check if a valid, usable PAT is configured."""
@@ -1091,9 +1190,9 @@ def create_session():
     try:
         master_fd, slave_fd = pty.openpty()
         # Set up environment for the shell — strips PAT, SP creds, registry
-        # tokens, and other secrets that must not be readable from the
-        # user's terminal. See _build_terminal_shell_env docstring for the
-        # full list.
+        # tokens, the workshop challenge-repo token, and other secrets that
+        # must not be readable from the user's terminal. See
+        # _build_terminal_shell_env docstring for the full list.
         shell_env = _build_terminal_shell_env(os.environ)
         # Ensure HOME is set correctly
         if not shell_env.get("HOME") or shell_env["HOME"] == "/":
@@ -1105,6 +1204,15 @@ def create_session():
         # Start shell in ~/projects/ directory
         projects_dir = os.path.join(shell_env["HOME"], "projects")
         os.makedirs(projects_dir, exist_ok=True)
+
+        # Workshop: open the terminal directly inside the preloaded challenge
+        # repo when it exists (A-R7 — attendees start in the repo, no cd/clone).
+        challenge_url = os.environ.get("CHALLENGE_REPO_URL", "")
+        if challenge_url:
+            repo_name = os.path.basename(challenge_url.rstrip("/")).removesuffix(".git")
+            challenge_dir = os.path.join(projects_dir, repo_name)
+            if os.path.isdir(challenge_dir):
+                projects_dir = challenge_dir
 
         pid = subprocess.Popen(
             ["/bin/bash"],
@@ -1335,7 +1443,7 @@ def close_session():
 
 def initialize_app(local_dev=False):
     """One-time init: detect owner, start cleanup thread."""
-    global app_owner
+    global app_owner, _omnigent_sp_creds
 
     # Install SIGTERM handler only for gunicorn (production).
     # For local dev, SIG_DFL is fine — the process just exits cleanly.
@@ -1343,6 +1451,12 @@ def initialize_app(local_dev=False):
         signal.signal(signal.SIGTERM, handle_sigterm)
 
     # SP credentials preserved — needed for Apps API (owner resolution) and secret persistence
+
+    # Capture the app SP's M2M OAuth creds BEFORE the strip below — the
+    # Omnigents host tunnel needs an OAuth token (the Apps proxy rejects PATs).
+    # No-op / returns None when disabled or creds absent. See omnigents_host.py.
+    from omnigents_host import capture_sp_credentials, start_host
+    _omnigent_sp_creds = capture_sp_credentials()
 
     # Resolve owner: Apps API (app.creator via SP) > PAT (current_user.me)
     app_owner = get_token_owner()
@@ -1358,6 +1472,20 @@ def initialize_app(local_dev=False):
     os.environ.pop("DATABRICKS_CLIENT_ID", None)
     os.environ.pop("DATABRICKS_CLIENT_SECRET", None)
     logger.info("SP credentials stripped — PAT-only auth from this point")
+
+    # Register as an Omnigents host (no-op unless OMNIGENTS_SERVER_URL is set).
+    # Uses the SP creds captured above to mint OAuth for the host tunnel; the
+    # spawned runner uses CoDA's PAT + AI-Gateway creds for the actual coding.
+    start_host(_omnigent_sp_creds)
+
+    # Workshop: preload the private challenge repo at container startup (A-R7).
+    # The read token comes from app.yaml env (secret valueFrom), so this does
+    # not wait for PAT setup. Background thread — never blocks app boot.
+    if os.environ.get("CHALLENGE_REPO_URL"):
+        threading.Thread(
+            target=_run_step, args=("challenge", ["bash", "install_challenge_repo.sh"]),
+            daemon=True, name="challenge-preload",
+        ).start()
 
     # Telemetry: app startup ping (fire-and-forget in background thread)
     log_telemetry("event", "app_startup")

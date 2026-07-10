@@ -14,7 +14,7 @@ import logging
 import requests
 
 import app_state
-from utils import ensure_https
+from utils import ensure_https, read_non_default_databrickscfg_sections
 
 logger = logging.getLogger(__name__)
 
@@ -235,16 +235,37 @@ class PATRotator:
         logger.info("PAT rotated: all CLIs updated")
 
     def _write_databrickscfg(self, token):
-        """Write token to ~/.databrickscfg for CLI/SDK tools."""
-        content = (
+        """Write token to ~/.databrickscfg for CLI/SDK tools.
+
+        Rewrites ONLY the ``[DEFAULT]`` section and preserves every other
+        profile. The Omnigent host appends an ``[omnigents-host]`` OAuth (M2M)
+        profile that its spawned runners resolve from this file (a fresh runner
+        process has no in-memory SDK token cache, so it re-reads the file every
+        time). A naive ``open(..., "w")`` that emitted only ``[DEFAULT]`` wiped
+        that block on each rotation, so runners spawned after the first rotation
+        failed to authenticate their tunnel (302 -> OIDC login). Keep all
+        non-DEFAULT sections so co-owned profiles survive rotation.
+        """
+        default_block = (
             "[DEFAULT]\n"
             f"host = {self._host}\n"
             f"token = {token}\n"
         )
+        preserved = self._read_non_default_sections()
+        content = default_block + preserved
         try:
             with open(self._databrickscfg_path, "w") as f:
                 f.write(content)
             os.chmod(self._databrickscfg_path, 0o600)
         except OSError as e:
             logger.warning(f"Could not write .databrickscfg: {e}")
+
+    def _read_non_default_sections(self):
+        """Preserve co-owned ~/.databrickscfg sections across a DEFAULT rewrite.
+
+        Delegates to the shared helper so the rotator and setup_databricks.py
+        honor one "own only [DEFAULT]" contract (see
+        utils.read_non_default_databrickscfg_sections).
+        """
+        return read_non_default_databrickscfg_sections(self._databrickscfg_path)
 

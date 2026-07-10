@@ -9,6 +9,8 @@ import os
 import re
 import logging
 
+from claude_otel import refresh_claude_otel_token
+
 logger = logging.getLogger(__name__)
 
 _HOME = os.environ.get("HOME", "/app/python/source_code")
@@ -19,6 +21,7 @@ if not _HOME or _HOME == "/":
 def update_cli_tokens(token):
     """Update the literal token in all CLI config files."""
     _update_claude(token)
+    _update_pi(token)
     _update_codex(token)
     _update_opencode(token)
     _update_gemini(token)
@@ -26,15 +29,45 @@ def update_cli_tokens(token):
 
 
 def _update_claude(token):
-    """Update ANTHROPIC_AUTH_TOKEN in ~/.claude/settings.json."""
+    """Update Claude tokens in ~/.claude/settings.json."""
     path = os.path.join(_HOME, ".claude", "settings.json")
     try:
         with open(path) as f:
             settings = json.load(f)
+        changed = False
+        # Only refresh a *static* token if one is present. When the spec-C
+        # apiKeyHelper owns model auth, this key is absent and the rotator
+        # leaves it alone — Claude fetches its own token per-TTL. The OTEL
+        # refresh below still runs (it authenticates the OTLP export to the
+        # workspace, a separate concern the helper does not cover).
         if "env" in settings and "ANTHROPIC_AUTH_TOKEN" in settings["env"]:
             settings["env"]["ANTHROPIC_AUTH_TOKEN"] = token
+            changed = True
+        if refresh_claude_otel_token(settings, token):
+            changed = True
+        if changed:
             with open(path, "w") as f:
                 json.dump(settings, f, indent=2)
+    except (OSError, json.JSONDecodeError):
+        pass  # file doesn't exist yet — initial setup hasn't run
+
+
+def _update_pi(token):
+    """Update the databricks-claude provider apiKey in ~/.pi/agent/models.json.
+
+    Pi's config holds a static apiKey (no apiKeyHelper), so the rotator must
+    swap it on each rotation. Mirrors _update_opencode: walk the JSON, rewrite
+    only the token, leave the rest of the config intact.
+    """
+    path = os.path.join(_HOME, ".pi", "agent", "models.json")
+    try:
+        with open(path) as f:
+            config = json.load(f)
+        provider = config.get("providers", {}).get("databricks-claude")
+        if isinstance(provider, dict) and "apiKey" in provider:
+            provider["apiKey"] = token
+            with open(path, "w") as f:
+                json.dump(config, f, indent=2)
     except (OSError, json.JSONDecodeError):
         pass  # file doesn't exist yet — initial setup hasn't run
 

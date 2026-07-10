@@ -98,6 +98,8 @@ This isn't just a terminal in the cloud. Running coding agents on Databricks giv
 
 Claude Code and Codex sessions can both be **automatically traced** to a single Databricks MLflow experiment — flip one switch to turn them on.
 
+Claude Code can also export native OpenTelemetry signals to Unity Catalog tables. Set `CLAUDE_CODE_OTEL_ENABLED=true` and `CLAUDE_CODE_OTEL_CATALOG_SCHEMA=<catalog>.<schema>` to send spans, logs, and metrics to `claude_otel_spans`, `claude_otel_logs`, and `claude_otel_metrics` in that schema. Create those three target tables before enabling the flag.
+
 ### Turning it on
 
 Set **`MLFLOW_TRACING_ENABLED=true`** in `app.yaml` (or your shell for local dev). That single variable enables tracing for both CLIs. Tracing is **off by default** to keep deploys lightweight — opt in when you want it.
@@ -303,7 +305,9 @@ Open [http://localhost:8000](http://localhost:8000) — type `claude`, `codex`, 
 | `HOME` | Yes | Set to `/app/python/source_code` in app.yaml |
 | `DATABRICKS_TOKEN` | No | Optional. If not set, the app prompts for a token on first session. Auto-rotated every 10 minutes |
 | `DATABRICKS_GATEWAY_HOST` | No | AI Gateway URL override. Auto-discovered from `DATABRICKS_WORKSPACE_ID` if unset |
-| `ANTHROPIC_MODEL` | No | Claude model name (default: `databricks-claude-opus-4-7`) |
+| `ANTHROPIC_MODEL` | No | Claude model name (default: `databricks-claude-opus-4-8`) |
+| `PI_MODEL` | No | Pi model name — same `/anthropic` gateway route as Claude (default: `databricks-claude-opus-4-8`) |
+| `ENABLE_PI` | No | Set `false` to skip installing the Pi coding agent (default: `true`) |
 | `CODEX_MODEL` | No | Codex model name (default: `databricks-gpt-5-5`) |
 | `GEMINI_MODEL` | No | Gemini model name (default: `databricks-gemini-2-5-pro`) |
 | `HERMES_MODEL` | No | Hermes model name (default: `databricks-claude-opus-4-6`) |
@@ -312,6 +316,8 @@ Open [http://localhost:8000](http://localhost:8000) — type `claude`, `codex`, 
 | `MAX_CONCURRENT_SESSIONS` | No | Cap on simultaneous PTY sessions per worker (default `5`) |
 | `CLAUDE_CODE_DISABLE_AUTO_MEMORY` | No | Pass-through to Claude Code's auto-memory feature (default `0`) |
 | `MLFLOW_TRACING_ENABLED` | No | Set to `"true"` to enable MLflow tracing for Claude, Codex, and Gemini in one switch (default `"false"`) |
+| `CLAUDE_CODE_OTEL_ENABLED` | No | Set to `"true"` to enable Claude Code OTEL export to Unity Catalog (default `"false"`) |
+| `CLAUDE_CODE_OTEL_CATALOG_SCHEMA` | No | Target `<catalog>.<schema>` for `claude_otel_spans`, `claude_otel_logs`, and `claude_otel_metrics` |
 | `DEEPWIKI_MCP_URL` | No | Override or disable the DeepWiki MCP server (set to `""` to remove) |
 | `EXA_MCP_URL` | No | Override or disable the Exa MCP server (set to `""` to remove) |
 | `TEAM_MEMORY_MCP_URL` | No | Optional shared-org-memory MCP server URL |
