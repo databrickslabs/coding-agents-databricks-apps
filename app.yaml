@@ -52,9 +52,11 @@ env:
   # Catalog. Off by default; requires CLAUDE_CODE_OTEL_CATALOG_SCHEMA pointing at
   # a <catalog>.<schema> your app SP can write to.
   - name: CLAUDE_CODE_OTEL_ENABLED
-    value: "false"
-  # - name: CLAUDE_CODE_OTEL_CATALOG_SCHEMA
-  #   value: <catalog>.<schema>
+    value: "true"
+  # Workshop telemetry schema - coda-01 app SP has USE_SCHEMA + MODIFY +
+  # SELECT + CREATE_TABLE here; OTEL export writes claude_otel_{spans,logs,metrics}.
+  - name: CLAUDE_CODE_OTEL_CATALOG_SCHEMA
+    value: edp_aisandbox_aisandbox_dev.ppcs
   - name: MAX_CONCURRENT_SESSIONS
     value: "10"
   # WORKSHOP / shared-app mode (TEMPORARY): disable the single-user owner
