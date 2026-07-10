@@ -262,10 +262,17 @@ def get_gateway_host() -> str:
     if resolved is not None:
         return resolved
 
-    # Tier 1: explicit override (trusted, no probe)
-    explicit = os.environ.get("DATABRICKS_GATEWAY_HOST", "").strip().rstrip("/")
-    if explicit:
-        return ensure_https(explicit)
+    # Tier 1: explicit override. Presence of the env var is authoritative:
+    #   - set to a URL  -> trust it, no probe.
+    #   - set but empty  -> operator is explicitly disabling the gateway; return
+    #     "" so callers use serving-endpoints. Do NOT fall through to tier 2,
+    #     which would otherwise DERIVE a gateway URL from an Azure host
+    #     (adb-{id}.…azuredatabricks.net) and probe it — reintroducing a gateway
+    #     the operator meant to turn off.
+    #   - unset entirely -> fall through to tier 2 auto-derivation.
+    if "DATABRICKS_GATEWAY_HOST" in os.environ:
+        explicit = os.environ["DATABRICKS_GATEWAY_HOST"].strip().rstrip("/")
+        return ensure_https(explicit) if explicit else ""
 
     # Tier 2: auto-construct from workspace ID and probe for reachability
     host = os.environ.get("DATABRICKS_HOST", "")
