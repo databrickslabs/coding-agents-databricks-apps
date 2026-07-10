@@ -62,10 +62,14 @@ class TestSetupPiConfig:
         provider = config["providers"]["databricks-claude"]
         assert provider["api"] == "anthropic-messages"
         assert provider["authHeader"] is True
-        assert provider["apiKey"] == "dapi_test_token"
+        # apiKey is a per-request `!command` (the shared token helper), NOT a
+        # static literal -- that's what lets a long-running pi survive PAT
+        # rotation / SP-OAuth expiry without a restart.
+        assert provider["apiKey"].startswith("!")
+        assert provider["apiKey"].endswith("anthropic-token-helper.py")
         assert provider["baseUrl"].endswith("/serving-endpoints/anthropic")
         assert provider["compat"] == {"supportsEagerToolInputStreaming": False}
-        assert provider["models"] == [{"id": "databricks-claude-opus-4-8"}]
+        assert provider["models"] == [{"id": "databricks-claude-opus-4-8", "contextWindow": 1000000}]
 
     def test_models_json_is_chmod_600(self, tmp_path):
         _seed_fake_pi_binary(tmp_path)
