@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import shutil
 import subprocess
@@ -61,24 +62,29 @@ def _sp_oauth_token():
     try:
         from databricks.sdk.core import Config
     except ImportError:
-        # Claude Code invokes this via a bare python3 (e.g. /usr/bin/python3)
-        # that lacks databricks-sdk, so the import fails and the SP mint would
-        # silently fall back to a PAT (absent in the host/SP context) -> empty
-        # token -> gateway 401. Re-run this same file once under uv, which
-        # provisions the SDK. Must be `uv run ... python <file>` (uv's OWN
-        # managed interpreter) — `uv run --with X <external-python>` runs that
-        # external python, which still lacks the SDK.
+        # The helper is normally registered to run under the app's venv
+        # interpreter (which has databricks-sdk), so this branch shouldn't
+        # trigger. If Claude Code ever invokes it with a bare python3 that
+        # lacks the SDK, re-exec once under an interpreter that has it: prefer
+        # the recorded venv python (CODA_VENV_PYTHON), else fall back to
+        # `uv run --with databricks-sdk python` (uv's OWN managed interpreter â
+        # `uv run --with X <external-python>` would run the external python,
+        # which still lacks the SDK).
         if os.environ.get(_REEXEC_GUARD) == "1":
-            return None
-        uv = shutil.which("uv")
-        if not uv:
             return None
         env = dict(os.environ, **{_REEXEC_GUARD: "1"})
         try:
+            venv_python = os.environ.get("CODA_VENV_PYTHON")
+            if venv_python and os.path.exists(venv_python):
+                cmd = [venv_python, os.path.abspath(__file__)]
+            else:
+                uv = shutil.which("uv")
+                if not uv:
+                    return None
+                cmd = [uv, "run", "--with", "databricks-sdk", "python",
+                       os.path.abspath(__file__)]
             out = subprocess.run(
-                [uv, "run", "--with", "databricks-sdk", "python",
-                 os.path.abspath(__file__)],
-                env=env, capture_output=True, text=True, check=False,
+                cmd, env=env, capture_output=True, text=True, check=False,
             )
         except Exception:
             return None
@@ -195,9 +201,12 @@ if token:
     # standard per-user deploy is unaffected even with the flag on.
     if os.environ.get("ENABLE_SP_APIKEYHELPER", "").strip().lower() in ("true", "1", "yes"):
         helper_path = _write_apikey_helper(claude_dir)
-        # apiKeyHelper is a shell command; invoke via python3 explicitly so it
-        # doesn't depend on shebang resolution or the file's PATH.
-        settings["apiKeyHelper"] = f"python3 {helper_path}"
+        # apiKeyHelper is a shell command; invoke it with the app's own venv
+        # interpreter (dependency-complete, has databricks-sdk) so the helper
+        # never has to re-exec under `uv run` to import the SDK. Fall back to a
+        # bare python3 only if the venv interpreter is unknown.
+        helper_python = os.environ.get("CODA_VENV_PYTHON") or sys.executable or "python3"
+        settings["apiKeyHelper"] = f"{helper_python} {helper_path}"
         # SP OAuth tokens are short-lived (~1h); re-run the helper well under
         # that. Matches Omnigent's native-claude default.
         settings["env"]["CLAUDE_CODE_API_KEY_HELPER_TTL_MS"] = "900000"
