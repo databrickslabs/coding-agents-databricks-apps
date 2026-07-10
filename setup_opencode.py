@@ -15,6 +15,7 @@ import subprocess
 from pathlib import Path
 
 from utils import ensure_https, get_gateway_host, get_npm_version
+from enterprise_config import npm_env
 
 # Opt-out: allow operators to disable OpenCode bundling without removing the file.
 if os.environ.get("ENABLE_OPENCODE", "true").strip().lower() in ("false", "0", "no"):
@@ -55,7 +56,7 @@ if not opencode_bin.exists():
         result = subprocess.run(
             ["npm", "install", "-g", f"--prefix={npm_prefix}", oc_pkg],
             capture_output=True, text=True,
-            env={**os.environ, "HOME": str(home)}
+            env={**os.environ, "HOME": str(home), **npm_env()}
         )
         if result.returncode == 0 and opencode_bin.exists():
             print(f"OpenCode CLI installed to {opencode_bin}")
@@ -82,7 +83,7 @@ if not opencode_bin.exists():
     result = subprocess.run(
         ["npm", "install", "-g", f"--prefix={npm_prefix}", sdk_pkg],
         capture_output=True, text=True,
-        env={**os.environ, "HOME": str(home)}
+        env={**os.environ, "HOME": str(home), **npm_env()}
     )
     if result.returncode == 0:
         print(f"@ai-sdk/openai@{sdk_version or 'latest'} installed (Responses API support)")
