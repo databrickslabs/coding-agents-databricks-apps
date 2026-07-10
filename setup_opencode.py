@@ -154,14 +154,14 @@ if gateway_host:
                     "databricks-claude-opus-4-8": {
                         "name": "Claude Opus 4.8 (Databricks)",
                         "limit": {
-                            "context": 200000,
+                            "context": 1000000,
                             "output": 16384
                         }
                     },
                     "databricks-claude-sonnet-4-6": {
                         "name": "Claude Sonnet 4.6 (Databricks)",
                         "limit": {
-                            "context": 200000,
+                            "context": 1000000,
                             "output": 8192
                         }
                     },
@@ -227,14 +227,14 @@ else:
                     "databricks-claude-opus-4-8": {
                         "name": "Claude Opus 4.8 (Databricks)",
                         "limit": {
-                            "context": 200000,
+                            "context": 1000000,
                             "output": 16384
                         }
                     },
                     "databricks-claude-sonnet-4-6": {
                         "name": "Claude Sonnet 4.6 (Databricks)",
                         "limit": {
-                            "context": 200000,
+                            "context": 1000000,
                             "output": 8192
                         }
                     },
