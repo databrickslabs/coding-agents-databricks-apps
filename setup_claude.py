@@ -262,6 +262,52 @@ claude_bin = local_bin / "claude"
 
 if os.environ.get("CODA_SKIP_CLAUDE_INSTALL", "").lower() == "true":
     print("Claude Code CLI install skipped")
+elif os.environ.get("CLAUDE_INSTALL_METHOD", "").strip().lower() == "npm":
+    # npm install path for firewalled networks where the claude.ai installer
+    # host (or the CDN its install.sh pulls from) is blocked but the npm
+    # registry is reachable. @anthropic-ai/claude-code is the same CLI as the
+    # curl installer produces. Mirrors setup_pi.py's hardened pattern:
+    # version cooldown (get_npm_version), NPM_REGISTRY override (npm_env),
+    # retries, and loud stderr. Unlike setup_pi.py we do NOT pass
+    # --ignore-scripts: Claude Code's postinstall (node install.cjs) is what
+    # places the native binary, so skipping scripts yields no working `claude`.
+    from utils import get_npm_version
+    from enterprise_config import npm_env
+
+    CLAUDE_PACKAGE = "@anthropic-ai/claude-code"
+    npm_prefix = str(home / ".local")
+    claude_version = get_npm_version(CLAUDE_PACKAGE)
+    claude_pkg = (
+        f"{CLAUDE_PACKAGE}@{claude_version}" if claude_version
+        else f"{CLAUDE_PACKAGE}@latest"
+    )
+
+    MAX_RETRIES = 3
+    RETRY_DELAY = 5  # seconds
+    for attempt in range(1, MAX_RETRIES + 1):
+        print(f"Installing {claude_pkg} via npm (attempt {attempt}/{MAX_RETRIES})...")
+        result = subprocess.run(
+            ["npm", "install", "-g", f"--prefix={npm_prefix}", claude_pkg],
+            capture_output=True, text=True,
+            env={**os.environ, "HOME": str(home), **npm_env()},
+        )
+        if result.returncode == 0 and claude_bin.exists():
+            print(f"Claude Code CLI installed to {claude_bin}")
+            break
+        else:
+            stderr = result.stderr.strip()
+            print(f"Claude Code npm install failed (attempt {attempt}/{MAX_RETRIES}, rc={result.returncode})")
+            if stderr:
+                print(f"  stderr: {stderr[:500]}")
+            if result.stdout.strip():
+                print(f"  stdout: {result.stdout.strip()[:500]}")
+            if attempt < MAX_RETRIES:
+                import time
+                print(f"  Retrying in {RETRY_DELAY}s...")
+                time.sleep(RETRY_DELAY)
+            else:
+                print(f"ERROR: Claude Code npm install failed after {MAX_RETRIES} attempts. "
+                      f"Run manually: npm install -g --prefix=$HOME/.local {CLAUDE_PACKAGE}")
 else:
     # Honour CLAUDE_INSTALLER_URL for enterprise environments where claude.ai is
     # firewalled — defaults to the public installer when unset. The URL is
