@@ -146,12 +146,17 @@ else:
     config = {}
 
 # apiKey as a per-request shell command, NOT a static literal: pi resolves a
-# `!`-prefixed value fresh on every request, so it always reads the current
-# token from ~/.databrickscfg (which the rotator keeps live, writing the new
-# PAT before revoking the old one). This is what lets a long-running pi survive
-# PAT rotation without a restart. awk pulls the value of the [DEFAULT] `token =`
-# line; `/^token /` (trailing space) avoids matching any `token_*` key.
-api_key_command = "!awk -F'= ' '/^token /{print $2; exit}' \"$HOME/.databrickscfg\""
+# `!`-prefixed value fresh on every request. Point it at the SAME token helper
+# Claude Code uses (SP OAuth from the omnigents-host profile on the host path,
+# else the PAT from $DATABRICKS_TOKEN / ~/.databrickscfg on the interactive
+# path). Because the helper is authoritative and resolved per request, a long-
+# running pi survives PAT rotation and SP-OAuth expiry without a restart -- and
+# there is no static token in models.json for the rotator to keep fresh. Write
+# the helper here too (idempotent) so pi does not depend on setup_claude.py
+# having run first.
+from token_helper import write_token_helper, helper_command
+helper_path = write_token_helper(home / ".claude")
+api_key_command = helper_command(helper_path)
 
 config["model"] = f"databricks-claude/{active_model}"
 config.setdefault("providers", {})

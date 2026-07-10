@@ -19,9 +19,9 @@ import pytest
 
 
 def _extract_helper_source() -> str:
-    src = open("setup_claude.py").read()
-    m = re.search(r"helper_src = '''(.*?)'''", src, re.DOTALL)
-    assert m, "could not locate helper_src literal in setup_claude.py"
+    src = open("token_helper.py").read()
+    m = re.search(r"_HELPER_SRC = '''(.*?)'''", src, re.DOTALL)
+    assert m, "could not locate _HELPER_SRC literal in token_helper.py"
     return m.group(1)
 
 
