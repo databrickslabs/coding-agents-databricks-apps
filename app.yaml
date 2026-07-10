@@ -51,6 +51,15 @@ env:
   #   value: <catalog>.<schema>
   - name: MAX_CONCURRENT_SESSIONS
     value: "5"
+  # WORKSHOP / shared-app mode (TEMPORARY): disable the single-user owner
+  # binding so every attendee can use the terminal as the single injected PAT
+  # identity. Isolation then rests entirely on the UC grants of that identity —
+  # prefer a dedicated low-privilege SP token, not a personal PAT, and revoke
+  # it when the workshop ends. Only opens the terminal + WebSocket; configure-pat
+  # and omnigent-host/share stay owner-only. Remove this line to restore
+  # single-user security. See _owner_check_disabled() in app.py.
+  - name: CODA_DISABLE_OWNER_CHECK
+    value: "true"
 
   # ─── Omnigent host integration (opt-in) ──────────────────────────────────
   # Off by default. Uncomment and set OMNIGENTS_SERVER_URL to register this

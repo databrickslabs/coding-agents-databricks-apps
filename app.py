@@ -147,6 +147,22 @@ app_owner = None
 _omnigent_sp_creds = None
 
 
+def _owner_check_disabled() -> bool:
+    """True when the operator has opted OUT of the single-user owner binding.
+
+    Set CODA_DISABLE_OWNER_CHECK=true for a shared, trusted, time-boxed
+    deployment (e.g. a workshop) where every attendee drives the terminal as
+    the single injected PAT identity. This ONLY opens the terminal + WebSocket
+    auth — the owner-gated write endpoints (configure-pat, omnigent-host/share)
+    stay owner-only so an attendee can't overwrite the shared PAT or mis-grant
+    the Omnigent host. app_owner is still resolved normally, so the Omnigent
+    integration is unaffected. Off by default; fail-closed remains the norm.
+    """
+    return os.environ.get("CODA_DISABLE_OWNER_CHECK", "").strip().lower() in (
+        "true", "1", "yes"
+    )
+
+
 def _run_step(step_id, command):
     _update_step(step_id, status="running", started_at=time.time())
     try:
@@ -553,6 +569,10 @@ def check_authorization():
     Fails open only for local development.
     Fixes: https://github.com/datasciencemonkey/coding-agents-databricks-apps/issues/57
     """
+    # Shared-app opt-out (workshops): allow any authenticated proxy user.
+    if _owner_check_disabled():
+        return True, None
+
     # Fail closed on Databricks Apps if owner couldn't be resolved
     if not app_owner:
         if _is_databricks_apps():
@@ -583,6 +603,10 @@ def _check_ws_authorization():
     Fails CLOSED on Databricks Apps: if app_owner is unresolved or no user identity
     in headers, deny WebSocket access. Matches the HTTP handler's behavior exactly.
     """
+    # Shared-app opt-out (workshops): mirror check_authorization().
+    if _owner_check_disabled():
+        return True
+
     if not app_owner:
         if _is_databricks_apps():
             logger.error("SECURITY: app_owner not resolved — denying WebSocket (fail-closed)")
