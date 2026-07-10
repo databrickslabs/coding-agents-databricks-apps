@@ -193,13 +193,18 @@ if token:
     settings["env"]["ANTHROPIC_MODEL"] = active_model
     settings["env"]["ANTHROPIC_BASE_URL"] = anthropic_base_url
 
-    # Token source (spec C): by default write the static PAT. When
-    # ENABLE_SP_APIKEYHELPER is set, install an apiKeyHelper that fetches a
-    # fresh token per-TTL instead — Claude Code re-runs it on the interval
-    # below, so nothing has to rotate a static token into this file. The
-    # helper falls back to the PAT when no SP OAuth profile is present, so the
-    # standard per-user deploy is unaffected even with the flag on.
-    if os.environ.get("ENABLE_SP_APIKEYHELPER", "").strip().lower() in ("true", "1", "yes"):
+    # Token source (spec C): by default install an apiKeyHelper that fetches a
+    # fresh token per-TTL â Claude Code re-runs it on the interval below, so
+    # nothing has to rotate a static token into this file. This is the path
+    # that survives PAT rotation: a static ANTHROPIC_AUTH_TOKEN is cached by
+    # Claude Code at launch and dies when the rotator revokes the old PAT,
+    # whereas the helper pulls a live token each TTL. The helper falls back to
+    # the PAT (from $DATABRICKS_TOKEN, else ~/.databrickscfg [DEFAULT]) when no
+    # SP OAuth profile is present, so the standard per-user deploy is
+    # unaffected. Set DISABLE_SP_APIKEYHELPER=true to force the legacy
+    # static-token path (fragile across rotation â escape hatch only).
+    _disable_helper = os.environ.get("DISABLE_SP_APIKEYHELPER", "").strip().lower() in ("true", "1", "yes")
+    if not _disable_helper:
         helper_path = _write_apikey_helper(claude_dir)
         # apiKeyHelper is a shell command; invoke it with the app's own venv
         # interpreter (dependency-complete, has databricks-sdk) so the helper
