@@ -48,10 +48,15 @@ settings["env"]["MLFLOW_EXPERIMENT_NAME"] = experiment_name
 settings["env"]["OTEL_EXPORTER_OTLP_ENDPOINT"] = ""
 
 # Add Stop hook (processes full transcript at session end).
-# The hook is harmless when MLFLOW_CLAUDE_TRACING_ENABLED=false â mlflow's
-# stop_hook_handler short-circuits if tracing isn't enabled.
-# Use the app's venv interpreter (has mlflow-skinny) so the hook doesn't
-# depend on `uv run` re-resolving the environment on every session end.
+#
+# ⚠️ MLflow 3.14 migration: the Python `stop_hook_handler()` was DEPRECATED to a
+# no-op — it prints "MLflow Claude tracing has moved to the marketplace plugin
+# runtime" and writes NO trace. Tracing is now driven by the MLflow Claude
+# *plugin*, installed via `mlflow autolog claude`. We therefore (a) keep writing
+# the legacy Stop hook for older mlflow builds (harmless no-op on 3.14+), AND
+# (b) when tracing is enabled, install the plugin so 3.14+ actually traces.
+# Verified 2026-07-10: after `mlflow autolog claude`, a live `claude` session's
+# trace lands in the experiment; the bare Stop hook alone does not.
 python_cmd = os.environ.get("CODA_VENV_PYTHON") or sys.executable or "python3"
 mlflow_hook = {
     "hooks": [
@@ -75,6 +80,30 @@ existing_hooks["Stop"] = stop_hooks
 settings["hooks"] = existing_hooks
 
 settings_path.write_text(json.dumps(settings, indent=2))
+
+# Install the MLflow Claude plugin (the real tracing path on mlflow 3.14+).
+# Resolve the experiment id from the name so the plugin logs to the right place.
+# Best-effort: never fail app startup if the plugin/CLI isn't available.
+if tracing_enabled:
+    import subprocess
+    try:
+        cmd = [
+            python_cmd, "-m", "mlflow", "autolog", "claude",
+            "-u", "databricks",
+            "-n", experiment_name,
+            "-d", os.getcwd(),
+            "-y",
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if r.returncode == 0:
+            print("MLflow Claude plugin installed (mlflow autolog claude)")
+        else:
+            print(f"MLflow Claude plugin setup returned {r.returncode}: "
+                  f"{(r.stderr or r.stdout).strip()[:300]}")
+    except Exception as e:  # noqa: BLE001 — never block startup on tracing setup
+        print(f"MLflow Claude plugin setup skipped ({type(e).__name__}: {e}). "
+              f"Run manually: {python_cmd} -m mlflow autolog claude -u databricks "
+              f"-n '{experiment_name}' -y")
 print(f"MLflow tracing {'ENABLED' if tracing_enabled else 'disabled'}: experiment={experiment_name}")
 print(f"  Tracking URI: databricks")
 print(f"  Settings updated: {settings_path}")
