@@ -2,7 +2,7 @@
 
 Agent guidance for this repo lives in one canonical file:
 
-**→ [`.agents/instructions.md`](.agents/instructions.md)**
+**→ [`docs/agent-instructions.md`](docs/agent-instructions.md)**
 
 Read it before doing anything. It covers the **ephemeral-environment rules
 (commit small + often, verify sync, restore from Workspace, never move `.git`)**,
