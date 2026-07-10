@@ -61,30 +61,30 @@ env:
   - name: CODA_DISABLE_OWNER_CHECK
     value: "true"
 
-  # ─── Omnigent host integration (opt-in) ──────────────────────────────────
-  # Off by default. Uncomment and set OMNIGENTS_SERVER_URL to register this
-  # app as a persistent Omnigent host on boot: initialize_app() -> start_host()
-  # dials the server as the app SP, so the deployed app self-registers as an
-  # always-on host on every restart/redeploy. WHEEL_SPEC is the UC Volume the
-  # host CLI is installed from (needs the app SP's READ_VOLUME grant); these
-  # values are environment-specific — set them for YOUR workspace/volume.
-  # - name: OMNIGENTS_SERVER_URL
-  #   value: "https://<your-omnigent-app>.<region>.databricksapps.com"
-  # - name: OMNIGENTS_WHEEL_SPEC
-  #   value: "/Volumes/<catalog>/<schema>/artifacts/wheels"
+  # ─── Omnigent host integration ────────────────────────────────────────────
+  # Register this app as a persistent Omnigent host on boot:
+  # initialize_app() -> start_host() dials the server as the app SP, so the
+  # deployed app self-registers as an always-on host on every restart/redeploy.
+  # WHEEL_SPEC is the UC Volume the host CLI is installed from (needs the app
+  # SP's READ_VOLUME grant, granted to coda-01's SP on
+  # <catalog>.<schema>.<profile>.artifacts).
+  - name: OMNIGENTS_SERVER_URL
+    value: "https://omnigent-<workspace-id>.15.azure.databricksapps.com"
+  - name: OMNIGENTS_WHEEL_SPEC
+    value: "/Volumes/<catalog>.<schema>/<profile>/artifacts/wheels"
   # Force-reinstall the host CLI on boot so a new wheel in the UC Volume is
   # actually installed (uv tool install otherwise no-ops when the tool exists).
   # Set only while rolling out a runner build; remove once the wheel is stable.
-  # - name: OMNIGENTS_FORCE_REINSTALL
-  #   value: "1"
+  - name: OMNIGENTS_FORCE_REINSTALL
+    value: "1"
   #
-  # Claude Code fetches its gateway bearer via an apiKeyHelper that mints a
-  # fresh app-SP OAuth token per-TTL (spec C), instead of the PAT rotator
+  # Claude Code / pi fetch their gateway bearer via an apiKeyHelper that mints
+  # a fresh app-SP OAuth token per-TTL (spec C), instead of the PAT rotator
   # pushing a static token into settings.json. Requires the [omnigents-host]
   # OAuth profile, which OMNIGENTS_SERVER_URL above causes to be written; the
   # helper falls back to the PAT if it's ever absent.
-  # - name: ENABLE_SP_APIKEYHELPER
-  #   value: "true"
+  - name: ENABLE_SP_APIKEYHELPER
+    value: "true"
 
   # ─── Enterprise mode (proxy / registry redirects) ────────────────────────
   # Uncomment and set the env vars below to run CoDA in locked-down enterprise
