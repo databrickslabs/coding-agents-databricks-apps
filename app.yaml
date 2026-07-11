@@ -78,14 +78,16 @@ env:
   #       tracking on the model endpoints (enable per docs/observability).
   - name: MLFLOW_TRACING_ENABLED
     value: "true"
-  # Conservative ceiling for this box's compute (4 vCPU / 12 GB). Each session
-  # spawns a real coding-agent child (Node/Python) that can use 0.5-1.5 GB under
-  # active load; 10 concurrent sessions risks OOM (worst-case ~12 GB + base) and
-  # CPU contention that can wedge a request past gunicorn's 60s timeout. ~1
-  # session/vCPU keeps headroom. Raise only after measuring real per-session RSS
-  # on the target compute (the old "10" was an assumption, not a measurement).
+  # Browser-terminal ceiling. These are a FALLBACK: real traffic runs as
+  # Omnigent runners (see OMNIGENT_HOST_MAX_RUNNERS below), and the terminal is
+  # mainly used to debug an Omnigent problem — so keep a small reserve here and
+  # give the shared 12 GB / 4 vCPU budget to Omnigent. 2 browser + 10 host
+  # runners = 12 concurrent agents worst case, which stays inside 12 GB at a
+  # moderate ~500 MB/agent (measured: an idle pi agent is ~200 MB). Each session
+  # spawns a real coding-agent child (Node/Python). Raise from the resource
+  # pressure monitor's per-session RSS, not by guessing.
   - name: MAX_CONCURRENT_SESSIONS
-    value: "4"
+    value: "2"
   # WORKSHOP / shared-app mode (TEMPORARY): disable the single-user owner
   # binding so every attendee can use the terminal as the single injected PAT
   # identity. Isolation then rests entirely on the UC grants of that identity —
@@ -116,13 +118,16 @@ env:
   # arrive over the WSS tunnel and spawn a full agent process each, entirely
   # OUTSIDE MAX_CONCURRENT_SESSIONS (which only gates the browser terminals) —
   # so without this the two paths can together overcommit this box's 12 GB and
-  # OOM the single gunicorn worker. Budget split for 4 vCPU / 12 GB: up to 4
-  # browser sessions + 2 host runners. Read by the forked host CLI
-  # (OMNIGENT_HOST_MAX_RUNNERS -> _handle_launch backpressure); passed through
-  # by config_profile_env, which strips only Databricks auth vars. Unset/0 =
-  # unlimited. Raise once the resource-pressure monitor shows real headroom.
+  # OOM the single gunicorn worker. This is where the real traffic lives, so it
+  # gets the bulk of the budget: 10 host runners + 2 browser sessions = 12
+  # concurrent agents worst case (~6.5 GB at a moderate 500 MB/agent; CPU is
+  # 3:1 on 4 cores, tolerable for bursty agents that idle between turns). Read
+  # by the forked host CLI (OMNIGENT_HOST_MAX_RUNNERS -> _handle_launch
+  # backpressure, returns host_at_capacity past the cap); reaches the host
+  # subprocess via config_profile_env, which strips only Databricks auth vars.
+  # Unset/0 = unlimited. Raise from the resource-pressure monitor's data.
   - name: OMNIGENT_HOST_MAX_RUNNERS
-    value: "2"
+    value: "10"
   #
   # Claude Code / pi fetch their gateway bearer via an apiKeyHelper that mints
   # a fresh app-SP OAuth token per-TTL (spec C), instead of the PAT rotator
