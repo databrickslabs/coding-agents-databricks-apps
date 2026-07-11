@@ -28,12 +28,19 @@ env:
     value: "true"
   - name: ENABLE_PI
     value: "true"
+  # Codex disabled: this gateway/workspace serves no Responses-API (*-codex)
+  # model. The only GPT models here (databricks-gpt-oss-120b/20b) are
+  # chat-completions only and 400 on /responses. Re-enable when a -codex
+  # endpoint exists.
   - name: ENABLE_CODEX
-    value: "true"
+    value: "false"
   - name: ENABLE_OPENCODE
     value: "true"
+  # Gemini disabled: no Gemini model is served on this workspace (only
+  # databricks-gemma-3-12b, which the Gemini CLI's native /gemini route
+  # can't address). Re-enable when a gemini endpoint exists.
   - name: ENABLE_GEMINI
-    value: "true"
+    value: "false"
   - name: CLAUDE_CODE_DISABLE_AUTO_MEMORY
     value: 0
   # Firewalled network: install Claude Code from the npm registry instead of the
