@@ -103,6 +103,28 @@ class PATRotator:
                 return self._current_token is None
             return (time.time() - self._last_rotation_time) > self._token_lifetime
 
+    @property
+    def seconds_since_rotation(self):
+        """Age of the current token in seconds, or None if never rotated.
+
+        Surfaced in /health so a silently-dead rotator (auth about to expire
+        while the app still looks 'healthy') is observable before every call
+        starts 401-ing ~15 min in — the suspected coda-02 failure window.
+        """
+        with self._lock:
+            if not self._last_rotation_time:
+                return None
+            return time.time() - self._last_rotation_time
+
+    @property
+    def is_alive(self):
+        """True if the background rotation thread is running.
+
+        A False here while a token is configured means rotation has stopped —
+        auth will die when the current token's lifetime elapses.
+        """
+        return bool(self._thread and self._thread.is_alive())
+
     def start(self):
         """Start the background rotation thread."""
         if not self._current_token:
