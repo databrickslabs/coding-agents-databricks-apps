@@ -47,12 +47,16 @@ env:
   # The workshop drives all agents; MLflow tracing covers every channel.
   # Trade-off: more CLIs to install at boot → slower cold start, larger
   # failure surface. Validate cold-boot on LARGE before the day (spec A-O1).
+  # Codex disabled: no Responses-API (*-codex) model on this gateway/workspace
+  # (only databricks-gpt-oss-120b/20b, chat-completions only, 400 on /responses).
   - name: ENABLE_CODEX
-    value: "true"
+    value: "false"
   - name: ENABLE_OPENCODE
     value: "true"
+  # Gemini disabled: no Gemini model served on this workspace (only
+  # databricks-gemma-3-12b, not addressable via the Gemini CLI /gemini route).
   - name: ENABLE_GEMINI
-    value: "true"
+    value: "false"
   - name: ENABLE_HERMES
     value: "true"
   - name: ENABLE_PI
