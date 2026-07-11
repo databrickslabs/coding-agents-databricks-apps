@@ -269,7 +269,7 @@ Open [http://localhost:8000](http://localhost:8000) — type `claude`, `codex`, 
 | `/api/sessions` | GET | List active (non-exited) sessions with metadata |
 | `/api/pat-status` | GET | Whether a valid, usable PAT is currently configured |
 | `/api/configure-pat` | POST | Interactive first-session PAT setup (owner-gated via SSO) |
-| `/api/inject-pat` | POST | Programmatic PAT injection for scripted provisioning (shared-secret gated; disabled unless `CODA_BOOTSTRAP_SECRET` is set) |
+| `/api/inject-pat` | POST | Programmatic PAT injection for scripted provisioning (shared-secret gated; disabled unless `CODA_BOOTSTRAP_SECRET` is set). Also requires a workspace **OAuth bearer** for the Apps edge — a PAT bearer 401s at the platform edge before reaching the app |
 | `/api/session` | POST | Create new terminal session |
 | `/api/session/attach` | POST | Reattach to an existing session (replays buffered output) |
 | `/api/input` | POST | Send input to terminal |
