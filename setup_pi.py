@@ -116,6 +116,17 @@ else:
     auth_token = token
     print(f"Using Databricks Host: {host}")
 
+# spec-D (D-R3): when OSS tracing is on, route Pi through the content-filter proxy
+# (127.0.0.1:4000) like OpenCode/Hermes, so the proxy emits a trace span per Pi
+# request. The proxy forwards to the real upstream via PROXY_UPSTREAM_BASE. Off by
+# default → Pi keeps going direct to the gateway (no behaviour change).
+if os.environ.get("MLFLOW_OSS_TRACKING_ENABLED", "false").lower() == "true":
+    proxy_port = os.environ.get("PROXY_PORT", "4000")
+    print(f"Pi routed via content-filter proxy (127.0.0.1:{proxy_port}) for tracing; "
+          f"upstream={base_url}")
+    os.environ.setdefault("PROXY_UPSTREAM_BASE", base_url)
+    base_url = f"http://127.0.0.1:{proxy_port}"
+
 # Validate the requested model against what's actually served in this geo, the
 # same way setup_claude.py does — Pi hits the identical /anthropic route, so the
 # same model chain applies. Avoids writing a model the workspace's Geo
