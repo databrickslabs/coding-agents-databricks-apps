@@ -5,10 +5,11 @@
 # For a deployed CoDA app to appear as a selectable host in the Omnigent picker,
 # its container must successfully run `omnigent host <server>`. That requires the
 # app's service principal to have BOTH:
-#   1. CAN_USE on the Omnigent server app  — or the host tunnel (WebSocket
+#   1. CAN_USE on the Omnigent server app  â or the host tunnel (WebSocket
 #      upgrade) is rejected and the host never registers.
-#   2. READ_VOLUME on the wheel volume      — or the container can't download the
-#      `omnigent` CLI wheel (OMNIGENTS_WHEEL_SPEC) and can't even dial.
+#   2. READ_VOLUME + WRITE_VOLUME on the wheel volume â READ so the container can
+#      download the `omnigent` CLI wheel (OMNIGENTS_WHEEL_SPEC), WRITE so the app
+#      SP can publish/update wheels (and other artifacts) into the same volume.
 #
 # A Databricks App runs as its own service principal with ZERO ambient UC/app
 # privileges, so both grants are explicit and one-time (persist across redeploys).
@@ -85,19 +86,26 @@ else
   echo "    granted CAN_USE"
 fi
 
-# ---- Grant 2: READ_VOLUME on the wheel volume -----------------------------
-echo "==> Grant 2: READ_VOLUME on volume '$WHEEL_VOLUME'"
-HAS_READ=$("${DBX[@]}" grants get volume "$WHEEL_VOLUME" --output json 2>/dev/null \
+# ---- Grant 2: READ_VOLUME + WRITE_VOLUME on the wheel volume ---------------
+echo "==> Grant 2: READ_VOLUME + WRITE_VOLUME on volume '$WHEEL_VOLUME'"
+MISSING=$("${DBX[@]}" grants get volume "$WHEEL_VOLUME" --output json 2>/dev/null \
   | CODA_SP="$CODA_SP" python3 -c "
 import os,sys,json
 d=json.load(sys.stdin); sp=os.environ['CODA_SP']
-print('yes' if any(sp in a.get('principal','') and 'READ_VOLUME' in a.get('privileges',[]) for a in d.get('privilege_assignments',[])) else 'no')")
-if [[ "$HAS_READ" == "yes" ]]; then
-  echo "    already granted — skipping"
+have=set()
+for a in d.get('privilege_assignments',[]):
+    if sp in a.get('principal',''):
+        have.update(a.get('privileges',[]))
+missing=[p for p in ('READ_VOLUME','WRITE_VOLUME') if p not in have]
+print(','.join(missing))")
+if [[ -z "$MISSING" ]]; then
+  echo "    already granted Ã¢ skipping"
 else
-  "${DBX[@]}" grants update volume "$WHEEL_VOLUME" \
-    --json "{\"changes\":[{\"principal\":\"$CODA_SP\",\"add\":[\"READ_VOLUME\"]}]}" >/dev/null
-  echo "    granted READ_VOLUME"
+  ADD_JSON=$(CODA_SP="$CODA_SP" MISSING="$MISSING" python3 -c "
+import os,json
+print(json.dumps({'changes':[{'principal':os.environ['CODA_SP'],'add':os.environ['MISSING'].split(',')}]}))")
+  "${DBX[@]}" grants update volume "$WHEEL_VOLUME" --json "$ADD_JSON" >/dev/null
+  echo "    granted $MISSING"
 fi
 
 # ---- Verify ---------------------------------------------------------------
@@ -111,10 +119,16 @@ FINAL_READ=$("${DBX[@]}" grants get volume "$WHEEL_VOLUME" --output json 2>/dev/
   | CODA_SP="$CODA_SP" python3 -c "
 import os,sys,json
 d=json.load(sys.stdin); sp=os.environ['CODA_SP']
-print('READ_VOLUME=yes' if any(sp in a.get('principal','') and 'READ_VOLUME' in a.get('privileges',[]) for a in d.get('privilege_assignments',[])) else 'READ_VOLUME=NO')")
+have=set()
+for a in d.get('privilege_assignments',[]):
+    if sp in a.get('principal',''):
+        have.update(a.get('privileges',[]))
+print('READ_VOLUME=%s WRITE_VOLUME=%s' % (
+    'yes' if 'READ_VOLUME' in have else 'NO',
+    'yes' if 'WRITE_VOLUME' in have else 'NO'))")
 echo "    $FINAL_USE  $FINAL_READ"
 
-if [[ "$FINAL_USE" == *=yes && "$FINAL_READ" == *=yes ]]; then
+if [[ "$FINAL_USE" == *=yes && "$FINAL_READ" == *"READ_VOLUME=yes"* && "$FINAL_READ" == *"WRITE_VOLUME=yes"* ]]; then
   echo "==> Done. '$CODA_APP' can now register as a host on '$SERVER_APP'."
   echo "    Trigger the connect from the CoDA app UI/API, then it should appear in the Omnigent picker."
 else

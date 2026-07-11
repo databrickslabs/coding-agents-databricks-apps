@@ -42,12 +42,13 @@ env:
   # keeps the curl claude.ai path.
   - name: CLAUDE_INSTALL_METHOD
     value: npm
-  # This workspace has no AI Gateway — force the legacy serving-endpoints path.
-  # Empty value skips the gateway probe and routes model calls to
-  # {DATABRICKS_HOST}/serving-endpoints. Do NOT set a non-empty value here unless
-  # the gateway actually exists (it's trusted with no reachability probe).
+  # Route all agent model calls through the Databricks AI Gateway. This value is
+  # TRUSTED (no reachability probe - see utils.get_gateway_host tier 1), so it
+  # must be a real, reachable gateway on the workspace this app deploys to:
+  # Azure workspace <workspace-id>. An empty value would skip the gateway and
+  # route model calls to {DATABRICKS_HOST}/serving-endpoints instead.
   - name: DATABRICKS_GATEWAY_HOST
-    value: ""
+    value: "https://adb-<workspace-id>.15.azuredatabricks.net/ai-gateway"
   # Set CLAUDE_CODE_OTEL_ENABLED=true to send Claude Code OTEL signals to Unity
   # Catalog. Off by default; requires CLAUDE_CODE_OTEL_CATALOG_SCHEMA pointing at
   # a <catalog>.<schema> your app SP can write to.

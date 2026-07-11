@@ -35,6 +35,14 @@ env:
     value: databricks-claude-opus-4-8
   - name: HERMES_FALLBACK_MODEL
     value: databricks-claude-opus-4-8
+  # AI Gateway: route all agent model calls through the Databricks AI Gateway.
+  # This value is TRUSTED (no reachability probe - see utils.get_gateway_host
+  # tier 1), so it must be a real, reachable gateway on the workspace these
+  # instances (coda-01..08) deploy to: Azure workspace <workspace-id>.
+  # Without this the app falls back to auto-derivation or
+  # {DATABRICKS_HOST}/serving-endpoints.
+  - name: DATABRICKS_GATEWAY_HOST
+    value: "https://adb-<workspace-id>.15.azuredatabricks.net/ai-gateway"
   # ── Full agent fleet ─────────────────────────────────────────────────────
   # The workshop drives all agents; MLflow tracing covers every channel.
   # Trade-off: more CLIs to install at boot → slower cold start, larger
@@ -120,6 +128,6 @@ env:
   # in stock Omnigent). Requires the app SP to have: CAN_USE on the server app
   # + READ_VOLUME on the wheel volume below (one-time IAM grants).
   - name: OMNIGENTS_SERVER_URL
-    value: "https://omnigent-<profile>-335310294452632.aws.databricksapps.com"
+    value: "https://omnigent-<workspace-id>.15.azure.databricksapps.com"
   - name: OMNIGENTS_WHEEL_SPEC
-    value: "/Volumes/<dev-profile>_catalog/<profile>_omnigent/artifacts/wheels"
+    value: "/Volumes/<catalog>.<schema>/<profile>/artifacts/wheels"
