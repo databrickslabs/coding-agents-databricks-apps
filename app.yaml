@@ -78,6 +78,17 @@ env:
   #       tracking on the model endpoints (enable per docs/observability).
   - name: MLFLOW_TRACING_ENABLED
     value: "true"
+  # ─── spec-B/D: route traces to the self-hosted MLflow OSS app (Lakebase) ─────
+  # For network-restricted deployments where the direct `databricks` tracking
+  # path is blocked (no zerobus/managed storage). When true, Claude Code (spec-B)
+  # and the content-filter proxy for OpenCode/Hermes/Pi (spec-D) send traces to
+  # MLFLOW_OSS_URL instead of `databricks`, authed with the app SP's M2M OAuth
+  # token. Requires the CoDA app SP to have CAN_USE on the OSS app
+  # (grant_mlflow_host.sh). Off by default elsewhere — set true only where needed.
+  - name: MLFLOW_OSS_TRACKING_ENABLED
+    value: "true"
+  - name: MLFLOW_OSS_URL
+    value: "https://coda-mlflow-oss-7405611912408878.18.azure.databricksapps.com"
   # Browser-terminal ceiling. These are a FALLBACK: real traffic runs as
   # Omnigent runners (see OMNIGENT_HOST_MAX_RUNNERS below), and the terminal is
   # mainly used to debug an Omnigent problem — so keep a small reserve here and
