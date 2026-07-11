@@ -108,3 +108,18 @@ env:
     value: "https://github.com/david-okeeffe_data/dok-sandbox"
   - name: CHALLENGE_REPO_READ_TOKEN
     valueFrom: challenge-repo-token
+  # ── Omnigent host (workshop deploys ALSO register as a host) ─────────────
+  # initialize_app() -> start_host() dials the server as the app SP and
+  # registers this app as an Omnigent host, so agents can be driven INTO the
+  # container from the Omnigent side (in addition to the browser terminal).
+  # TRADE-OFF: this couples workshop boot to the Omnigent tunnel + host-wheel
+  # install (the reason it was previously OFF, spec A-R3). Install runs on a
+  # background thread so it won't block gunicorn, but it is added surface.
+  # The host is SP-owned — driveable by the app SP (MCP/session-create); NOT
+  # visible to human operators in the Omnigent Web UI (host-sharing is a 405
+  # in stock Omnigent). Requires the app SP to have: CAN_USE on the server app
+  # + READ_VOLUME on the wheel volume below (one-time IAM grants).
+  - name: OMNIGENTS_SERVER_URL
+    value: "https://omnigent-<profile>-335310294452632.aws.databricksapps.com"
+  - name: OMNIGENTS_WHEEL_SPEC
+    value: "/Volumes/<dev-profile>_catalog/<profile>_omnigent/artifacts/wheels"
