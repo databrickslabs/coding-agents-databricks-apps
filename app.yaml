@@ -112,6 +112,17 @@ env:
   # Set only while rolling out a runner build; remove once the wheel is stable.
   - name: OMNIGENTS_FORCE_REINSTALL
     value: "1"
+  # Cap concurrent Omnigent runners this host will spawn. Omnigent sessions
+  # arrive over the WSS tunnel and spawn a full agent process each, entirely
+  # OUTSIDE MAX_CONCURRENT_SESSIONS (which only gates the browser terminals) —
+  # so without this the two paths can together overcommit this box's 12 GB and
+  # OOM the single gunicorn worker. Budget split for 4 vCPU / 12 GB: up to 4
+  # browser sessions + 2 host runners. Read by the forked host CLI
+  # (OMNIGENT_HOST_MAX_RUNNERS -> _handle_launch backpressure); passed through
+  # by config_profile_env, which strips only Databricks auth vars. Unset/0 =
+  # unlimited. Raise once the resource-pressure monitor shows real headroom.
+  - name: OMNIGENT_HOST_MAX_RUNNERS
+    value: "2"
   #
   # Claude Code / pi fetch their gateway bearer via an apiKeyHelper that mints
   # a fresh app-SP OAuth token per-TTL (spec C), instead of the PAT rotator
