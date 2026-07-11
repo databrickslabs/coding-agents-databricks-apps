@@ -1,4 +1,5 @@
 import os
+import sys
 import pty
 import fcntl
 import struct
@@ -166,6 +167,18 @@ def _owner_check_disabled() -> bool:
     )
 
 
+def _venv_python():
+    """Return the interpreter that runs the app.
+
+    On the Databricks Apps runtime gunicorn runs inside the uv-managed venv,
+    so ``sys.executable`` already has every declared dependency (including
+    databricks-sdk) importable. Invoking setup scripts with this interpreter
+    directly removes the need for ``uv run python`` (which re-resolves the
+    environment on every call and depends on ``uv`` being on PATH).
+    """
+    return sys.executable
+
+
 def _run_step(step_id, command):
     _update_step(step_id, status="running", started_at=time.time())
     try:
@@ -173,10 +186,15 @@ def _run_step(step_id, command):
         if not env.get("HOME") or env["HOME"] == "/":
             env["HOME"] = "/app/python/source_code"
         home = env.get("HOME", "/app/python/source_code")
-        # Ensure uv and other tools in ~/.local/bin are on PATH
+        # Ensure uv and other tools in ~/.local/bin are on PATH. Still needed
+        # for `uv tool install` (Hermes) and any script that shells out to uv.
         local_bin = os.path.join(home, ".local", "bin")
         if local_bin not in env.get("PATH", ""):
             env["PATH"] = f"{local_bin}:{env.get('PATH', '')}"
+        # Expose the venv interpreter so child scripts that need to re-exec a
+        # dependency-complete Python (e.g. Claude's apiKeyHelper) can use it
+        # instead of shelling out to `uv run`.
+        env.setdefault("CODA_VENV_PYTHON", _venv_python())
         env.pop("DATABRICKS_CLIENT_ID", None)
         env.pop("DATABRICKS_CLIENT_SECRET", None)
 
@@ -242,11 +260,139 @@ def _build_terminal_shell_env(base_env: dict) -> dict:
     return shell_env
 
 
+# Home-level agent context, fanned out to GEMINI.md / PI.md by the setup_*.py
+# scripts (they read this exact path). Regenerated at every boot so the
+# ephemeral-container operating rules survive a disk recycle — a hand-edited
+# ~/CLAUDE.md would not (home is not a git repo, so it is never synced).
+_HOME_CLAUDE_MD = '''# Coding Agents on Databricks (CoDA)
+
+Global operating context for every AI coding agent in this environment — Claude
+Code, Codex, Gemini CLI, Hermes Agent, OpenCode. (This file is fanned out to
+`GEMINI.md` / `PI.md` at boot, so all agents inherit what's here.)
+
+---
+
+## \u26a0\ufe0f 0. This is an EPHEMERAL container — a git commit is your only backup
+
+CoDA runs inside a Databricks App container whose disk can be recycled at any
+time (redeploy, restart, timeout, platform recycle). Local disk is scratch.
+
+A `post-commit` hook auto-syncs every repo under `~/projects/` to Databricks
+Workspace at `/Workspace/Users/{you}/projects/{repo}/`. **Nothing that isn't
+committed survives a recycle.** So:
+
+1. **Commit small and commit often.** After every self-contained change — a
+   working function, a passing test, a fixed bug — commit. Never batch a whole
+   session into one commit; a recycle mid-session loses all of it.
+2. **A commit == a backup.** The commit triggers the sync. "I'll commit at the
+   end" is how work gets lost here.
+3. **Verify the sync happened.** After committing, check `tail ~/.sync.log` for
+   a `\u2713 Synced to /Workspace/...` line. If you see `\u26a0 Sync failed`, fix it
+   before continuing — an unsynced commit is not a backup.
+4. **After a recycle, restore before new work.** If a project dir is missing or
+   stale, rehydrate it from Workspace with
+   `python /app/python/source_code/restore_from_workspace.py <repo-name>`
+   *before* rebuilding from memory.
+5. **NEVER move or import `.git` into the Workspace.** If you run
+   `databricks workspace import`, exclude `.git` — moving it corrupts the repo
+   and breaks the sync/restore round-trip. This rule has bitten people
+   repeatedly.
+
+Recovery cheat-sheet:
+```bash
+tail -n 20 ~/.sync.log                                   # did my commits sync?
+python /app/python/source_code/restore_from_workspace.py <repo-name>   # rehydrate
+python /app/python/source_code/sync_to_workspace.py "$(git rev-parse --show-toplevel)"  # manual re-sync
+```
+
+---
+
+## 1. Start every project in git
+
+Before creating any new project or docs, initialize git first — that's what
+makes the workspace backup work:
+```bash
+mkdir ~/projects/my-project && cd ~/projects/my-project && git init
+# or: git clone https://github.com/user/repo.git   (into ~/projects/)
+```
+Only repos inside `~/projects/` are synced.
+
+---
+
+## 2. Working conventions (shared)
+
+- One logical change per commit; imperative commit messages; work on a branch.
+- Make the smallest change that satisfies the task — no unrequested refactors.
+- Understand every line you submit; code review is the bottleneck.
+- Never commit secrets, `.env` files, or credentials.
+- A repo may have its own `AGENTS.md` / `CLAUDE.md` — those take precedence for
+  project-specific setup, conventions, and gotchas.
+
+---
+
+## 3. Databricks CLI
+
+Pre-configured with your credentials. Test: `databricks current-user me`.
+Authenticate with a PAT **or** a `CLIENT_ID`/`CLIENT_SECRET` pair — not both. If
+login misbehaves, unset `DATABRICKS_CLIENT_ID` + `DATABRICKS_CLIENT_SECRET` and
+retry so access is based only on the owner's credentials.
+```bash
+databricks workspace list /Workspace/Users/
+databricks jobs list
+databricks clusters list
+```
+
+---
+
+## 4. What's installed
+
+- **5 agents**: Claude Code, Codex, Gemini CLI, Hermes Agent (`hermes chat`),
+  OpenCode.
+- **Skills**: Databricks skills (ai-dev-kit) + Superpowers dev-workflow skills.
+- **MCP servers**: DeepWiki (ask any GitHub repo), Exa (web search).
+- **Micro editor**, GitHub CLI, tmux.
+
+---
+
+## 5. Architecture (one-liner)
+
+Real-time terminal I/O over WebSocket (Flask-SocketIO) with HTTP-polling
+fallback. Single gunicorn worker (PTY fds are process-local), 16 gthread
+threads. Parallel agent setup at startup via ThreadPoolExecutor.
+
+---
+
+## Credits
+- Databricks skills: [databricks-solutions/ai-dev-kit](https://github.com/databricks-solutions/ai-dev-kit)
+- Dev-workflow skills: [obra/superpowers](https://github.com/obra/superpowers)
+'''
+
+
+def _write_home_claude_md():
+    """Write the home-level CLAUDE.md that all agents inherit.
+
+    Regenerated at boot because home is not a git repo (never synced), so a
+    hand-edited copy would evaporate on the next container recycle. The
+    setup_*.py fan-out reads this exact path to derive GEMINI.md / PI.md.
+    """
+    target = "/app/python/source_code/CLAUDE.md"
+    try:
+        with open(target, "w") as f:
+            f.write(_HOME_CLAUDE_MD)
+        logger.info(f"Home-level agent context written to {target}")
+    except Exception as e:
+        logger.warning(f"Could not write home-level CLAUDE.md: {e}")
+
+
 def _setup_git_config():
     """Configure git identity and hooks by writing files directly (no subprocess)."""
     home = os.environ.get("HOME", "/app/python/source_code")
     if not home or home == "/":
         home = "/app/python/source_code"
+
+    # Regenerate the home-level agent context (all agents inherit it; fanned out
+    # to GEMINI.md / PI.md). Done here so it's refreshed on every boot/recycle.
+    _write_home_claude_md()
 
     # Get user identity from Databricks token
     user_email = None
@@ -309,12 +455,18 @@ def _setup_git_config():
         f.write('\n')
         f.write('echo "[post-commit] $(date +%H:%M:%S) syncing $REPO_ROOT" >> "$SYNC_LOG"\n')
         f.write('\n')
-        f.write('# Use uv run so sync script gets the correct Python + deps\n')
+        # Use the app's own venv interpreter (dependency-complete) so the sync
+        # script runs with the right Python + deps without shelling out to uv.
         f.write('APP_DIR="/app/python/source_code"\n')
         f.write('SYNC_SCRIPT="$APP_DIR/sync_to_workspace.py"\n')
+        f.write(f'APP_PYTHON="{_venv_python()}"\n')
+        f.write('# Fall back to uv if the recorded interpreter is missing.\n')
+        f.write('if [ ! -x "$APP_PYTHON" ]; then\n')
+        f.write('    APP_PYTHON="uv run --project $APP_DIR python"\n')
+        f.write('fi\n')
         f.write('\n')
         f.write('if [ -f "$SYNC_SCRIPT" ]; then\n')
-        f.write('    nohup uv run --project "$APP_DIR" python "$SYNC_SCRIPT" "$REPO_ROOT" >> "$SYNC_LOG" 2>&1 & disown\n')
+        f.write('    nohup $APP_PYTHON "$SYNC_SCRIPT" "$REPO_ROOT" >> "$SYNC_LOG" 2>&1 & disown\n')
         f.write('else\n')
         f.write('    echo "[post-commit] $(date +%H:%M:%S) SKIP: sync script not found" >> "$SYNC_LOG"\n')
         f.write('fi\n')
@@ -412,11 +564,12 @@ def _configure_all_cli_auth(token):
 
     # 3. Re-run Codex, OpenCode, Gemini setup scripts with token in env
     #    They are idempotent: detect CLI already installed, just write config files
-    env = {**os.environ, "DATABRICKS_TOKEN": token}
+    env = {**os.environ, "DATABRICKS_TOKEN": token,
+           "CODA_VENV_PYTHON": _venv_python()}
     for script in ["setup_pi.py", "setup_codex.py", "setup_opencode.py", "setup_gemini.py", "setup_hermes.py"]:
         try:
             result = subprocess.run(
-                ["uv", "run", "python", script],
+                [_venv_python(), script],
                 env=env, capture_output=True, text=True, timeout=60
             )
             if result.returncode == 0:
@@ -467,17 +620,18 @@ def run_setup():
     # --- Content-filter proxy (must be running before OpenCode starts) ---
     # Sanitizes requests/responses between OpenCode and Databricks
     # (see OpenCode #5028, docs/plans/2026-03-11-litellm-empty-content-blocks-design.md)
-    _run_step("proxy", ["uv", "run", "python", "setup_proxy.py"])
+    _py = _venv_python()
+    _run_step("proxy", [_py, "setup_proxy.py"])
 
     # --- Parallel agent setup (all independent of each other) ---
     parallel_steps = [
-        ("claude",     ["uv", "run", "python", "setup_claude.py"]),
-        ("pi",         ["uv", "run", "python", "setup_pi.py"]),
-        ("codex",      ["uv", "run", "python", "setup_codex.py"]),
-        ("opencode",   ["uv", "run", "python", "setup_opencode.py"]),
-        ("gemini",     ["uv", "run", "python", "setup_gemini.py"]),
-        ("hermes",     ["uv", "run", "python", "setup_hermes.py"]),
-        ("databricks", ["uv", "run", "python", "setup_databricks.py"]),
+        ("claude",     [_py, "setup_claude.py"]),
+        ("pi",         [_py, "setup_pi.py"]),
+        ("codex",      [_py, "setup_codex.py"]),
+        ("opencode",   [_py, "setup_opencode.py"]),
+        ("gemini",     [_py, "setup_gemini.py"]),
+        ("hermes",     [_py, "setup_hermes.py"]),
+        ("databricks", [_py, "setup_databricks.py"]),
     ]
 
     with ThreadPoolExecutor(max_workers=len(parallel_steps)) as executor:
@@ -490,7 +644,7 @@ def run_setup():
     # --- MLflow setup runs AFTER claude setup to avoid settings.json race ---
     # setup_mlflow.py merges env vars into ~/.claude/settings.json which
     # setup_claude.py also writes; running sequentially prevents clobbering.
-    _run_step("mlflow", ["uv", "run", "python", "setup_mlflow.py"])
+    _run_step("mlflow", [_py, "setup_mlflow.py"])
 
     # Sync latest token into all CLI configs — covers the race where PAT
     # rotation happened while a setup script was still installing (the

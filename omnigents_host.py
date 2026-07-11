@@ -30,11 +30,14 @@ import logging
 import os
 import select
 import subprocess
+import sys
 import tempfile
 import threading
 import time
 
 import yaml
+
+from utils import config_profile_env, ensure_https
 
 logger = logging.getLogger(__name__)
 
@@ -276,11 +279,13 @@ def ensure_installed(sp_creds: dict[str, str] | None = None) -> bool:
 
 
 def _ensure_https(host: str) -> str:
-    """Prefix https:// if absent — Databricks config requires the scheme."""
-    host = host.strip().rstrip("/")
-    if host and not host.startswith(("http://", "https://")):
-        return f"https://{host}"
-    return host
+    """Normalize a host and prefix https:// if absent.
+
+    Wraps the shared ``utils.ensure_https`` but first trims whitespace and a
+    trailing slash (the host/server values here arrive from env vars and config
+    that may carry either).
+    """
+    return ensure_https(host.strip().rstrip("/"))
 
 
 def capture_sp_credentials() -> dict[str, str] | None:
@@ -387,9 +392,10 @@ def _ensure_claude_settings(sp_creds: dict[str, str]) -> None:
 
     ``setup_claude.py`` gates its settings.json write on ``DATABRICKS_TOKEN``
     (used once to discover serving endpoints), so mint an SP OAuth bearer and
-    pass it in. Going forward the installed apiKeyHelper (spec C, gated on
-    ``ENABLE_SP_APIKEYHELPER``) re-mints per-TTL from the ``omnigents-host``
-    profile, so the one-shot token is only needed for the initial write.
+    pass it in. Going forward the installed apiKeyHelper (spec C, now on by
+    default) re-mints per-TTL from the ``omnigents-host`` profile, so the
+    one-shot token is only needed for the initial write. Set
+    ``DISABLE_SP_APIKEYHELPER=true`` to force the legacy static-token path.
     Idempotent; never blocks host launch on failure.
     """
     try:
@@ -399,14 +405,16 @@ def _ensure_claude_settings(sp_creds: dict[str, str]) -> None:
         return
     env = os.environ.copy()
     env["DATABRICKS_TOKEN"] = token
-    env.setdefault("ENABLE_SP_APIKEYHELPER", "true")
+    # apiKeyHelper is on by default now; nothing to enable here. (An operator
+    # can still force the legacy static-token path with DISABLE_SP_APIKEYHELPER.)
+    env.setdefault("CODA_VENV_PYTHON", sys.executable)
     home = env.get("HOME", "/app/python/source_code")
     local_bin = os.path.join(home, ".local", "bin")
     if local_bin not in env.get("PATH", ""):
         env["PATH"] = f"{local_bin}:{env.get('PATH', '')}"
     try:
         result = subprocess.run(
-            ["uv", "run", "python", "setup_claude.py"],
+            [sys.executable, "setup_claude.py"],
             env=env,
             cwd=os.path.dirname(os.path.abspath(__file__)),
             check=False,
@@ -479,10 +487,12 @@ def _ensure_pi_settings(sp_creds: dict[str, str]) -> None:
     Mirrors ``_ensure_claude_settings``: the auto host-connect path never runs
     ``run_setup()``, so ``setup_pi.py``'s config write doesn't happen there.
     ``setup_pi.py`` gates its config write on ``DATABRICKS_TOKEN``, so mint an SP
-    OAuth bearer and pass it in, then re-run the script — single source of truth
+    OAuth bearer and pass it in, then re-run the script -- single source of truth
     for the models.json schema and gateway/model resolution, exactly like Claude.
-    Pi has no apiKeyHelper, so ``_start_pi_token_refresher`` keeps the static
-    token fresh afterward. Idempotent; never blocks host launch on failure.
+    setup_pi.py writes a per-request ``!command`` apiKey that runs the shared
+    token helper (SP OAuth from the omnigents-host profile here), so there is no
+    static token to refresh afterward. Idempotent; never blocks host launch on
+    failure.
     """
     try:
         token = _sp_bearer(sp_creds)
@@ -491,13 +501,14 @@ def _ensure_pi_settings(sp_creds: dict[str, str]) -> None:
         return
     env = os.environ.copy()
     env["DATABRICKS_TOKEN"] = token
+    env.setdefault("CODA_VENV_PYTHON", sys.executable)
     home = env.get("HOME", "/app/python/source_code")
     local_bin = os.path.join(home, ".local", "bin")
     if local_bin not in env.get("PATH", ""):
         env["PATH"] = f"{local_bin}:{env.get('PATH', '')}"
     try:
         result = subprocess.run(
-            ["uv", "run", "python", "setup_pi.py"],
+            [sys.executable, "setup_pi.py"],
             env=env,
             cwd=os.path.dirname(os.path.abspath(__file__)),
             check=False,
@@ -517,6 +528,107 @@ def _ensure_pi_settings(sp_creds: dict[str, str]) -> None:
             )
     except Exception as e:  # never block host launch on pi settings
         logger.warning("setup_pi.py failed (non-fatal): %s", e)
+
+
+def _opencode_enabled() -> bool:
+    """True unless ENABLE_OPENCODE is explicitly falsey (mirrors setup_opencode.py)."""
+    return os.environ.get("ENABLE_OPENCODE", "true").strip().lower() not in (
+        "false",
+        "0",
+        "no",
+    )
+
+
+def _ensure_opencode() -> None:
+    """Install the OpenCode CLI to ~/.local/bin if missing (best-effort).
+
+    Mirrors ``_ensure_pi``: the auto host-connect path (SP creds, no PAT) never
+    runs ``run_setup()``, so ``setup_opencode.py``'s npm install doesn't happen
+    there. Install here too so the ``opencode-native`` harness resolves the
+    ``opencode`` binary on the runner's PATH. Idempotent; never blocks the host.
+    """
+    home = os.environ.get("HOME", "/app/python/source_code")
+    opencode_path = os.path.join(home, ".local", "bin", "opencode")
+    if os.path.exists(opencode_path):
+        logger.info("opencode already present at %s", opencode_path)
+        return
+    try:
+        result = subprocess.run(
+            ["npm", "install", "-g",
+             f"--prefix={os.path.join(home, '.local')}",
+             "opencode-ai"],
+            env={**os.environ, "HOME": home},
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        if result.returncode == 0 and os.path.exists(opencode_path):
+            logger.info("opencode installed to %s", opencode_path)
+        else:
+            logger.warning(
+                "opencode install did NOT land (rc=%s); the opencode-native "
+                "harness will report not-configured. stdout=%r stderr=%r",
+                result.returncode,
+                (result.stdout or "").strip()[-500:],
+                (result.stderr or "").strip()[-500:],
+            )
+    except Exception as e:  # never block host launch on opencode install
+        logger.warning("opencode install failed (non-fatal): %s", e)
+
+
+def _ensure_opencode_settings(sp_creds: dict[str, str]) -> None:
+    """Write ~/.config/opencode/opencode.json so opencode-native can auth (best-effort).
+
+    Mirrors ``_ensure_pi_settings``: the auto host-connect path never runs
+    ``run_setup()``, so ``setup_opencode.py``'s config write doesn't happen
+    there. ``setup_opencode.py`` gates its config write on ``DATABRICKS_TOKEN``,
+    so mint an SP OAuth bearer and pass it in, then re-run the script -- single
+    source of truth for the opencode.json schema and endpoint/model resolution.
+
+    Why this matters for opencode-native: unlike Pi (whose native resolver reads
+    ``~/.omnigent/config.yaml``), opencode-native reads its provider from
+    ``agent_spec.executor.config["profile"]`` — which CoDA can't set (server-side
+    spec) — and otherwise falls back to the user's GLOBAL
+    ``~/.config/opencode/opencode.json`` (via ``maybe_merge_user_provider_config``).
+    So this global config IS the credential path for opencode-native on the host.
+    setup_opencode.py points it at the content-filter proxy (which injects a fresh
+    ~/.databrickscfg token), lists only endpoints the workspace actually serves,
+    and pins a valid default model. Idempotent; never blocks host launch.
+    """
+    try:
+        token = _sp_bearer(sp_creds)
+    except Exception as e:
+        logger.warning("could not mint SP token for opencode settings: %s", e)
+        return
+    env = os.environ.copy()
+    env["DATABRICKS_TOKEN"] = token
+    home = env.get("HOME", "/app/python/source_code")
+    local_bin = os.path.join(home, ".local", "bin")
+    if local_bin not in env.get("PATH", ""):
+        env["PATH"] = f"{local_bin}:{env.get('PATH', '')}"
+    try:
+        result = subprocess.run(
+            [sys.executable, "setup_opencode.py"],
+            env=env,
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        config = os.path.join(home, ".config", "opencode", "opencode.json")
+        logger.info(
+            "setup_opencode.py rc=%s; opencode.json exists=%s",
+            result.returncode,
+            os.path.exists(config),
+        )
+        if result.returncode != 0:
+            logger.warning(
+                "setup_opencode.py stderr=%r", (result.stderr or "").strip()[-500:]
+            )
+    except Exception as e:  # never block host launch on opencode settings
+        logger.warning("setup_opencode.py failed (non-fatal): %s", e)
 
 
 def _ensure_tmux() -> None:
@@ -609,55 +721,6 @@ def _start_runner_log_tailer() -> None:
             time.sleep(1.0)
 
     threading.Thread(target=_tail, daemon=True, name="omnigent-runner-log-tail").start()
-
-
-_pi_refresher_started = False
-
-
-def _start_pi_token_refresher(sp_creds: dict[str, str]) -> None:
-    """Keep ~/.pi/agent/models.json's static apiKey fresh (best-effort).
-
-    Pi's config holds a static ``apiKey`` with no apiKeyHelper, and the host
-    path authenticates with SP OAuth tokens that expire in ~1h — so a dispatched
-    Pi session outliving the token would 401 mid-run. The PAT rotator (the
-    interactive path's freshness mechanism, via ``cli_auth._update_pi``) is not
-    active here. So re-mint on an interval well under the TTL and rewrite only
-    the token in models.json, matching how ucode keeps Pi fresh and Claude's
-    900000ms helper cadence. Idempotent (starts at most one refresher); never
-    lets an exception kill the thread.
-
-    NOTE: this only helps if a running ``pi`` re-reads models.json per request.
-    If Pi caches the apiKey at launch, only newly-spawned runners pick up the
-    new token (a long single session could still expire). Verify against the pi
-    runtime — see the plan's verification item (c).
-    """
-    global _pi_refresher_started
-    with _lock:
-        if _pi_refresher_started:
-            return
-        _pi_refresher_started = True
-
-    home = os.environ.get("HOME", "/app/python/source_code")
-    models_path = os.path.join(home, ".pi", "agent", "models.json")
-
-    def _refresh() -> None:
-        while True:
-            time.sleep(900)  # < the ~1h SP OAuth TTL; matches Claude's helper cadence
-            try:
-                token = _sp_bearer(sp_creds)
-                with open(models_path) as f:
-                    config = json.load(f)
-                provider = config.get("providers", {}).get("databricks-claude")
-                if isinstance(provider, dict) and provider.get("apiKey") != token:
-                    provider["apiKey"] = token
-                    tmp = f"{models_path}.tmp"
-                    with open(tmp, "w") as f:
-                        json.dump(config, f, indent=2)
-                    os.replace(tmp, models_path)  # atomic
-            except Exception:  # never let a refresh error take down the thread
-                pass
-
-    threading.Thread(target=_refresh, daemon=True, name="pi-token-refresh").start()
 
 
 def _run_setup_once() -> None:
@@ -756,7 +819,6 @@ def _run_host_once(server_url: str, stop_event: threading.Event | None = None) -
     # already present and get forwarded host→runner via Omnigents'
     # HARNESS_CREDENTIAL_ENV_VARS. We do NOT inject the SP secret here — the
     # host resolves it from the OAuth profile we wrote.
-    env = os.environ.copy()
     # Omnigents' token factory calls _resolve_databricks_auth() WITHOUT a
     # profile, so `--profile` is ignored for the tunnel token; it uses the
     # SDK's default resolution. Point that resolution at our M2M profile via
@@ -764,8 +826,9 @@ def _run_host_once(server_url: str, stop_event: threading.Event | None = None) -
     # would otherwise shadow the profile in the SDK's unified-auth resolution.
     # In particular DATABRICKS_WORKSPACE_ID + the DATABRICKS_APP_* vars (which
     # Apps injects) steer auth to the app's ambient identity and cause the
-    # tunnel to 302 → OIDC even with the M2M profile present. Verified: a clean
+    # tunnel to 302 â OIDC even with the M2M profile present. Verified: a clean
     # env with only the profile vars connects; leaving these in does not.
+    env = config_profile_env(_HOST_PROFILE)
     local_bin = os.path.join(home, ".local", "bin")
     if local_bin not in env.get("PATH", ""):
         env["PATH"] = f"{local_bin}:{env.get('PATH', '')}"
@@ -773,17 +836,6 @@ def _run_host_once(server_url: str, stop_event: threading.Event | None = None) -
     if stable_identity is not None:
         env.setdefault("OMNIGENT_HOST_ID", stable_identity[0])
         env.setdefault("OMNIGENT_HOST_NAME", stable_identity[1])
-    env["DATABRICKS_CONFIG_PROFILE"] = _HOST_PROFILE
-    for shadowing in (
-        "DATABRICKS_TOKEN",
-        "DATABRICKS_HOST",
-        "DATABRICKS_WORKSPACE_ID",
-        "DATABRICKS_APP_NAME",
-        "DATABRICKS_APP_URL",
-        "DATABRICKS_CLIENT_ID",
-        "DATABRICKS_CLIENT_SECRET",
-    ):
-        env.pop(shadowing, None)
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -864,12 +916,24 @@ def _supervise(
     _set(stage="configuring_harnesses")
     _ensure_claude()
     _ensure_claude_settings(sp_creds)
-    # Pi harness (host path): install the binary + write models.json, then keep
-    # its static token fresh. Gated by ENABLE_PI, mirroring the interactive path.
+    # Pi harness (host path): install the binary + write models.json. Pi's
+    # apiKey is a per-request `!command` that runs the shared token helper (SP
+    # OAuth from the omnigents-host profile here), so there is no static token
+    # to refresh -- a long-running pi resolves a live token each request. Gated
+    # by ENABLE_PI, mirroring the interactive path.
     if _pi_enabled():
         _ensure_pi()
         _ensure_pi_settings(sp_creds)
-        _start_pi_token_refresher(sp_creds)
+    # OpenCode harness (host path): install the binary + write the GLOBAL
+    # ~/.config/opencode/opencode.json. opencode-native reads its provider from
+    # the agent spec's executor.config.profile (which CoDA can't set) and else
+    # falls back to this global config, so it IS opencode's credential path on
+    # the host. setup_opencode.py routes through the content-filter proxy (fresh
+    # token injected), lists only served endpoints, and pins a valid default
+    # model. Gated by ENABLE_OPENCODE, mirroring the Pi/interactive path.
+    if _opencode_enabled():
+        _ensure_opencode()
+        _ensure_opencode_settings(sp_creds)
     _ensure_tmux()
     _run_setup_once()
     # Pin omnigent's auth to the databricks host profile so the runner's native
