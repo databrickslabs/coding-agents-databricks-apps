@@ -265,9 +265,11 @@ print('yes' if d.get('configured') and d.get('valid') else 'no')" 2>/dev/null ||
 
   # Mint a fresh bootstrap PAT tagged for this app.
   echo "    minting bootstrap PAT (lifetime=${LIFETIME}s)..."
-  TOKEN=$("${DBX[@]}" api post /api/2.0/token/create \
+  MINT=$("${DBX[@]}" api post /api/2.0/token/create \
     --json "{\"lifetime_seconds\": $LIFETIME, \"comment\": \"coda-bootstrap:$app\"}" 2>/dev/null \
-    | python3 -c "import sys,json; print(json.load(sys.stdin).get('token_value',''))" 2>/dev/null || true)
+    | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('token_value',''),d.get('token_info',{}).get('token_id',''))" 2>/dev/null || true)
+  TOKEN="${MINT%% *}"
+  TOKEN_ID="${MINT##* }"
   if [[ -z "$TOKEN" ]]; then
     echo "    ERROR: token/create failed for '$app'." >&2
     had_error=1; continue
@@ -279,6 +281,15 @@ print('yes' if d.get('configured') and d.get('valid') else 'no')" 2>/dev/null ||
   RESP=$(printf '%s' "$inj_out" | head -n1)
   BODY=$(printf '%s' "$inj_out" | tail -n +2)
 
+  # On any non-success, revoke the bootstrap PAT we just minted so a failed
+  # inject never leaves an orphan token behind. On 200 the app has already
+  # adopted+revoked it (it mints its own controlled token), so leave it be.
+  revoke_orphan() {
+    [[ -z "$TOKEN_ID" ]] && return
+    "${DBX[@]}" api post /api/2.0/token/delete --json "{\"token_id\": \"$TOKEN_ID\"}" >/dev/null 2>&1 \
+      && echo "    (revoked unused bootstrap PAT $TOKEN_ID)"
+  }
+
   case "$RESP" in
     200)
       inst=$(printf '%s' "$BODY" | python3 -c "import sys,json; print(json.load(sys.stdin).get('instance','') or '')" 2>/dev/null || true)
@@ -286,19 +297,20 @@ print('yes' if d.get('configured') and d.get('valid') else 'no')" 2>/dev/null ||
       provisioned=$((provisioned+1)) ;;
     409)
       echo "    skip: app reports a PAT already configured (409)"
+      revoke_orphan
       skipped=$((skipped+1)) ;;
     401)
       echo "    ERROR: 401 at the edge — auth principal lacks CAN_USE on '$app'." >&2
-      had_error=1 ;;
+      revoke_orphan; had_error=1 ;;
     403)
       echo "    ERROR: 403 — bad/absent bootstrap secret for '$app'." >&2
-      had_error=1 ;;
+      revoke_orphan; had_error=1 ;;
     404)
       echo "    ERROR: 404 — /api/inject-pat disabled ('$app' missing CODA_BOOTSTRAP_SECRET?)." >&2
-      had_error=1 ;;
+      revoke_orphan; had_error=1 ;;
     *)
       echo "    ERROR: unexpected response $RESP from '$app': $BODY" >&2
-      had_error=1 ;;
+      revoke_orphan; had_error=1 ;;
   esac
 done
 
