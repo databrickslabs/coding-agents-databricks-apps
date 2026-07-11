@@ -134,4 +134,4 @@ env:
   - name: OMNIGENTS_SERVER_URL
     value: "https://omnigent-<workspace-id>.15.azure.databricksapps.com"
   - name: OMNIGENTS_WHEEL_SPEC
-    value: "/Volumes/<catalog>.<schema>/<profile>/artifacts/wheels"
+    value: "/Volumes/<catalog>.<schema>/ai/omnigents/wheels"
