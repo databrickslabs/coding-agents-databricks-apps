@@ -68,18 +68,22 @@
 # safety boundary confining the token to this workspace. Pass --no-autoscope
 # to disable. Autoscope is retried-off if the workspace rejects the field.
 #
-# --scopes restricts which REST API surfaces the minted token may call
-# (platform-enforced, on top of the minting identity's own grants). Pass a
-# comma-separated list of API-scope names from the API Scopes reference, e.g.:
-#   --scopes sql,genie,unity-catalog,postgres,apps
-# A token scoped to sql,genie can hit those APIs (200) but is 403 on clusters,
-# unity-catalog, settings, etc. Omit --scopes for an unrestricted token (still
-# bounded by the identity's entitlements/grants). Common scopes:
-#   sql, genie, unity-catalog, postgres (Lakebase), apps, workspace, clusters,
-#   pipelines, jobs, files, mlflow, model-serving, secrets, dashboards.
+# API scopes restrict which REST API surfaces the minted token may call
+# (platform-enforced, on top of the minting identity's own grants).
 #
-# For a workshop, pair a purpose-built SP (entitlements/grants) with a narrow
-# --scopes so each CoDA's token can ONLY reach the surfaces the workshop uses.
+# BY DEFAULT this mints a lab-friendly token with ALL SAFE scopes and EXCLUDES
+# the dangerous ones. Excluded by default (never granted unless you ask):
+#   access-management, authentication, identity, scim, settings  (acct/ws admin)
+#   secrets            (credential exfiltration)
+#   global-init-scripts (arbitrary code on every cluster)
+#   networking          (network policy / private access)
+# Everything else (sql, genie, unity-catalog, postgres, apps, clusters, jobs,
+# pipelines, files, mlflow, model-serving, dashboards, ...) is included so the
+# agent can do real lab work without permission-debugging.
+#
+# Override the set with --scopes (comma-separated), e.g.:
+#   --scopes sql,genie,unity-catalog,postgres,apps
+# Or mint a completely unrestricted token (no scopes field) with --all-scopes.
 
 set -euo pipefail
 
@@ -90,10 +94,18 @@ APP_PREFIX=""
 LIFETIME="900"
 DRY_RUN=0
 AUTOSCOPE=1  # workspace-autoscope minted PATs by default; --no-autoscope to disable
-SCOPES=""    # optional comma-separated API scopes (e.g. sql,genie,unity-catalog,postgres,apps)
+
+# Default API scopes for lab tokens: ALL safe surfaces, minus the dangerous
+# ones. EXCLUDED (never granted by default): access-management, authentication,
+# identity, scim, settings (acct/workspace admin), secrets (credential exfil),
+# global-init-scripts (arbitrary code on all compute), networking. Override with
+# --scopes to narrow, or --all-scopes for a completely unrestricted token.
+DEFAULT_SCOPES="sql,genie,unity-catalog,postgres,workspace,apps,clusters,jobs,pipelines,files,mlflow,model-serving,dashboards,alerts,notifications,libraries,instance-pools,command-execution,environments,query-history,vector-search,ai-search,dataquality,qualitymonitor,dataclassification,tags,cleanrooms,sharing,marketplace,knowledge-assistants,supervisor-agents"
+SCOPES=""       # empty => use DEFAULT_SCOPES; set via --scopes to override
+ALL_SCOPES=0    # --all-scopes: mint unrestricted (no scopes field at all)
 
 usage() {
-  sed -n '2,82p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,86p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -106,7 +118,8 @@ while [[ $# -gt 0 ]]; do
     --lifetime)    LIFETIME="$2"; shift 2 ;;
     --autoscope)     AUTOSCOPE=1; shift ;;
     --no-autoscope)  AUTOSCOPE=0; shift ;;
-    --scopes)        SCOPES="$2"; shift 2 ;;  # comma-separated API scopes
+    --scopes)        SCOPES="$2"; shift 2 ;;  # comma-separated API scopes (override default)
+    --all-scopes)    ALL_SCOPES=1; shift ;;   # unrestricted token (omit scopes entirely)
     --dry-run)     DRY_RUN=1; shift ;;
     -h|--help)     usage 0 ;;
     *) echo "unknown arg: $1" >&2; usage 1 ;;
@@ -120,6 +133,19 @@ fi
 if [[ -z "$APPS" && -z "$APP_PREFIX" ]]; then
   echo "ERROR: provide --apps <a,b,c> or --app-prefix <prefix>." >&2
   usage 1
+fi
+
+# Resolve the effective scopes: --all-scopes wins (no scopes), else an explicit
+# --scopes, else the safe default set (all surfaces minus the dangerous ones).
+if [[ "$ALL_SCOPES" -eq 1 ]]; then
+  SCOPES=""
+  echo "==> Token scopes: ALL (unrestricted — no scopes field)"
+elif [[ -z "$SCOPES" ]]; then
+  SCOPES="$DEFAULT_SCOPES"
+  echo "==> Token scopes: default safe set (excludes access-management, scim,"
+  echo "    settings, authentication, identity, secrets, global-init-scripts, networking)"
+else
+  echo "==> Token scopes: $SCOPES"
 fi
 
 DBX=(databricks)
