@@ -305,7 +305,7 @@ Open [http://localhost:8000](http://localhost:8000) — type `claude`, `codex`, 
 |----------|----------|-------------|
 | `HOME` | Yes | Set to `/app/python/source_code` in app.yaml |
 | `DATABRICKS_TOKEN` | No | Optional. If not set, the app prompts for a token on first session (or use `/api/inject-pat`). Auto-rotated every 10 minutes |
-| `CODA_BOOTSTRAP_SECRET` | No | Enables the `/api/inject-pat` endpoint and is the shared secret required to call it. Unset ⇒ endpoint returns 404. Use a distinct secret per CoDA when provisioning many |
+| `CODA_BOOTSTRAP_SECRET` | No | Enables the `/api/inject-pat` endpoint and is the shared secret required to call it. Unset ⇒ endpoint returns 404. Use a distinct secret per CoDA when provisioning many. See `provision_coda_pats.sh` for a bulk-provisioning helper |
 | `CODA_INSTANCE_NAME` | No | Names this CoDA so auto-rotated PATs are tagged `coda-auto-rotated:<name>` (attribution when many CoDAs share one identity). Falls back to `DATABRICKS_APP_NAME`/app URL host |
 | `DATABRICKS_GATEWAY_HOST` | No | AI Gateway URL override. Auto-discovered from `DATABRICKS_WORKSPACE_ID` if unset |
 | `ANTHROPIC_MODEL` | No | Claude model name (default: `databricks-claude-opus-4-8`) |
