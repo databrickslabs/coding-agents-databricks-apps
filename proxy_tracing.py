@@ -1,0 +1,155 @@
+"""Fire-and-forget MLflow span emission for the content-filter proxy (spec-D).
+
+Traces OpenCode / Hermes / Pi — the coding agents that route model requests
+through content_filter_proxy.py (127.0.0.1:4000) but have no first-party MLflow
+hook. One span per model request, emitted on a background thread AFTER the
+response is sent, so the model call's latency is never affected (D-N1).
+
+Design constraints (spec-D):
+  - D-N1: NEVER block or slow the request path. All MLflow work runs on a bounded
+    background pool; if the queue is full or MLflow is down, the span is dropped.
+  - D-N2: streaming-safe — the caller passes the already-assembled response.
+  - D-N4: keep the proxy lightweight — mlflow import is isolated here and guarded;
+    a missing mlflow degrades to no-tracing, never a proxy crash.
+  - D-N3/D-C3: content vs metadata — full prompt/response bodies are captured ONLY
+    when PROXY_TRACE_CONTENT=true (default: metadata only).
+
+Enabled by MLFLOW_OSS_TRACKING_ENABLED=true + MLFLOW_OSS_URL (same flag as spec-B).
+Auth to the OSS app uses the app-SP M2M token (MLFLOW_TRACKING_TOKEN), set by the
+same mechanism as setup_mlflow.py.
+"""
+from __future__ import annotations
+
+import logging
+import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
+log = logging.getLogger("proxy-tracing")
+
+_ENABLED = (
+    os.environ.get("MLFLOW_OSS_TRACKING_ENABLED", "false").lower() == "true"
+    and bool(os.environ.get("MLFLOW_OSS_URL", "").strip())
+)
+_CAPTURE_CONTENT = os.environ.get("PROXY_TRACE_CONTENT", "false").lower() == "true"
+_EXPERIMENT = os.environ.get("MLFLOW_EXPERIMENT_NAME", "").strip()
+
+# Small bounded pool: span emission is I/O to the OSS server. If it saturates,
+# new spans are dropped (D-N1) rather than queued unboundedly.
+_pool: ThreadPoolExecutor | None = None
+_pool_lock = threading.Lock()
+_mlflow_ready = False
+_init_lock = threading.Lock()
+
+
+def _get_pool() -> ThreadPoolExecutor | None:
+    global _pool
+    if not _ENABLED:
+        return None
+    if _pool is None:
+        with _pool_lock:
+            if _pool is None:
+                _pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="trace")
+    return _pool
+
+
+def _ensure_mlflow():
+    """Lazily configure MLflow once, on a background thread. Returns the module or None."""
+    global _mlflow_ready
+    try:
+        import mlflow
+    except Exception:  # noqa: BLE001 — mlflow not installed → no tracing
+        return None
+    if not _mlflow_ready:
+        with _init_lock:
+            if not _mlflow_ready:
+                try:
+                    mlflow.set_tracking_uri(os.environ["MLFLOW_OSS_URL"].rstrip("/"))
+                    if _EXPERIMENT:
+                        mlflow.set_experiment(_EXPERIMENT)
+                    _mlflow_ready = True
+                except Exception as e:  # noqa: BLE001
+                    log.warning("MLflow tracing init failed (%s); disabling", e)
+                    return None
+    return mlflow
+
+
+def _agent_from_request(path: str, req: dict, headers: dict) -> str:
+    """Best-effort agent attribution (D-R2). Prefer an explicit header the CLI
+    sets; else infer from the request. Falls back to 'proxy-agent'."""
+    for h in ("x-coda-agent", "X-Coda-Agent"):
+        if headers.get(h):
+            return headers[h]
+    ua = (headers.get("user-agent") or headers.get("User-Agent") or "").lower()
+    for name in ("opencode", "hermes", "pi"):
+        if name in ua:
+            return name
+    return "proxy-agent"
+
+
+def _emit(path, req, resp, status, agent, session_id, user, project, t_start, t_end):
+    """Runs on a background thread — build + log one MLflow span."""
+    mlflow = _ensure_mlflow()
+    if mlflow is None:
+        return
+    try:
+        model = (req or {}).get("model", "unknown")
+        usage = (resp or {}).get("usage", {}) if isinstance(resp, dict) else {}
+        tags = {"agent": agent}
+        if session_id:
+            tags["session_id"] = session_id
+        if user:
+            tags["mlflow.user"] = user
+        if project:
+            tags["project"] = project
+
+        with mlflow.start_span(name=f"{agent}_request") as span:
+            # Set trace-level tags INSIDE the span so a trace is active (else they
+            # go nowhere — verified 2026-07-12). These are what the copy job and
+            # the Traces UI filter on (session grouping, agent attribution).
+            if hasattr(mlflow, "update_current_trace"):
+                mlflow.update_current_trace(tags=tags)
+            span.set_attributes({
+                "agent": agent,
+                "model": model,
+                "http.status": status,
+                "path": path,
+                "latency_ms": round((t_end - t_start) * 1000, 1),
+                "tokens.input": usage.get("input_tokens") or usage.get("prompt_tokens"),
+                "tokens.output": usage.get("output_tokens") or usage.get("completion_tokens"),
+            })
+            if _CAPTURE_CONTENT:
+                span.set_inputs({"messages": (req or {}).get("messages")})
+                span.set_outputs({"response": resp})
+            else:
+                # metadata only (D-N3): shapes, not content
+                span.set_inputs({"n_messages": len((req or {}).get("messages", []))})
+                span.set_outputs({"stop_reason": (resp or {}).get("stop_reason")})
+        try:
+            mlflow.flush_trace_async_logging(terminate=False)
+        except Exception:  # noqa: BLE001
+            pass
+    except Exception as e:  # noqa: BLE001 — a tracing failure must never surface
+        log.debug("span emit failed (%s)", e)
+
+
+def trace_request(*, path, request_body, response_body, status, headers,
+                  t_start, t_end):
+    """Fire-and-forget: schedule span emission. Returns IMMEDIATELY (D-N1).
+
+    Called by content_filter_proxy AFTER the response has been written to the
+    client, so nothing here is on the model call's critical path.
+    """
+    pool = _get_pool()
+    if pool is None:
+        return
+    agent = _agent_from_request(path, request_body or {}, headers or {})
+    # session/user/project threaded via headers the app/CLI sets (D-R4/D-O2).
+    session_id = (headers or {}).get("x-coda-session") or os.environ.get("CODA_SESSION_ID", "")
+    user = (headers or {}).get("x-forwarded-email") or os.environ.get("CODA_USER", "")
+    project = (headers or {}).get("x-coda-project") or os.environ.get("CODA_PROJECT", "")
+    try:
+        pool.submit(_emit, path, request_body, response_body, status, agent,
+                    session_id, user, project, t_start, t_end)
+    except Exception:  # noqa: BLE001 — pool rejected (saturated) → drop the span
+        pass

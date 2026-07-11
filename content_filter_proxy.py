@@ -31,6 +31,32 @@ UPSTREAM_BASE = os.environ.get("PROXY_UPSTREAM_BASE", "")
 LISTEN_HOST = os.environ.get("PROXY_HOST", "127.0.0.1")
 LISTEN_PORT = int(os.environ.get("PROXY_PORT", "4000"))
 
+
+def _trace_proxy_request(*, path, req, headers, resp_body, status, t_start):
+    """spec-D: hand the request off to proxy_tracing for a fire-and-forget span.
+
+    Fully guarded — if proxy_tracing / mlflow is unavailable or errors, the proxy
+    is unaffected (D-N4). Never on the request's critical path (called post-send).
+    """
+    try:
+        import time as _time
+
+        import proxy_tracing
+
+        resp_json = None
+        if resp_body:
+            try:
+                resp_json = json.loads(resp_body)
+            except Exception:  # noqa: BLE001
+                resp_json = None
+        proxy_tracing.trace_request(
+            path=path, request_body=req, response_body=resp_json, status=status,
+            headers={k: headers[k] for k in headers}, t_start=t_start,
+            t_end=_time.monotonic(),
+        )
+    except Exception:  # noqa: BLE001 — tracing must never break the proxy
+        pass
+
 # ---------------------------------------------------------------------------
 # Fresh token injection — survives PAT rotation
 # ---------------------------------------------------------------------------
@@ -535,6 +561,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
     """Proxy that sanitizes requests and fixes responses."""
 
     def do_POST(self):
+        import time as _time
+        _t_start = _time.monotonic()
+        _req_data = None  # parsed request, reused for tracing (spec-D)
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length)
 
@@ -543,6 +572,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         # --- Sanitize request ---
         try:
             data = json.loads(body)
+            _req_data = data  # keep for spec-D tracing
             if "messages" in data:
                 before = len(data["messages"])
                 data["messages"] = sanitize_messages(data["messages"])
@@ -609,6 +639,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 self.send_header("Content-Length", str(len(resp_body)))
                 self.end_headers()
                 self.wfile.write(resp_body)
+                # spec-D: fire-and-forget span AFTER the response is sent (D-N1).
+                _trace_proxy_request(
+                    path=self.path, req=_req_data, headers=self.headers,
+                    resp_body=resp_body, status=resp.status_code, t_start=_t_start,
+                )
                 return
 
             # --- Streaming response ---
@@ -643,6 +678,13 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
             # Send final zero-length chunk to end chunked transfer
             self._send_chunk(b"")
+
+            # spec-D: fire-and-forget span after the stream completes (D-N2).
+            # Streaming responses aren't reassembled here — emit metadata only.
+            _trace_proxy_request(
+                path=self.path, req=_req_data, headers=self.headers,
+                resp_body=None, status=resp.status_code, t_start=_t_start,
+            )
 
         except requests.exceptions.ConnectionError as e:
             self.send_error(502, f"Upstream connection failed: {e}")
