@@ -1648,6 +1648,17 @@ def initialize_app(local_dev=False):
     else:
         logger.warning("Could not determine app owner - authorization disabled")
 
+    # SP-auth workshop path: write the omnigents-host OAuth (M2M) profile at
+    # boot from the app's OWN SP creds, so token_helper._sp_oauth_token()
+    # resolves without a pasted PAT. Normally _write_oauth_profile runs only
+    # when OMNIGENTS_SERVER_URL is set (host path); the workshop app omits that
+    # var, so arm it here when ENABLE_SP_APIKEYHELPER=true. Idempotent; no-op
+    # without SP creds (local dev / per-user deploy keeps the PAT path).
+    if _omnigent_sp_creds and os.environ.get("ENABLE_SP_APIKEYHELPER", "").strip().lower() in ("true", "1", "yes"):
+        from omnigents_host import _write_oauth_profile
+        _write_oauth_profile(_omnigent_sp_creds)
+        logger.info("SP apikeyhelper: wrote omnigents-host OAuth profile at boot (no PAT paste needed)")
+
     # Strip SP credentials — only needed for owner resolution above.
     # Keeping them causes SDK to silently fall back to SP auth when PAT is dead.
     os.environ.pop("DATABRICKS_CLIENT_ID", None)
@@ -1667,6 +1678,18 @@ def initialize_app(local_dev=False):
             target=_run_step, args=("challenge", ["bash", "install_challenge_repo.sh"]),
             daemon=True, name="challenge-preload",
         ).start()
+
+    # SP-auth workshop path: when the app self-auths as its own SP (profile
+    # written above), no PAT paste will ever come — so trigger setup at boot
+    # instead of waiting for /api/configure-pat. Installs the agent CLIs and
+    # configures them against the SP OAuth token via the apiKeyHelper. Guarded
+    # on the same flag + captured creds; background thread, never blocks boot.
+    if _omnigent_sp_creds and os.environ.get("ENABLE_SP_APIKEYHELPER", "").strip().lower() in ("true", "1", "yes"):
+        with setup_lock:
+            already = setup_state["status"] in ("running", "complete")
+        if not already:
+            threading.Thread(target=run_setup, daemon=True, name="setup-thread-sp").start()
+            logger.info("SP apikeyhelper: setup triggered at boot (no PAT paste needed)")
 
     # Telemetry: app startup ping (fire-and-forget in background thread)
     log_telemetry("event", "app_startup")

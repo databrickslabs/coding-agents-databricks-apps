@@ -67,13 +67,21 @@ env:
   # validated by the day-of smoke test — A-O1/A-O2).
   - name: MAX_CONCURRENT_SESSIONS
     value: "10"
+  # ── SP self-auth (no PAT paste) ──────────────────────────────────────────
+  # The app authenticates as its OWN app service principal: at boot it writes
+  # the omnigents-host OAuth (M2M) profile from its captured SP creds, and
+  # Claude/Pi's apiKeyHelper mints a fresh SP token per-TTL from it. No human
+  # or injected PAT is ever pasted; setup also runs at boot (see
+  # initialize_app). Isolation rests on the APP SP's grants — it needs
+  # model-serving CAN_QUERY (LLM calls) and whatever UC the exercise touches.
+  - name: ENABLE_SP_APIKEYHELPER
+    value: "true"
   # ── Shared-app trust model ───────────────────────────────────────────────
-  # This is the LESS-SECURE shared box. Every attendee drives the terminal as
-  # the single injected PAT identity, so the single-user owner binding is
-  # switched OFF. Isolation then rests entirely on the UC grants of that
-  # injected identity — it MUST be a dedicated low-privilege SP token (never a
-  # personal PAT), and it MUST be revoked when the workshop ends. The
-  # owner-gated write endpoints (configure-pat, omnigent-host/share) stay
+  # LESS-SECURE shared box: the single-user owner binding is switched OFF so
+  # every attendee can drive the terminal. With SP self-auth above, they act
+  # as the app SP (not a pasted identity). Isolation rests entirely on that
+  # SP's grants — scope them to the workshop, and clean up the app afterward.
+  # The owner-gated write endpoints (configure-pat, omnigent-host/share) stay
   # owner-only even in this mode.
   - name: CODA_DISABLE_OWNER_CHECK
     value: "true"
