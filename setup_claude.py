@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import shutil
 import subprocess
@@ -21,106 +22,15 @@ _SP_PROFILE = "omnigents-host"
 
 
 def _write_apikey_helper(claude_dir: Path) -> Path:
-    """Write the executable token helper Claude Code calls per-TTL (spec C).
+    """Write the token helper Claude Code calls per-TTL (spec C).
 
-    Claude Code runs this and reads *stdout verbatim* as the bearer token, so
-    it must print the token and nothing else. Order of preference:
-      1. SP OAuth token minted via the Databricks SDK from the omnigents-host
-         M2M profile — the workshop/host path (no user PAT). Verified accepted
-         by the /anthropic gateway (C-O1, HTTP 200). Uses the SDK's
-         Config.authenticate(), NOT `databricks auth token`: the CLI verb is
-         U2M-only and hard-refuses M2M (client_id/secret) profiles. Only works
-         where the omnigents-host profile exists (host-connected instances).
-      2. The PAT from $DATABRICKS_TOKEN, else the `token =` line of the
-         [DEFAULT] profile — the standard per-user path.
-    All diagnostics go to stderr; stdout carries only the token.
+    Thin wrapper over the shared ``token_helper.write_token_helper`` so Claude
+    and Pi resolve model auth through the exact same script (SP OAuth from the
+    omnigents-host profile, else the PAT). Claude Code reads the helper's stdout
+    verbatim as the bearer token.
     """
-    helper_path = claude_dir / "anthropic-token-helper.py"
-    helper_src = '''#!/usr/bin/env python3
-"""Print a Databricks bearer token for Claude Code's apiKeyHelper (spec C).
-
-stdout MUST be the token only — Claude Code uses it verbatim.
-"""
-import configparser
-import os
-import shutil
-import subprocess
-import sys
-
-SP_PROFILE = "omnigents-host"
-# Set on the uv re-run so the child (which has the SDK) doesn't recurse.
-_REEXEC_GUARD = "OMNIGENTS_APIKEY_HELPER_REEXEC"
-
-
-def _sp_oauth_token():
-    # Mint the SP token via the SDK. The M2M (client_id/secret) profile the
-    # Omnigent host writes is NOT usable via `databricks auth token` (that CLI
-    # verb is U2M-only and refuses M2M); Config.authenticate() does the
-    # client-credentials flow. Verified accepted by /anthropic (C-O1, HTTP 200).
-    # Absent profile / non-host instance -> returns None, caller falls back.
-    try:
-        from databricks.sdk.core import Config
-    except ImportError:
-        # Claude Code invokes this via a bare python3 (e.g. /usr/bin/python3)
-        # that lacks databricks-sdk, so the import fails and the SP mint would
-        # silently fall back to a PAT (absent in the host/SP context) -> empty
-        # token -> gateway 401. Re-run this same file once under uv, which
-        # provisions the SDK. Must be `uv run ... python <file>` (uv's OWN
-        # managed interpreter) — `uv run --with X <external-python>` runs that
-        # external python, which still lacks the SDK.
-        if os.environ.get(_REEXEC_GUARD) == "1":
-            return None
-        uv = shutil.which("uv")
-        if not uv:
-            return None
-        env = dict(os.environ, **{_REEXEC_GUARD: "1"})
-        try:
-            out = subprocess.run(
-                [uv, "run", "--with", "databricks-sdk", "python",
-                 os.path.abspath(__file__)],
-                env=env, capture_output=True, text=True, check=False,
-            )
-        except Exception:
-            return None
-        return (out.stdout or "").strip() or None
-    except Exception:
-        return None
-    try:
-        headers = Config(profile=SP_PROFILE).authenticate()
-    except Exception:
-        return None
-    auth = (headers or {}).get("Authorization", "")
-    # Strip the "Bearer " prefix so stdout carries the raw token only.
-    return auth[7:].strip() if auth.startswith("Bearer ") else (auth.strip() or None)
-
-
-def _pat_token():
-    tok = os.environ.get("DATABRICKS_TOKEN", "").strip()
-    if tok:
-        return tok
-    cfg_path = os.path.expanduser("~/.databrickscfg")
-    try:
-        cp = configparser.ConfigParser()
-        cp.read(cfg_path)
-        return (cp["DEFAULT"].get("token") or "").strip() or None
-    except Exception:
-        return None
-
-
-def main():
-    token = _sp_oauth_token() or _pat_token()
-    if not token:
-        print("no token source (no SP OAuth profile, no PAT)", file=sys.stderr)
-        sys.exit(1)
-    sys.stdout.write(token)
-
-
-if __name__ == "__main__":
-    main()
-'''
-    helper_path.write_text(helper_src)
-    helper_path.chmod(0o700)
-    return helper_path
+    from token_helper import write_token_helper
+    return write_token_helper(claude_dir)
 
 # Create ~/.claude directory
 claude_dir = home / ".claude"
@@ -187,17 +97,25 @@ if token:
     settings["env"]["ANTHROPIC_MODEL"] = active_model
     settings["env"]["ANTHROPIC_BASE_URL"] = anthropic_base_url
 
-    # Token source (spec C): by default write the static PAT. When
-    # ENABLE_SP_APIKEYHELPER is set, install an apiKeyHelper that fetches a
-    # fresh token per-TTL instead — Claude Code re-runs it on the interval
-    # below, so nothing has to rotate a static token into this file. The
-    # helper falls back to the PAT when no SP OAuth profile is present, so the
-    # standard per-user deploy is unaffected even with the flag on.
-    if os.environ.get("ENABLE_SP_APIKEYHELPER", "").strip().lower() in ("true", "1", "yes"):
+    # Token source (spec C): by default install an apiKeyHelper that fetches a
+    # fresh token per-TTL -- Claude Code re-runs it on the interval below, so
+    # nothing has to rotate a static token into this file. This is the path
+    # that survives PAT rotation: a static ANTHROPIC_AUTH_TOKEN is cached by
+    # Claude Code at launch and dies when the rotator revokes the old PAT,
+    # whereas the helper pulls a live token each TTL. The helper falls back to
+    # the PAT (from $DATABRICKS_TOKEN, else ~/.databrickscfg [DEFAULT]) when no
+    # SP OAuth profile is present, so the standard per-user deploy is
+    # unaffected. Set DISABLE_SP_APIKEYHELPER=true to force the legacy
+    # static-token path (fragile across rotation -- escape hatch only).
+    _disable_helper = os.environ.get("DISABLE_SP_APIKEYHELPER", "").strip().lower() in ("true", "1", "yes")
+    if not _disable_helper:
         helper_path = _write_apikey_helper(claude_dir)
-        # apiKeyHelper is a shell command; invoke via python3 explicitly so it
-        # doesn't depend on shebang resolution or the file's PATH.
-        settings["apiKeyHelper"] = f"python3 {helper_path}"
+        # apiKeyHelper is a shell command; invoke it with the app's own venv
+        # interpreter (dependency-complete, has databricks-sdk) so the helper
+        # never has to re-exec under `uv run` to import the SDK. Fall back to a
+        # bare python3 only if the venv interpreter is unknown.
+        helper_python = os.environ.get("CODA_VENV_PYTHON") or sys.executable or "python3"
+        settings["apiKeyHelper"] = f"{helper_python} {helper_path}"
         # SP OAuth tokens are short-lived (~1h); re-run the helper well under
         # that. Matches Omnigent's native-claude default.
         settings["env"]["CLAUDE_CODE_API_KEY_HELPER_TTL_MS"] = "900000"

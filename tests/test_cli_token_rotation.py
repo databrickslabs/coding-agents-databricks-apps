@@ -102,6 +102,27 @@ class TestUpdatePi:
         assert result["providers"]["databricks-claude"]["api"] == "anthropic-messages"
         assert result["model"] == "databricks-claude/databricks-claude-opus-4-8"
 
+    def test_preserves_command_apikey(self, isolated_home):
+        """A `!command` apiKey must NOT be clobbered to a static literal.
+
+        When pi is configured to resolve its token via a shell command per
+        request (survives rotation), the rotator must leave it alone; otherwise
+        the next rotation reverts pi to the fragile cache-at-launch behavior.
+        """
+        from cli_auth import update_cli_tokens
+        pi_dir = isolated_home / ".pi" / "agent"
+        pi_dir.mkdir(parents=True)
+        cmd = "!awk -F'= ' '/^token /{print $2; exit}' \"$HOME/.databrickscfg\""
+        config = {
+            "providers": {"databricks-claude": {"apiKey": cmd, "authHeader": True}}
+        }
+        (pi_dir / "models.json").write_text(json.dumps(config))
+
+        update_cli_tokens("new-token")
+
+        result = json.loads((pi_dir / "models.json").read_text())
+        assert result["providers"]["databricks-claude"]["apiKey"] == cmd
+
     def test_skips_missing_file(self, isolated_home):
         from cli_auth import update_cli_tokens
         update_cli_tokens("new-token")

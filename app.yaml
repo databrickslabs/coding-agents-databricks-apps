@@ -22,11 +22,17 @@ env:
     value: databricks-claude-opus-4-8
   - name: HERMES_FALLBACK_MODEL
     value: databricks-claude-opus-4-8
-  # Set ENABLE_HERMES=false to skip Hermes Agent install. Other CLIs are unaffected.
+  # All agents ON for the workshop. Each ENABLE_* defaults to true; set any to
+  # "false" to skip that CLI's install (others unaffected).
   - name: ENABLE_HERMES
     value: "true"
-  # Set ENABLE_PI=false to skip installing the Pi coding agent. Other CLIs are unaffected.
   - name: ENABLE_PI
+    value: "true"
+  - name: ENABLE_CODEX
+    value: "true"
+  - name: ENABLE_OPENCODE
+    value: "true"
+  - name: ENABLE_GEMINI
     value: "true"
   - name: CLAUDE_CODE_DISABLE_AUTO_MEMORY
     value: 0
@@ -46,9 +52,24 @@ env:
   # Catalog. Off by default; requires CLAUDE_CODE_OTEL_CATALOG_SCHEMA pointing at
   # a <catalog>.<schema> your app SP can write to.
   - name: CLAUDE_CODE_OTEL_ENABLED
-    value: "false"
-  # - name: CLAUDE_CODE_OTEL_CATALOG_SCHEMA
-  #   value: <catalog>.<schema>
+    value: "true"
+  # Workshop telemetry schema - coda-01 app SP has USE_SCHEMA + MODIFY +
+  # SELECT + CREATE_TABLE here; OTEL export writes claude_otel_{spans,logs,metrics}.
+  - name: CLAUDE_CODE_OTEL_CATALOG_SCHEMA
+    value: edp_aisandbox_aisandbox_dev.ppcs
+  # ─── MLflow tracing (workshop Part 3: observability / policy / cost) ───────
+  # Master switch. When true, agent sessions are traced into the experiment
+  # /Users/{APP_OWNER}/{DATABRICKS_APP_NAME} for later analytics (harness
+  # comparison, token/cost, trace review — see ppcs-challenge Round 3).
+  #   COVERAGE (verified against the setup scripts, NOT the marketing copy):
+  #     • Claude Code — traced via Stop hook (setup_mlflow.py) AND OTEL→UC above
+  #     • Codex       — traced via @mlflow/codex notify hook (setup_codex.py)
+  #     • Gemini / Hermes / Pi / OpenCode / Omnigent host — NOT MLflow-traced
+  #       (no first-party MLflow hook exists for these CLIs yet). Their
+  #       endpoint-level usage/cost is still captured by AI Gateway usage
+  #       tracking on the model endpoints (enable per docs/observability).
+  - name: MLFLOW_TRACING_ENABLED
+    value: "true"
   - name: MAX_CONCURRENT_SESSIONS
     value: "10"
   # WORKSHOP / shared-app mode (TEMPORARY): disable the single-user owner
@@ -61,30 +82,43 @@ env:
   - name: CODA_DISABLE_OWNER_CHECK
     value: "true"
 
-  # ─── Omnigent host integration (opt-in) ──────────────────────────────────
-  # Off by default. Uncomment and set OMNIGENTS_SERVER_URL to register this
-  # app as a persistent Omnigent host on boot: initialize_app() -> start_host()
-  # dials the server as the app SP, so the deployed app self-registers as an
-  # always-on host on every restart/redeploy. WHEEL_SPEC is the UC Volume the
-  # host CLI is installed from (needs the app SP's READ_VOLUME grant); these
-  # values are environment-specific — set them for YOUR workspace/volume.
-  # - name: OMNIGENTS_SERVER_URL
-  #   value: "https://<your-omnigent-app>.<region>.databricksapps.com"
-  # - name: OMNIGENTS_WHEEL_SPEC
-  #   value: "/Volumes/<catalog>/<schema>/artifacts/wheels"
+  # ─── Omnigent host integration ────────────────────────────────────────────
+  # Register this app as a persistent Omnigent host on boot:
+  # initialize_app() -> start_host() dials the server as the app SP, so the
+  # deployed app self-registers as an always-on host on every restart/redeploy.
+  # WHEEL_SPEC is the UC Volume the host CLI is installed from (needs the app
+  # SP's READ_VOLUME grant, granted to coda-01's SP on
+  # edp_aisandbox_aisandbox_dev.daveok.artifacts).
+  - name: OMNIGENTS_SERVER_URL
+    value: "https://omnigent-7405614666872455.15.azure.databricksapps.com"
+  - name: OMNIGENTS_WHEEL_SPEC
+    value: "/Volumes/edp_aisandbox_aisandbox_dev/daveok/artifacts/wheels"
   # Force-reinstall the host CLI on boot so a new wheel in the UC Volume is
   # actually installed (uv tool install otherwise no-ops when the tool exists).
   # Set only while rolling out a runner build; remove once the wheel is stable.
-  # - name: OMNIGENTS_FORCE_REINSTALL
-  #   value: "1"
+  - name: OMNIGENTS_FORCE_REINSTALL
+    value: "1"
   #
-  # Claude Code fetches its gateway bearer via an apiKeyHelper that mints a
-  # fresh app-SP OAuth token per-TTL (spec C), instead of the PAT rotator
+  # Claude Code / pi fetch their gateway bearer via an apiKeyHelper that mints
+  # a fresh app-SP OAuth token per-TTL (spec C), instead of the PAT rotator
   # pushing a static token into settings.json. Requires the [omnigents-host]
   # OAuth profile, which OMNIGENTS_SERVER_URL above causes to be written; the
   # helper falls back to the PAT if it's ever absent.
-  # - name: ENABLE_SP_APIKEYHELPER
-  #   value: "true"
+  - name: ENABLE_SP_APIKEYHELPER
+    value: "true"
+
+  # Workshop challenge repo (A-R7)
+  # PRIVATE repo cloned from its main branch at container startup into
+  # ~/projects/<name>; the attendee terminal opens directly inside it. The read
+  # token is a repo-scoped READ-ONLY GitHub token stored in a Databricks secret
+  # and attached to the app as a secret resource named "challenge-repo-token".
+  # The token is used for the clone only and is stripped from attendee sessions.
+  # STAND-IN URL: swap for the real challenge repo (and the secret value), then
+  # redeploy. install_challenge_repo.sh no-ops if the URL is unset/placeholder.
+  - name: CHALLENGE_REPO_URL
+    value: "https://github.com/david-okeeffe_data/dok-sandbox"
+  - name: CHALLENGE_REPO_READ_TOKEN
+    valueFrom: challenge-repo-token
 
   # ─── Enterprise mode (proxy / registry redirects) ────────────────────────
   # Uncomment and set the env vars below to run CoDA in locked-down enterprise

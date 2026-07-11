@@ -322,6 +322,76 @@ def ensure_https(url: str) -> str:
     return url
 
 
+# --- Databricks unified-auth env shaping -------------------------------------
+#
+# The Databricks SDK/CLI "unified auth" resolver errors ("more than one
+# authorization method configured") when it sees more than one credential
+# source at once, and it silently prefers ambient env vars over
+# ~/.databrickscfg. Several CoDA subprocess call sites therefore have to shape
+# the child's environment to expose exactly ONE credential source. These
+# helpers centralize that shaping so the (previously duplicated, slightly
+# divergent) var lists stay in sync.
+
+# App/M2M OAuth credentials injected by the Databricks Apps runtime.
+_OAUTH_ENV_VARS = ("DATABRICKS_CLIENT_ID", "DATABRICKS_CLIENT_SECRET")
+# Everything that steers unified-auth away from an explicit config profile.
+# Includes the DATABRICKS_APP_* / WORKSPACE_ID vars Apps injects, which drive
+# auth to the app's ambient identity and cause a 302 -> OIDC loop.
+_PROFILE_SHADOWING_ENV_VARS = (
+    "DATABRICKS_TOKEN",
+    "DATABRICKS_HOST",
+    "DATABRICKS_WORKSPACE_ID",
+    "DATABRICKS_APP_NAME",
+    "DATABRICKS_APP_URL",
+    "DATABRICKS_CLIENT_ID",
+    "DATABRICKS_CLIENT_SECRET",
+)
+
+
+def pat_only_env(base_env: dict | None = None) -> dict:
+    """Return an env that forces PAT auth by neutralizing OAuth creds.
+
+    Blanks ``DATABRICKS_CLIENT_ID`` / ``DATABRICKS_CLIENT_SECRET`` (set to
+    ``""`` rather than popped, so the unified-auth resolver treats them as
+    explicitly absent) while leaving ``DATABRICKS_HOST`` / ``DATABRICKS_TOKEN``
+    in place. Use when a PAT is present in the environment and OAuth vars would
+    otherwise collide with it.
+    """
+    env = dict(base_env if base_env is not None else os.environ)
+    for key in _OAUTH_ENV_VARS:
+        env[key] = ""
+    return env
+
+
+def databrickscfg_only_env(base_env: dict | None = None) -> dict:
+    """Return an env with all ambient Databricks creds stripped.
+
+    Pops ``DATABRICKS_CLIENT_ID`` / ``DATABRICKS_CLIENT_SECRET`` /
+    ``DATABRICKS_HOST`` / ``DATABRICKS_TOKEN`` so the CLI/SDK falls through to
+    the ``[DEFAULT]`` profile in ``~/.databrickscfg``. Use for tools (e.g.
+    ``databricks sync``) that should authenticate from the config file.
+    """
+    env = dict(base_env if base_env is not None else os.environ)
+    for key in (*_OAUTH_ENV_VARS, "DATABRICKS_HOST", "DATABRICKS_TOKEN"):
+        env.pop(key, None)
+    return env
+
+
+def config_profile_env(profile: str, base_env: dict | None = None) -> dict:
+    """Return an env that pins unified-auth to a named ``~/.databrickscfg`` profile.
+
+    Sets ``DATABRICKS_CONFIG_PROFILE`` and strips every ambient var that would
+    shadow the profile in the SDK's resolution (see
+    ``_PROFILE_SHADOWING_ENV_VARS``). Use when a tool must authenticate as a
+    specific profile (e.g. the Omnigent host's ``omnigents-host`` M2M profile).
+    """
+    env = dict(base_env if base_env is not None else os.environ)
+    env["DATABRICKS_CONFIG_PROFILE"] = profile
+    for key in _PROFILE_SHADOWING_ENV_VARS:
+        env.pop(key, None)
+    return env
+
+
 def read_non_default_databrickscfg_sections(path: str | Path) -> str:
     """Return every ``~/.databrickscfg`` section except ``[DEFAULT]``.
 
