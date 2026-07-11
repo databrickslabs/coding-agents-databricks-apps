@@ -78,8 +78,14 @@ env:
   #       tracking on the model endpoints (enable per docs/observability).
   - name: MLFLOW_TRACING_ENABLED
     value: "true"
+  # Conservative ceiling for this box's compute (4 vCPU / 12 GB). Each session
+  # spawns a real coding-agent child (Node/Python) that can use 0.5-1.5 GB under
+  # active load; 10 concurrent sessions risks OOM (worst-case ~12 GB + base) and
+  # CPU contention that can wedge a request past gunicorn's 60s timeout. ~1
+  # session/vCPU keeps headroom. Raise only after measuring real per-session RSS
+  # on the target compute (the old "10" was an assumption, not a measurement).
   - name: MAX_CONCURRENT_SESSIONS
-    value: "10"
+    value: "4"
   # WORKSHOP / shared-app mode (TEMPORARY): disable the single-user owner
   # binding so every attendee can use the terminal as the single injected PAT
   # identity. Isolation then rests entirely on the UC grants of that identity —
