@@ -74,7 +74,6 @@
 # BY DEFAULT this mints a lab-friendly token with ALL SAFE scopes and EXCLUDES
 # the dangerous ones. Excluded by default (never granted unless you ask):
 #   access-management, authentication, identity, scim, settings  (acct/ws admin)
-#   secrets            (credential exfiltration)
 #   global-init-scripts (arbitrary code on every cluster)
 #   networking          (network policy / private access)
 # Everything else (sql, genie, unity-catalog, postgres, apps, clusters, jobs,
@@ -97,10 +96,10 @@ AUTOSCOPE=1  # workspace-autoscope minted PATs by default; --no-autoscope to dis
 
 # Default API scopes for lab tokens: ALL safe surfaces, minus the dangerous
 # ones. EXCLUDED (never granted by default): access-management, authentication,
-# identity, scim, settings (acct/workspace admin), secrets (credential exfil),
+# identity, scim, settings (acct/workspace admin),
 # global-init-scripts (arbitrary code on all compute), networking. Override with
 # --scopes to narrow, or --all-scopes for a completely unrestricted token.
-DEFAULT_SCOPES="sql,genie,unity-catalog,postgres,workspace,apps,clusters,jobs,pipelines,files,mlflow,model-serving,dashboards,alerts,notifications,libraries,instance-pools,command-execution,environments,query-history,vector-search,ai-search,dataquality,qualitymonitor,dataclassification,tags,cleanrooms,sharing,marketplace,knowledge-assistants,supervisor-agents"
+DEFAULT_SCOPES="sql,genie,unity-catalog,postgres,workspace,apps,clusters,jobs,pipelines,files,mlflow,model-serving,dashboards,alerts,notifications,libraries,instance-pools,command-execution,environments,query-history,vector-search,ai-search,dataquality,qualitymonitor,dataclassification,tags,cleanrooms,sharing,marketplace,knowledge-assistants,supervisor-agents,secrets"
 SCOPES=""       # empty => use DEFAULT_SCOPES; set via --scopes to override
 ALL_SCOPES=0    # --all-scopes: mint unrestricted (no scopes field at all)
 
@@ -143,7 +142,7 @@ if [[ "$ALL_SCOPES" -eq 1 ]]; then
 elif [[ -z "$SCOPES" ]]; then
   SCOPES="$DEFAULT_SCOPES"
   echo "==> Token scopes: default safe set (excludes access-management, scim,"
-  echo "    settings, authentication, identity, secrets, global-init-scripts, networking)"
+  echo "    settings, authentication, identity, global-init-scripts, networking)"
 else
   echo "==> Token scopes: $SCOPES"
 fi
