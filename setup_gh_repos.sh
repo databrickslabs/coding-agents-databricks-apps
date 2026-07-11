@@ -7,9 +7,12 @@
 #      `git clone/pull/push` over HTTPS works without prompts
 #   3. Clone a set of repos into ~/projects/ (idempotent — skips existing clones)
 #
+# By default it clones the repos in DEFAULT_REPOS below (the ones we keep pulled
+# down in CoDA). Override the selection with positional args or CODA_CLONE_REPOS.
+#
 # NOT wired into app.py startup — invoke it yourself when you need the repos:
-#     bash setup_gh_repos.sh
-#     bash setup_gh_repos.sh dgokeeffe/some-other-repo         # override repo list
+#     bash setup_gh_repos.sh                                    # default set
+#     bash setup_gh_repos.sh dgokeeffe/some-other-repo         # explicit list
 #     CODA_CLONE_REPOS="owner/a owner/b" bash setup_gh_repos.sh # via env var
 #
 # Auth precedence (first that applies wins):
@@ -25,8 +28,12 @@ set -euo pipefail
 # --- Config ---------------------------------------------------------------
 PROJECTS_DIR="${HOME}/projects"
 
-# Default repo list. Override by passing repos as args, or via CODA_CLONE_REPOS.
+# Default repo list — the repos we currently keep pulled down in CoDA.
+# Override by passing repos as args, or via CODA_CLONE_REPOS.
 DEFAULT_REPOS=(
+  "<private-repo>"
+  "<private-mirror>"
+  "<private-repo>"
   "<private-repo>"
   "<private-repo>"
 )
