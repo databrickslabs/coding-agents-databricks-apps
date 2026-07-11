@@ -134,4 +134,4 @@ env:
   - name: OMNIGENTS_SERVER_URL
     value: "https://omnigent-7405614666872455.15.azure.databricksapps.com"
   - name: OMNIGENTS_WHEEL_SPEC
-    value: "/Volumes/edp_aisandbox_aisandbox_dev/daveok/artifacts/wheels"
+    value: "/Volumes/edp_aisandbox_aisandbox_dev/ai/omnigents/wheels"
