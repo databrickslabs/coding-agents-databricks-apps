@@ -63,6 +63,23 @@
 #
 #   # Dry run: resolve + auth-check, but mint/inject nothing
 #   ./provision_coda_pats.sh --profile sp-m2m --app-prefix coda- --secret X --dry-run
+#
+# Minted PATs are workspace-autoscoped by default (autoscope_enabled=true) — a
+# safety boundary confining the token to this workspace. Pass --no-autoscope
+# to disable. Autoscope is retried-off if the workspace rejects the field.
+#
+# --scopes restricts which REST API surfaces the minted token may call
+# (platform-enforced, on top of the minting identity's own grants). Pass a
+# comma-separated list of API-scope names from the API Scopes reference, e.g.:
+#   --scopes sql,genie,unity-catalog,postgres,apps
+# A token scoped to sql,genie can hit those APIs (200) but is 403 on clusters,
+# unity-catalog, settings, etc. Omit --scopes for an unrestricted token (still
+# bounded by the identity's entitlements/grants). Common scopes:
+#   sql, genie, unity-catalog, postgres (Lakebase), apps, workspace, clusters,
+#   pipelines, jobs, files, mlflow, model-serving, secrets, dashboards.
+#
+# For a workshop, pair a purpose-built SP (entitlements/grants) with a narrow
+# --scopes so each CoDA's token can ONLY reach the surfaces the workshop uses.
 
 set -euo pipefail
 
@@ -72,9 +89,11 @@ APPS=""
 APP_PREFIX=""
 LIFETIME="900"
 DRY_RUN=0
+AUTOSCOPE=1  # workspace-autoscope minted PATs by default; --no-autoscope to disable
+SCOPES=""    # optional comma-separated API scopes (e.g. sql,genie,unity-catalog,postgres,apps)
 
 usage() {
-  sed -n '2,66p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,82p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-0}"
 }
 
@@ -85,6 +104,9 @@ while [[ $# -gt 0 ]]; do
     --apps)        APPS="$2"; shift 2 ;;
     --app-prefix)  APP_PREFIX="$2"; shift 2 ;;
     --lifetime)    LIFETIME="$2"; shift 2 ;;
+    --autoscope)     AUTOSCOPE=1; shift ;;
+    --no-autoscope)  AUTOSCOPE=0; shift ;;
+    --scopes)        SCOPES="$2"; shift 2 ;;  # comma-separated API scopes
     --dry-run)     DRY_RUN=1; shift ;;
     -h|--help)     usage 0 ;;
     *) echo "unknown arg: $1" >&2; usage 1 ;;
@@ -264,10 +286,32 @@ print('yes' if d.get('configured') and d.get('valid') else 'no')" 2>/dev/null ||
   fi
 
   # Mint a fresh bootstrap PAT tagged for this app.
-  echo "    minting bootstrap PAT (lifetime=${LIFETIME}s)..."
-  MINT=$("${DBX[@]}" api post /api/2.0/token/create \
-    --json "{\"lifetime_seconds\": $LIFETIME, \"comment\": \"coda-bootstrap:$app\"}" 2>/dev/null \
+  # autoscope_enabled confines the token to this workspace's authorization
+  # scope (a safety boundary; it does NOT pick per-resource capabilities —
+  # those come from the minting identity's entitlements + UC grants). Older
+  # workspaces may reject the field, so on failure we retry without it.
+  echo "    minting bootstrap PAT (lifetime=${LIFETIME}s, autoscope=$AUTOSCOPE${SCOPES:+, scopes=$SCOPES})..."
+  mint_body="{\"lifetime_seconds\": $LIFETIME, \"comment\": \"coda-bootstrap:$app\""
+  [[ "$AUTOSCOPE" -eq 1 ]] && mint_body="$mint_body, \"autoscope_enabled\": true"
+  if [[ -n "$SCOPES" ]]; then
+    # Restrict which REST API surfaces this token may call (enforced by the
+    # platform, independent of the SP's own grants). Build a JSON array from
+    # the comma-separated list. Scope names per the API Scopes reference
+    # (e.g. sql, genie, unity-catalog, postgres, apps, workspace, clusters).
+    scopes_json=$(SCOPES="$SCOPES" python3 -c "import os,json; print(json.dumps([s.strip() for s in os.environ['SCOPES'].split(',') if s.strip()]))")
+    mint_body="$mint_body, \"scopes\": $scopes_json"
+  fi
+  mint_body="$mint_body}"
+  MINT=$("${DBX[@]}" api post /api/2.0/token/create --json "$mint_body" 2>/dev/null \
     | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('token_value',''),d.get('token_info',{}).get('token_id',''))" 2>/dev/null || true)
+  if [[ -z "${MINT%% *}" && "$AUTOSCOPE" -eq 1 ]]; then
+    echo "    (autoscope not accepted — retrying without it${SCOPES:+, keeping scopes})"
+    retry_body="{\"lifetime_seconds\": $LIFETIME, \"comment\": \"coda-bootstrap:$app\""
+    [[ -n "$SCOPES" ]] && retry_body="$retry_body, \"scopes\": $scopes_json"
+    retry_body="$retry_body}"
+    MINT=$("${DBX[@]}" api post /api/2.0/token/create --json "$retry_body" 2>/dev/null \
+      | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('token_value',''),d.get('token_info',{}).get('token_id',''))" 2>/dev/null || true)
+  fi
   TOKEN="${MINT%% *}"
   TOKEN_ID="${MINT##* }"
   if [[ -z "$TOKEN" ]]; then
