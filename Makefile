@@ -28,8 +28,11 @@ WORKSPACE_PATH = /Workspace/Users/$(USER_EMAIL)/apps/$(APP_NAME)
 # LOCAL app.yaml being deployed (its OMNIGENTS_WHEEL_SPEC = /Volumes/cat/sch/vol)
 # unless set explicitly. Reads the local file so it works before the first sync.
 # GRANT_YAML lets the workshop/lakemeter targets point at their own variant.
-OMNIGENT_SERVER_APP ?= omnigent
 GRANT_YAML ?= app.yaml
+# Derive the server app name from OMNIGENTS_SERVER_URL in the deployed yaml
+# (first hostname label) so the grant always targets the SAME server the app
+# dials — no hardcoded per-user default. Override OMNIGENT_SERVER_APP to force.
+OMNIGENT_SERVER_APP ?= $(shell python3 -c "import yaml,urllib.parse; e={v['name']:v.get('value','') for v in (yaml.safe_load(open('$(GRANT_YAML)')) or {}).get('env',[])}; h=(urllib.parse.urlparse(e.get('OMNIGENTS_SERVER_URL','')).hostname or '').split('.')[0]; base,_,wsid=h.rpartition('-'); print(base if wsid.isdigit() and base else h)" 2>/dev/null)
 WHEEL_VOLUME ?= $(shell python3 -c "import sys,yaml; e={v['name']:v.get('value','') for v in (yaml.safe_load(open('$(GRANT_YAML)')) or {}).get('env',[])}; p=e.get('OMNIGENTS_WHEEL_SPEC','').strip('/').split('/'); print('.'.join(p[1:4]) if len(p)>=4 and p[0]=='Volumes' else '')" 2>/dev/null)
 
 .PHONY: help test integration-test e2e-test e2e-auth deploy redeploy create-app create-pat sync deploy-app status open clean enterprise-doctor \
