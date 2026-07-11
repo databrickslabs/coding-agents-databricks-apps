@@ -1071,6 +1071,98 @@ def _get_session_process(pid):
         return "unknown"
 
 
+RESOURCE_MONITOR_INTERVAL_SECONDS = int(
+    os.environ.get("RESOURCE_MONITOR_INTERVAL", "60")
+)
+
+
+def _process_tree_rss_mb():
+    """Total RSS (MB) of this process + its descendants (the agent children).
+
+    Best-effort via /proc; returns None if unavailable (non-Linux/local dev).
+    Walks the process tree from our own PID so it captures the memory the
+    spawned agents (Claude/Pi/OpenCode) actually consume, not just the worker.
+    """
+    try:
+        import glob
+        # Build pid -> (ppid, rss_pages) from /proc/*/stat
+        pgsize = os.sysconf("SC_PAGE_SIZE")
+        procs = {}
+        for stat_path in glob.glob("/proc/[0-9]*/stat"):
+            try:
+                with open(stat_path) as f:
+                    fields = f.read().split()
+                # Fields after comm can shift if comm has spaces; use rsplit on ')'.
+                pid = int(fields[0])
+                after = stat_path  # unused
+                rest = fields
+                ppid = int(rest[3])
+                rss_pages = int(rest[23])
+                procs[pid] = (ppid, rss_pages)
+            except (OSError, ValueError, IndexError):
+                continue
+        me = os.getpid()
+        # BFS over descendants
+        total_pages = procs.get(me, (0, 0))[1]
+        frontier = {me}
+        seen = {me}
+        children_by_ppid = {}
+        for pid, (ppid, _) in procs.items():
+            children_by_ppid.setdefault(ppid, []).append(pid)
+        while frontier:
+            nxt = set()
+            for p in frontier:
+                for c in children_by_ppid.get(p, []):
+                    if c not in seen:
+                        seen.add(c)
+                        nxt.add(c)
+                        total_pages += procs.get(c, (0, 0))[1]
+            frontier = nxt
+        return round(total_pages * pgsize / (1024 * 1024))
+    except Exception:
+        return None
+
+
+def resource_pressure_monitor():
+    """Periodically log memory / thread / session pressure.
+
+    Read-only observability: gives a crash a runway of telemetry instead of a
+    single silent moment, and surfaces per-session memory so the operator can
+    tune MAX_CONCURRENT_SESSIONS from data. Never raises — monitoring must not
+    be able to take down the process it's watching.
+    """
+    while True:
+        time.sleep(RESOURCE_MONITOR_INTERVAL_SECONDS)
+        try:
+            with sessions_lock:
+                n_sessions = len(sessions)
+            n_threads = threading.active_count()
+            tree_rss = _process_tree_rss_mb()
+            try:
+                import resource as _res
+                # ru_maxrss is KB on Linux — peak RSS of THIS process only.
+                peak_self_mb = round(
+                    _res.getrusage(_res.RUSAGE_SELF).ru_maxrss / 1024
+                )
+            except Exception:
+                peak_self_mb = None
+            try:
+                open_fds = len(os.listdir(f"/proc/{os.getpid()}/fd"))
+            except Exception:
+                open_fds = None
+            per_session = (
+                round(tree_rss / n_sessions) if tree_rss and n_sessions else None
+            )
+            logger.info(
+                "RESOURCE: sessions=%s/%s threads=%s tree_rss=%sMB "
+                "per_session=%sMB peak_self=%sMB open_fds=%s",
+                n_sessions, MAX_CONCURRENT_SESSIONS, n_threads,
+                tree_rss, per_session, peak_self_mb, open_fds,
+            )
+        except Exception as e:
+            logger.warning("RESOURCE monitor iteration failed: %s", e)
+
+
 def cleanup_stale_sessions():
     """Background thread that removes sessions with no recent polling."""
     while True:
@@ -1207,12 +1299,42 @@ def health():
         session_count = len(sessions)
     with setup_lock:
         current_setup_status = setup_state["status"]
+
+    # Meaningful liveness signal. Previously this returned "healthy"
+    # unconditionally as long as the worker could answer — so an app whose PAT
+    # rotation had silently died (auth expiring, the suspected coda-02 window)
+    # still reported healthy until every call started 401-ing. Report the auth
+    # sub-state so a zombie is observable. Best-effort: never let the health
+    # endpoint itself raise.
+    auth = {}
+    try:
+        # Only meaningful once a token has been configured (post PAT paste /
+        # SP-auth boot). Before that, setup_status carries the real state.
+        if pat_rotator.token:
+            auth = {
+                "rotator_alive": pat_rotator.is_alive,
+                "token_expired": pat_rotator.is_token_expired,
+                "seconds_since_rotation": (
+                    round(pat_rotator.seconds_since_rotation)
+                    if pat_rotator.seconds_since_rotation is not None else None
+                ),
+            }
+    except Exception:
+        auth = {"error": "unavailable"}
+
+    # "degraded" when auth machinery has failed while the app claims to be up:
+    # rotator thread died, or the token has aged past its lifetime.
+    degraded = bool(auth.get("token_expired")) or (
+        pat_rotator.token is not None and auth.get("rotator_alive") is False
+    )
+
     return jsonify({
-        "status": "healthy",
+        "status": "degraded" if degraded else "healthy",
         "version": APP_VERSION,
         "setup_status": current_setup_status,
         "active_sessions": session_count,
-        "session_timeout_seconds": SESSION_TIMEOUT_SECONDS
+        "session_timeout_seconds": SESSION_TIMEOUT_SECONDS,
+        "auth": auth,
     })
 
 
@@ -1797,6 +1919,14 @@ def initialize_app(local_dev=False):
     cleanup_thread = threading.Thread(target=cleanup_stale_sessions, daemon=True)
     cleanup_thread.start()
     logger.info(f"Started session cleanup thread (timeout={SESSION_TIMEOUT_SECONDS}s, interval={CLEANUP_INTERVAL_SECONDS}s)")
+
+    # Start resource-pressure monitor. On a 4 vCPU / 12 GB box a couple of heavy
+    # agent sessions can approach the memory cliff; this logs a runway of
+    # telemetry so a crash isn't a single silent moment, and lets us measure
+    # real per-session RSS to tune MAX_CONCURRENT_SESSIONS with data.
+    monitor_thread = threading.Thread(target=resource_pressure_monitor, daemon=True,
+                                      name="resource-monitor")
+    monitor_thread.start()
 
 
 if __name__ == "__main__":
