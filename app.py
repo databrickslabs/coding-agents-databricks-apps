@@ -1,5 +1,6 @@
 import os
 import sys
+import hmac
 import pty
 import fcntl
 import struct
@@ -1068,7 +1069,7 @@ def cleanup_stale_sessions():
 def authorize_request():
     """Check authorization before processing any request."""
     # Skip auth for health check, setup status, and Socket.IO (has own auth via connect event)
-    if request.path in ("/health", "/api/setup-status", "/api/pat-status", "/api/configure-pat", "/api/app-state") or request.path.startswith("/socket.io"):
+    if request.path in ("/health", "/api/setup-status", "/api/pat-status", "/api/configure-pat", "/api/inject-pat", "/api/app-state") or request.path.startswith("/socket.io"):
         return None
 
     authorized, user = check_authorization()
@@ -1281,6 +1282,109 @@ def pat_status():
                        "workspace_host": host})
 
 
+def _bootstrap_pat(token):
+    """Validate a PAT, adopt it, mint a controlled short-lived token, start
+    rotation, configure all CLIs, and trigger setup.
+
+    Shared by the interactive owner endpoint (/api/configure-pat) and the
+    programmatic endpoint (/api/inject-pat). Returns (ok, payload, status_code)
+    where payload is a JSON-serializable dict. Does NOT enforce authorization —
+    callers own that (SSO owner-gate vs. shared-secret gate).
+    """
+    token = (token or "").strip()
+    if not token:
+        return False, {"error": "Token required"}, 400
+
+    # Validate the token — direct HTTP, no SDK fallback
+    host = ensure_https(os.environ.get("DATABRICKS_HOST", ""))
+    try:
+        resp = requests.get(f"{host}/api/2.0/preview/scim/v2/Me",
+                            headers={"Authorization": f"Bearer {token}"}, timeout=10)
+        if resp.status_code != 200:
+            return False, {"error": "Invalid token"}, 400
+        user = resp.json().get("userName", "unknown")
+    except Exception as e:
+        return False, {"error": f"Token validation failed: {e}"}, 400
+
+    # Immediately mint a controlled short-lived token from the supplied PAT.
+    # This gives us a token ID we own — all future rotations can revoke the old one.
+    os.environ["DATABRICKS_TOKEN"] = token
+    pat_rotator._current_token = token
+    pat_rotator._current_token_id = None
+    rotated = pat_rotator._rotate_once()
+    if rotated:
+        token = pat_rotator.token  # use the newly minted token from here on
+        # Revoke only the bootstrap PAT — leave other user PATs intact (#98)
+        pat_rotator.revoke_bootstrap_token()
+    else:
+        # Rotation failed — fall back to supplied token (still valid)
+        pat_rotator._write_databrickscfg(token)
+    pat_rotator.start()
+
+    # Configure all CLI tools (Claude, Codex, OpenCode, Gemini, Databricks)
+    _configure_all_cli_auth(pat_rotator.token or token)
+
+    # Run setup now that we have a valid token (installs CLIs, configures agents)
+    with setup_lock:
+        if setup_state["status"] != "complete":
+            threading.Thread(target=run_setup, daemon=True, name="setup-thread").start()
+            logger.info("Setup triggered after PAT configuration")
+
+    return True, {
+        "status": "ok",
+        "user": user,
+        "instance": pat_rotator.instance_name,
+        "message": "Token configured. Auto-rotation started.",
+    }, 200
+
+
+@app.route("/api/inject-pat", methods=["POST"])
+def inject_pat():
+    """Programmatically inject a PAT for THIS CoDA (no SSO required).
+
+    Designed for provisioning many CoDAs in a workspace from a script: each
+    CoDA gets its own distinct PAT, and auto-rotated tokens are tagged with
+    this instance's name (see pat_rotator.rotation_comment).
+
+    Auth: requires a shared bootstrap secret. Set CODA_BOOTSTRAP_SECRET in the
+    app config, then send it as the ``X-Coda-Bootstrap-Secret`` header (or
+    ``Authorization: Bearer <secret>``). If the env var is unset, this endpoint
+    is DISABLED (returns 404) so it can't be abused on boxes that don't opt in.
+
+    Body: {"token": "dapiXXXX"}
+    """
+    expected = os.environ.get("CODA_BOOTSTRAP_SECRET", "").strip()
+    if not expected:
+        # Not opted in — behave as if the route doesn't exist.
+        return jsonify({"error": "Not found"}), 404
+
+    provided = (
+        request.headers.get("X-Coda-Bootstrap-Secret", "")
+        or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    )
+    # Constant-time compare to avoid leaking the secret via timing.
+    if not provided or not hmac.compare_digest(provided, expected):
+        logger.warning(f"Rejected inject-pat: bad/absent bootstrap secret (source={request.remote_addr})")
+        return jsonify({"error": "Forbidden"}), 403
+
+    # Single-shot, same as configure-pat: refuse if a live PAT is already set,
+    # unless it has expired (idle-timeout re-bootstrap path).
+    if pat_rotator.token and not pat_rotator.is_token_expired:
+        return jsonify({
+            "error": "PAT already configured. Restart the app to reconfigure."
+        }), 409
+
+    data = request.get_json(silent=True) or {}
+    ok, payload, status = _bootstrap_pat(data.get("token", ""))
+    if ok:
+        logger.info(
+            f"PAT injected programmatically for instance "
+            f"'{pat_rotator.instance_name or '<unnamed>'}' "
+            f"(user={payload.get('user')}) — rotation started"
+        )
+    return jsonify(payload), status
+
+
 @app.route("/api/configure-pat", methods=["POST"])
 def configure_pat():
     """Accept a user-provided PAT, validate it, and start rotation."""
@@ -1312,50 +1416,11 @@ def configure_pat():
             "error": "PAT already configured. Restart the app to reconfigure."
         }), 409
 
-    data = request.json
-    token = data.get("token", "").strip()
-    if not token:
-        return jsonify({"error": "Token required"}), 400
-
-    # Validate the token — direct HTTP, no SDK fallback
-    host = ensure_https(os.environ.get("DATABRICKS_HOST", ""))
-    try:
-        resp = requests.get(f"{host}/api/2.0/preview/scim/v2/Me",
-                           headers={"Authorization": f"Bearer {token}"}, timeout=10)
-        if resp.status_code != 200:
-            return jsonify({"error": "Invalid token"}), 400
-        user = resp.json().get("userName", "unknown")
-    except Exception as e:
-        return jsonify({"error": f"Token validation failed: {e}"}), 400
-
-    # Immediately mint a controlled short-lived token from the user-pasted PAT.
-    # This gives us a token ID we own — all future rotations can revoke the old one.
-    os.environ["DATABRICKS_TOKEN"] = token
-    pat_rotator._current_token = token
-    pat_rotator._current_token_id = None
-    rotated = pat_rotator._rotate_once()
-    if rotated:
-        token = pat_rotator.token  # use the newly minted token from here on
-        # Revoke only the bootstrap PAT — leave other user PATs intact (#98)
-        pat_rotator.revoke_bootstrap_token()
-    else:
-        # Rotation failed — fall back to user-pasted token (still valid)
-        pat_rotator._write_databrickscfg(token)
-    pat_rotator.start()
-
-    # Configure all CLI tools (Claude, Codex, OpenCode, Gemini, Databricks)
-    _configure_all_cli_auth(pat_rotator.token or token)
-
-    # Run setup now that we have a valid token (installs CLIs, configures agents)
-    # Only run if setup hasn't completed yet
-    with setup_lock:
-        if setup_state["status"] != "complete":
-            setup_thread = threading.Thread(target=run_setup, daemon=True, name="setup-thread")
-            setup_thread.start()
-            logger.info("Setup triggered after PAT configuration")
-
-    logger.info(f"PAT configured interactively by {user} — rotation started")
-    return jsonify({"status": "ok", "user": user, "message": "Token configured. Auto-rotation started."})
+    data = request.json or {}
+    ok, payload, status = _bootstrap_pat(data.get("token", ""))
+    if ok:
+        logger.info(f"PAT configured interactively by {payload.get('user')} — rotation started")
+    return jsonify(payload), status
 
 
 @app.route("/api/session", methods=["POST"])
