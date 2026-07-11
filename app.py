@@ -54,6 +54,32 @@ MAX_CONCURRENT_SESSIONS = int(os.environ.get("MAX_CONCURRENT_SESSIONS", "5"))
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+# ── Crash breadcrumbs ─────────────────────────────────────────────────
+# The app runs a single gunicorn worker, so an unhandled exception in ANY
+# background thread (PTY readers, cleanup, setup pool, telemetry) that isn't
+# already wrapped can silently take down the process with no traceback. These
+# hooks guarantee a full traceback lands in the log first. Registered at import
+# so they cover threads spawned before initialize_app().
+def _log_uncaught_main(exc_type, exc_value, exc_tb):
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+        return
+    logger.critical("UNCAUGHT EXCEPTION in main thread — process may exit",
+                    exc_info=(exc_type, exc_value, exc_tb))
+
+
+def _log_uncaught_thread(args):
+    if issubclass(args.exc_type, SystemExit):
+        return
+    logger.critical("UNCAUGHT EXCEPTION in thread %r — that thread has died",
+                    getattr(args.thread, "name", "?"),
+                    exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
+
+
+sys.excepthook = _log_uncaught_main
+threading.excepthook = _log_uncaught_thread
+
 # PAT auto-rotation — initialized after sessions dict is defined (see below)
 
 app = Flask(__name__, static_folder='static', static_url_path='/static')
@@ -90,7 +116,15 @@ def handle_sigterm(signum, frame):
         logger.info("SIGTERM received during startup — ignoring (likely stale signal)")
         return
     shutting_down = True
-    logger.info("SIGTERM received — setting shutting_down flag for clients")
+    # Record uptime + active session count with the signal so the log shows
+    # whether the platform reaped us mid-load vs. a clean redeploy.
+    try:
+        _sess = len(sessions)
+    except Exception:
+        _sess = "?"
+    logger.warning("SIGTERM received after %.0fs uptime (%s active sessions) "
+                   "— platform is stopping this worker",
+                   time.time() - _start_time, _sess)
     # Notify WS clients immediately (HTTP poll clients will see shutting_down on next poll)
     try:
         socketio.emit('shutting_down', {})
