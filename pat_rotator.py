@@ -24,6 +24,37 @@ DEFAULT_TOKEN_LIFETIME = int(os.environ.get("PAT_TOKEN_LIFETIME", "900"))
 DEFAULT_ROTATION_INTERVAL = int(os.environ.get("PAT_ROTATION_INTERVAL", "600"))
 
 
+def default_instance_name():
+    """Best-effort unique-ish name for THIS CoDA instance.
+
+    Used as the rotation-comment suffix so auto-rotated PATs are attributable
+    to the specific CoDA that minted them (multiple CoDAs can share a
+    workspace/identity). Priority: explicit override, then the Databricks App
+    name, then the app URL host, else empty.
+    """
+    for key in ("CODA_INSTANCE_NAME", "DATABRICKS_APP_NAME", "DATABRICKS_APPS_APP_NAME"):
+        val = os.environ.get(key, "").strip()
+        if val:
+            return val
+    url = os.environ.get("DATABRICKS_APP_URL", "").strip()
+    if url:
+        # e.g. https://my-coda-1234.aws.databricksapps.com -> my-coda-1234
+        host = url.split("://", 1)[-1].split("/", 1)[0]
+        return host.split(".", 1)[0]
+    return ""
+
+
+def rotation_comment(instance_name):
+    """Build the token comment used to tag CoDA auto-rotated PATs.
+
+    Kept stable-prefixed with ``coda-auto-rotated`` so existing tooling and the
+    bootstrap-cleanup matcher keep working, with the instance name appended
+    when known: ``coda-auto-rotated:<instance>``.
+    """
+    base = "coda-auto-rotated"
+    return f"{base}:{instance_name}" if instance_name else base
+
+
 class PATRotator:
     """Background PAT rotation with session-aware lifecycle.
 
@@ -34,8 +65,13 @@ class PATRotator:
 
     def __init__(self, host=None, rotation_interval=DEFAULT_ROTATION_INTERVAL,
                  token_lifetime=DEFAULT_TOKEN_LIFETIME,
-                 session_count_fn=None):
+                 session_count_fn=None, instance_name=None):
         self._host = ensure_https(host or os.environ.get("DATABRICKS_HOST", ""))
+        # Name of this CoDA instance, used to tag auto-rotated PATs so multiple
+        # CoDAs sharing a workspace/identity produce attributable token names.
+        self._instance_name = (
+            instance_name if instance_name is not None else default_instance_name()
+        )
         self._rotation_interval = rotation_interval
         self._token_lifetime = token_lifetime
         self._session_count_fn = session_count_fn or (lambda: 0)
@@ -54,6 +90,10 @@ class PATRotator:
     def token(self):
         with self._lock:
             return self._current_token
+
+    @property
+    def instance_name(self):
+        return self._instance_name
 
     @property
     def is_token_expired(self):
@@ -129,7 +169,7 @@ class PATRotator:
                 headers={"Authorization": f"Bearer {self._current_token}"},
                 json={
                     "lifetime_seconds": self._token_lifetime,
-                    "comment": "coda-auto-rotated"
+                    "comment": rotation_comment(self._instance_name)
                 },
                 timeout=30
             )
@@ -219,10 +259,14 @@ class PATRotator:
         token_infos = resp.json().get("token_infos", [])
 
         # Find the bootstrap PAT: newest non-coda token that isn't the current one
+        # A CoDA-rotated token's comment starts with "coda-auto-rotated"
+        # (optionally ":<instance>"). The bootstrap PAT never has that prefix,
+        # so exclude any coda-tagged token — including ones minted by *other*
+        # CoDAs sharing this identity — from bootstrap-revocation candidates.
         candidates = [
             info for info in token_infos
             if info.get("token_id") != current_id
-            and info.get("comment", "") != "coda-auto-rotated"
+            and not info.get("comment", "").startswith("coda-auto-rotated")
         ]
         if not candidates:
             logger.info("Bootstrap cleanup: no bootstrap token candidate found")

@@ -484,3 +484,68 @@ class TestRotationOnNearExpiry:
             t.join(timeout=2)
 
         assert mr.call_count >= 1
+
+
+# ---------------------------------------------------------------------------
+# 6. Per-instance rotation comment (multi-CoDA attribution)
+# ---------------------------------------------------------------------------
+
+class TestInstanceNaming:
+    """Auto-rotated PATs are tagged with the CoDA instance name so multiple
+    CoDAs sharing one identity produce attributable token names."""
+
+    def test_rotation_comment_helper(self):
+        from pat_rotator import rotation_comment
+        assert rotation_comment("") == "coda-auto-rotated"
+        assert rotation_comment("my-coda-1") == "coda-auto-rotated:my-coda-1"
+
+    def test_default_instance_name_from_env(self):
+        from pat_rotator import default_instance_name
+        with mock.patch.dict(os.environ, {"CODA_INSTANCE_NAME": "coda-alpha"}, clear=False):
+            assert default_instance_name() == "coda-alpha"
+
+    def test_default_instance_name_from_app_url(self):
+        from pat_rotator import default_instance_name
+        env = {"DATABRICKS_APP_URL": "https://my-coda-7788.aws.databricksapps.com"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            assert default_instance_name() == "my-coda-7788"
+
+    @mock.patch("pat_rotator.requests.post")
+    def test_rotate_uses_instance_comment(self, mock_post):
+        mock_post.side_effect = [
+            _mock_create_response(token_value="dapi-new", token_id="tid-new"),
+            _mock_delete_response(status_code=200),
+        ]
+        rotator = _make_rotator(instance_name="coda-beta")
+        rotator._current_token = "dapi-old"
+        rotator._current_token_id = "tid-old"
+
+        rotator._rotate_once()
+
+        create_call = mock_post.call_args_list[0]
+        assert create_call[1]["json"]["comment"] == "coda-auto-rotated:coda-beta"
+
+    @mock.patch("pat_rotator.requests.get")
+    @mock.patch("pat_rotator.requests.post")
+    def test_bootstrap_cleanup_ignores_other_codas(self, mock_post, mock_get):
+        """revoke_bootstrap_token must not revoke tokens minted by OTHER CoDAs
+        (they carry the coda-auto-rotated prefix), only the true bootstrap PAT."""
+        list_resp = mock.MagicMock()
+        list_resp.status_code = 200
+        list_resp.json.return_value = {"token_infos": [
+            {"token_id": "tid-current", "comment": "coda-auto-rotated:me", "creation_time": 100},
+            {"token_id": "tid-other-coda", "comment": "coda-auto-rotated:other", "creation_time": 200},
+            {"token_id": "tid-bootstrap", "comment": "manual bootstrap", "creation_time": 150},
+        ]}
+        mock_get.return_value = list_resp
+        mock_post.return_value = _mock_delete_response(status_code=200)
+
+        rotator = _make_rotator(instance_name="me")
+        rotator._current_token = "dapi-current"
+        rotator._current_token_id = "tid-current"
+
+        rotator.revoke_bootstrap_token()
+
+        # Exactly one delete, targeting the non-coda bootstrap token
+        assert mock_post.call_count == 1
+        assert mock_post.call_args[1]["json"]["token_id"] == "tid-bootstrap"

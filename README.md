@@ -268,7 +268,8 @@ Open [http://localhost:8000](http://localhost:8000) — type `claude`, `codex`, 
 | `/api/version` | GET | App version |
 | `/api/sessions` | GET | List active (non-exited) sessions with metadata |
 | `/api/pat-status` | GET | Whether a valid, usable PAT is currently configured |
-| `/api/configure-pat` | POST | Interactive first-session PAT setup |
+| `/api/configure-pat` | POST | Interactive first-session PAT setup (owner-gated via SSO) |
+| `/api/inject-pat` | POST | Programmatic PAT injection for scripted provisioning (shared-secret gated; disabled unless `CODA_BOOTSTRAP_SECRET` is set) |
 | `/api/session` | POST | Create new terminal session |
 | `/api/session/attach` | POST | Reattach to an existing session (replays buffered output) |
 | `/api/input` | POST | Send input to terminal |
@@ -303,7 +304,9 @@ Open [http://localhost:8000](http://localhost:8000) — type `claude`, `codex`, 
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `HOME` | Yes | Set to `/app/python/source_code` in app.yaml |
-| `DATABRICKS_TOKEN` | No | Optional. If not set, the app prompts for a token on first session. Auto-rotated every 10 minutes |
+| `DATABRICKS_TOKEN` | No | Optional. If not set, the app prompts for a token on first session (or use `/api/inject-pat`). Auto-rotated every 10 minutes |
+| `CODA_BOOTSTRAP_SECRET` | No | Enables the `/api/inject-pat` endpoint and is the shared secret required to call it. Unset ⇒ endpoint returns 404. Use a distinct secret per CoDA when provisioning many |
+| `CODA_INSTANCE_NAME` | No | Names this CoDA so auto-rotated PATs are tagged `coda-auto-rotated:<name>` (attribution when many CoDAs share one identity). Falls back to `DATABRICKS_APP_NAME`/app URL host |
 | `DATABRICKS_GATEWAY_HOST` | No | AI Gateway URL override. Auto-discovered from `DATABRICKS_WORKSPACE_ID` if unset |
 | `ANTHROPIC_MODEL` | No | Claude model name (default: `databricks-claude-opus-4-8`) |
 | `PI_MODEL` | No | Pi model name — same `/anthropic` gateway route as Claude (default: `databricks-claude-opus-4-8`) |
