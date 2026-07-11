@@ -35,9 +35,19 @@ GRANT_YAML ?= app.yaml
 OMNIGENT_SERVER_APP ?= $(shell python3 -c "import yaml,urllib.parse; e={v['name']:v.get('value','') for v in (yaml.safe_load(open('$(GRANT_YAML)')) or {}).get('env',[])}; h=(urllib.parse.urlparse(e.get('OMNIGENTS_SERVER_URL','')).hostname or '').split('.')[0]; base,_,wsid=h.rpartition('-'); print(base if wsid.isdigit() and base else h)" 2>/dev/null)
 WHEEL_VOLUME ?= $(shell python3 -c "import sys,yaml; e={v['name']:v.get('value','') for v in (yaml.safe_load(open('$(GRANT_YAML)')) or {}).get('env',[])}; p=e.get('OMNIGENTS_WHEEL_SPEC','').strip('/').split('/'); print('.'.join(p[1:4]) if len(p)>=4 and p[0]=='Volumes' else '')" 2>/dev/null)
 
+# ── Git-based deploy config ──────────────────────────
+# Databricks Apps can deploy directly from a Git repo/ref (how coda-01..08 run).
+# Override any of these on the command line.
+GIT_URL      ?= https://github.com/dgokeeffe/coding-agents-databricks-apps-private
+GIT_PROVIDER ?= gitHub
+GIT_REF      ?= main
+# GIT_REF_TYPE: branch | tag | commit
+GIT_REF_TYPE ?= branch
+
 .PHONY: help test integration-test e2e-test e2e-auth deploy redeploy create-app create-pat sync deploy-app status open clean enterprise-doctor \
 	deploy-workshop redeploy-workshop guard-workshop-name create-app-workshop workshop-yaml workshop-secret \
-	deploy-lakemeter redeploy-lakemeter lakemeter-yaml grant-omnigent-host
+	deploy-lakemeter redeploy-lakemeter lakemeter-yaml grant-omnigent-host \
+	configure-git configure-git-credential deploy-git redeploy-git
 
 # ── Help ─────────────────────────────────────────────
 
@@ -202,15 +212,55 @@ lakemeter-yaml: ## Overwrite the synced app.yaml with the lakemeter variant (.lo
 	@echo "==> Swapping in $(LAKEMETER_YAML) as $(WORKSPACE_PATH)/app.yaml..."
 	@databricks workspace import $(WORKSPACE_PATH)/app.yaml --file $(LAKEMETER_YAML) --format AUTO --overwrite --profile $(PROFILE)
 
+# ── Git-based deploy (Databricks Apps native Git) ────
+# Deploys straight from a Git ref instead of the sync-to-workspace path.
+#   make configure-git APP_NAME=coda-04 PROFILE=daveok
+#   gh auth token | make configure-git-credential APP_NAME=coda-04 PROFILE=daveok
+#   make deploy-git APP_NAME=coda-04 PROFILE=daveok GIT_REF=main
+
+configure-git: create-app ## Attach the Git repo ($(GIT_URL)) to the app (idempotent)
+	@echo "==> Configuring Git repo on '$(APP_NAME)' ($(GIT_URL))..."
+	@databricks apps create-update $(APP_NAME) --profile $(PROFILE) \
+		--json '{"update_mask":"git_repository","git_repository":{"url":"$(GIT_URL)","provider":"$(GIT_PROVIDER)"}}' >/dev/null \
+		&& echo "    Git repo attached." \
+		|| { echo "    create-update failed (older CLI/app?); ensure the repo is set via the UI."; exit 1; }
+
+configure-git-credential: ## Add a Git credential to the app SP for private repos (reads token from stdin)
+	@# Usage: gh auth token | make configure-git-credential APP_NAME=coda-04 PROFILE=daveok
+	@# Requires CAN MANAGE on the app SP. Token is read from stdin so it never
+	@# lands on a command line or in shell history.
+	@sp_id=$$(databricks apps get $(APP_NAME) --profile $(PROFILE) --output json 2>/dev/null \
+		| python3 -c "import sys,json; print(json.load(sys.stdin).get('service_principal_id',''))"); \
+	if [ -z "$$sp_id" ]; then echo "ERROR: could not resolve SP id for '$(APP_NAME)'" >&2; exit 1; fi; \
+	token=$$(cat); \
+	printf '%s' "$$token" | python3 -c "import sys,json; t=sys.stdin.read().strip(); print(json.dumps({'git_provider':'$(GIT_PROVIDER)','git_email':'$(USER_EMAIL)','personal_access_token':t,'principal_id':int('$$sp_id'),'name':'Git credential for $(APP_NAME) SP'}))" \
+		| databricks git-credentials create --profile $(PROFILE) --json @/dev/stdin >/dev/null \
+		&& echo "    Git credential added to SP $$sp_id for '$(APP_NAME)'." \
+		|| echo "    git-credentials create failed (credential may already exist for $(GIT_PROVIDER))."
+
+deploy-git: ## Deploy the app from the configured Git ref ($(GIT_REF_TYPE)=$(GIT_REF))
+	@echo "==> Deploying '$(APP_NAME)' from Git $(GIT_REF_TYPE)='$(GIT_REF)'..."
+	@databricks apps deploy $(APP_NAME) --profile $(PROFILE) --no-wait \
+		--json '{"git_source":{"$(GIT_REF_TYPE)":"$(GIT_REF)"}}'
+	@echo "    Deploy submitted. App URL:"
+	@databricks apps get $(APP_NAME) --profile $(PROFILE) --output json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('url','(pending)'))"
+
+redeploy-git: grant-omnigent-host deploy-git ## (Re)grant Omnigent host IAM, then deploy from Git
+	@echo ""
+	@echo "Git redeployment complete!"
+
 # ── Monitoring ───────────────────────────────────────
 
-grant-omnigent-host: ## Grant the CoDA app SP the IAM to register as an Omnigent host (CAN_USE + READ_VOLUME)
+grant-omnigent-host: ## Grant the CoDA app SP the IAM to register as an Omnigent host (CAN_USE + USE_CATALOG/USE_SCHEMA + READ/WRITE_VOLUME)
 	@# A deployed CoDA app registers as an Omnigent host by running
 	@# `omnigent host <server>` as its own service principal. That SP starts with
 	@# ZERO privileges, so it needs two one-time grants or the host tunnel 302s at
 	@# /v1/me and never appears in the Omnigent picker:
 	@#   1. CAN_USE on the Omnigent server app  (so the Apps edge accepts its token)
-	@#   2. READ_VOLUME on the wheel volume      (so it can install the omnigent CLI)
+	@#   2. The FULL UC traversal chain on the wheel volume so it can install the
+	@#      omnigent CLI: USE_CATALOG -> USE_SCHEMA -> READ_VOLUME/WRITE_VOLUME.
+	@#      READ_VOLUME alone is a silent trap ("User does not have USE CATALOG").
+	@#      See docs/deployment.md and docs/plans/2026-07-11-omnigent-host-deploy-*.
 	@# grant_omnigent_host.sh does both idempotently. OMNIGENT_SERVER_APP defaults
 	@# to "omnigent"; WHEEL_VOLUME is derived from the deployed app.yaml's
 	@# OMNIGENTS_WHEEL_SPEC unless overridden. See the vars above 'status:'.

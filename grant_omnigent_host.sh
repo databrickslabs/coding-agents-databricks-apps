@@ -7,9 +7,14 @@
 # app's service principal to have BOTH:
 #   1. CAN_USE on the Omnigent server app  â or the host tunnel (WebSocket
 #      upgrade) is rejected and the host never registers.
-#   2. READ_VOLUME + WRITE_VOLUME on the wheel volume â READ so the container can
-#      download the `omnigent` CLI wheel (OMNIGENTS_WHEEL_SPEC), WRITE so the app
-#      SP can publish/update wheels (and other artifacts) into the same volume.
+#   2. UC access to the wheel volume = the FULL traversal chain:
+#        a. USE_CATALOG on the catalog
+#        b. USE_SCHEMA  on the schema
+#        c. READ_VOLUME + WRITE_VOLUME on the volume
+#      READ_VOLUME alone is NOT enough: without USE_CATALOG/USE_SCHEMA the SP
+#      cannot traverse to the volume and the wheel download fails with
+#      "User does not have USE CATALOG on Catalog '<cat>'", so the omnigent
+#      CLI never installs and the host never registers. (Learned the hard way.)
 #
 # A Databricks App runs as its own service principal with ZERO ambient UC/app
 # privileges, so both grants are explicit and one-time (persist across redeploys).
@@ -86,8 +91,40 @@ else
   echo "    granted CAN_USE"
 fi
 
-# ---- Grant 2: READ_VOLUME + WRITE_VOLUME on the wheel volume ---------------
-echo "==> Grant 2: READ_VOLUME + WRITE_VOLUME on volume '$WHEEL_VOLUME'"
+# ---- Grant 2a/2b: UC traversal (USE_CATALOG on catalog, USE_SCHEMA on schema)
+# READ_VOLUME alone is NOT enough: Unity Catalog requires the full traversal
+# chain to reach a volume. WHEEL_VOLUME is <catalog>.<schema>.<volume>; split it
+# to target the parents.
+CATALOG="${WHEEL_VOLUME%%.*}"
+SCHEMA_FQ="${WHEEL_VOLUME%.*}"   # <catalog>.<schema>
+
+grant_use() {  # $1=securable-type (catalog|schema)  $2=fq-name  $3=privilege
+  local kind="$1" name="$2" priv="$3" have
+  have=$("${DBX[@]}" grants get "$kind" "$name" --output json 2>/dev/null \
+    | CODA_SP="$CODA_SP" PRIV="$priv" python3 -c "
+import os,sys,json
+d=json.load(sys.stdin); sp=os.environ['CODA_SP']; priv=os.environ['PRIV']
+have=set()
+for a in d.get('privilege_assignments',[]):
+    if sp in a.get('principal',''):
+        have.update(a.get('privileges',[]))
+print('yes' if (priv in have or 'ALL_PRIVILEGES' in have) else 'no')")
+  if [[ "$have" == "yes" ]]; then
+    echo "    $kind '$name': $priv already granted — skipping"
+  else
+    "${DBX[@]}" grants update "$kind" "$name" \
+      --json "{\"changes\":[{\"principal\":\"$CODA_SP\",\"add\":[\"$priv\"]}]}" >/dev/null
+    echo "    $kind '$name': granted $priv"
+  fi
+}
+
+echo "==> Grant 2a: USE_CATALOG on catalog '$CATALOG'"
+grant_use catalog "$CATALOG" USE_CATALOG
+echo "==> Grant 2b: USE_SCHEMA on schema '$SCHEMA_FQ'"
+grant_use schema "$SCHEMA_FQ" USE_SCHEMA
+
+# ---- Grant 2c: READ_VOLUME + WRITE_VOLUME on the wheel volume --------------
+echo "==> Grant 2c: READ_VOLUME + WRITE_VOLUME on volume '$WHEEL_VOLUME'"
 MISSING=$("${DBX[@]}" grants get volume "$WHEEL_VOLUME" --output json 2>/dev/null \
   | CODA_SP="$CODA_SP" python3 -c "
 import os,sys,json
@@ -126,9 +163,19 @@ for a in d.get('privilege_assignments',[]):
 print('READ_VOLUME=%s WRITE_VOLUME=%s' % (
     'yes' if 'READ_VOLUME' in have else 'NO',
     'yes' if 'WRITE_VOLUME' in have else 'NO'))")
-echo "    $FINAL_USE  $FINAL_READ"
+FINAL_TRAVERSE=$("${DBX[@]}" grants get catalog "$CATALOG" --output json 2>/dev/null \
+  | CODA_SP="$CODA_SP" python3 -c "
+import os,sys,json
+d=json.load(sys.stdin); sp=os.environ['CODA_SP']
+have=set()
+for a in d.get('privilege_assignments',[]):
+    if sp in a.get('principal',''):
+        have.update(a.get('privileges',[]))
+print('USE_CATALOG=yes' if ('USE_CATALOG' in have or 'ALL_PRIVILEGES' in have) else 'USE_CATALOG=NO')")
+echo "    $FINAL_USE  $FINAL_TRAVERSE  $FINAL_READ"
 
-if [[ "$FINAL_USE" == *=yes && "$FINAL_READ" == *"READ_VOLUME=yes"* && "$FINAL_READ" == *"WRITE_VOLUME=yes"* ]]; then
+if [[ "$FINAL_USE" == *=yes && "$FINAL_TRAVERSE" == *"USE_CATALOG=yes"* \
+      && "$FINAL_READ" == *"READ_VOLUME=yes"* && "$FINAL_READ" == *"WRITE_VOLUME=yes"* ]]; then
   echo "==> Done. '$CODA_APP' can now register as a host on '$SERVER_APP'."
   echo "    Trigger the connect from the CoDA app UI/API, then it should appear in the Omnigent picker."
 else
