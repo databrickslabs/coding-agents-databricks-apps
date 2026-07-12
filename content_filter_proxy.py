@@ -586,18 +586,29 @@ class ProxyHandler(BaseHTTPRequestHandler):
             log.warning(f"Could not parse request body: {e}")
             pass  # Forward as-is if not valid JSON
 
-        # Build upstream URL. UPSTREAM_BASE + self.path is a naive concat that
-        # works for agents whose path has no overlap with the base (OpenCode/Hermes
-        # use OpenAI-style paths). Pi uses the anthropic-messages API, which POSTs
-        # to `/v1/messages` — and the gateway UPSTREAM_BASE already ends in `/v1`,
-        # so the concat produced `.../v1/v1/messages` → 400 "doesn't match any known
-        # API type". Collapse a duplicated leading path segment so Pi routes cleanly
-        # too (spec-D: Pi is the first agent routed through the proxy with a /v1 path).
-        req_path = self.path
-        base_tail = UPSTREAM_BASE.rstrip("/").rsplit("/", 1)[-1]
-        if base_tail and req_path.startswith("/" + base_tail + "/"):
-            req_path = req_path[len(base_tail) + 1:]
-        upstream_url = UPSTREAM_BASE + req_path
+        # Build upstream URL, routing by request PROTOCOL.
+        #
+        # The proxy serves multiple agents that speak DIFFERENT model-API dialects
+        # over one port, and the AI Gateway exposes a different route per dialect:
+        #   - OpenCode (@ai-sdk/openai-compatible) + Hermes → OpenAI-style paths
+        #     (`/chat/completions`), which the configured UPSTREAM_BASE (`.../mlflow/v1`)
+        #     accepts. Verified working (traces land).
+        #   - Pi (anthropic-messages) → `/v1/messages`, which the gateway serves ONLY
+        #     at `.../anthropic/v1` (verified live: `.../anthropic/v1/messages` → 200,
+        #     `.../mlflow/v1/messages` → 400 "doesn't match any known API type").
+        # A single UPSTREAM_BASE cannot serve both, so detect the Anthropic Messages
+        # protocol by its path and swap to the `/anthropic` gateway base for it. Derive
+        # that base from UPSTREAM_BASE by replacing the trailing `/mlflow/v1` service
+        # segment, so it tracks whatever gateway host is configured.
+        if self.path.startswith("/v1/messages") or self.path.startswith("/v1/complete"):
+            gw_root = UPSTREAM_BASE.rstrip("/")
+            for suffix in ("/mlflow/v1", "/mlflow", "/serving-endpoints"):
+                if gw_root.endswith(suffix):
+                    gw_root = gw_root[: -len(suffix)]
+                    break
+            upstream_url = gw_root + "/anthropic" + self.path  # → /anthropic/v1/messages
+        else:
+            upstream_url = UPSTREAM_BASE + self.path
 
         # Forward headers (inject fresh token to survive PAT rotation)
         headers = {}
