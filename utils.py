@@ -483,3 +483,25 @@ def resolve_mlflow_experiment_id(host: str, token: str, experiment_name: str) ->
     except Exception as exc:
         logger.warning(f"Could not resolve MLflow experiment '{experiment_name}': {exc}")
         return None
+
+
+def workspace_sync_dest(repo_name: str) -> str:
+    """Databricks Workspace path a repo syncs to / restores from.
+
+    Single source of truth shared by sync_to_workspace.py (write) and
+    restore_from_workspace.py (read) so the two can never drift.
+
+    Disambiguated by the CoDA instance name: on a shared app every session
+    resolves the SAME identity from the shared ~/.databrickscfg, so a
+    per-identity path collided whenever two instances (or two writers) synced a
+    same-named repo. Keying on the instance name keeps each CoDA's sync-back
+    isolated. Base is /Workspace/Shared — its default ACL grants the `users`
+    group CAN_MANAGE, so the app SP can write it with no per-workspace grant
+    (unlike /Users/{x}, writable only by x).
+    """
+    app_name = (
+        os.environ.get("CODA_INSTANCE_NAME")
+        or os.environ.get("DATABRICKS_APP_NAME")
+        or "_local"
+    )
+    return f"/Workspace/Shared/coda/{app_name}/{repo_name}"

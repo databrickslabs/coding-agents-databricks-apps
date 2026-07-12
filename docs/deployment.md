@@ -186,7 +186,7 @@ Production uses Gunicorn (`gunicorn.conf.py`) with:
 Git commits automatically sync projects to Databricks Workspace:
 
 ```
-/Workspace/Users/{email}/projects/{project-name}/
+/Workspace/Shared/coda/{app-name}/{project-name}/
 ```
 
 The post-commit hook uses `nohup ... & disown` to ensure the sync process survives across all coding agents, since some agents kill the entire process group when a shell command finishes.
