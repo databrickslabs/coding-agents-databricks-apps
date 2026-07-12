@@ -51,11 +51,13 @@ env:
     value: npm
   # Route all agent model calls through the Databricks AI Gateway. This value is
   # TRUSTED (no reachability probe - see utils.get_gateway_host tier 1), so it
-  # must be a real, reachable gateway on the workspace this app deploys to:
-  # Azure workspace <workspace-id>. An empty value would skip the gateway and
-  # route model calls to {DATABRICKS_HOST}/serving-endpoints instead.
+  # must be a real, reachable gateway on the workspace this app deploys to.
+  # <profile> workspace 7405611912408878 (serves databricks-claude-opus-4-8 natively).
+  # A token minted here is only valid at THIS workspace's gateway — pointing at a
+  # different workspace's gateway causes "400 Invalid Token" on every model call.
+  # An empty value would fall back to {DATABRICKS_HOST}/serving-endpoints.
   - name: DATABRICKS_GATEWAY_HOST
-    value: "https://adb-<workspace-id>.15.azuredatabricks.net/ai-gateway"
+    value: "https://adb-7405611912408878.18.azuredatabricks.net/ai-gateway"
   # Set CLAUDE_CODE_OTEL_ENABLED=true to send Claude Code OTEL signals to Unity
   # Catalog. Off by default; requires CLAUDE_CODE_OTEL_CATALOG_SCHEMA pointing at
   # a <catalog>.<schema> your app SP can write to.
