@@ -586,8 +586,18 @@ class ProxyHandler(BaseHTTPRequestHandler):
             log.warning(f"Could not parse request body: {e}")
             pass  # Forward as-is if not valid JSON
 
-        # Build upstream URL
-        upstream_url = UPSTREAM_BASE + self.path
+        # Build upstream URL. UPSTREAM_BASE + self.path is a naive concat that
+        # works for agents whose path has no overlap with the base (OpenCode/Hermes
+        # use OpenAI-style paths). Pi uses the anthropic-messages API, which POSTs
+        # to `/v1/messages` — and the gateway UPSTREAM_BASE already ends in `/v1`,
+        # so the concat produced `.../v1/v1/messages` → 400 "doesn't match any known
+        # API type". Collapse a duplicated leading path segment so Pi routes cleanly
+        # too (spec-D: Pi is the first agent routed through the proxy with a /v1 path).
+        req_path = self.path
+        base_tail = UPSTREAM_BASE.rstrip("/").rsplit("/", 1)[-1]
+        if base_tail and req_path.startswith("/" + base_tail + "/"):
+            req_path = req_path[len(base_tail) + 1:]
+        upstream_url = UPSTREAM_BASE + req_path
 
         # Forward headers (inject fresh token to survive PAT rotation)
         headers = {}
