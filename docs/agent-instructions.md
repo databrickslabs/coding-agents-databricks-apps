@@ -49,22 +49,41 @@ Therefore, non-negotiable operating rules:
 
 ## 1. What this repo is
 
-CoDA is a **Flask + Flask-SocketIO web app** that runs five coding agents
-(Claude Code, Codex, Gemini CLI, Hermes Agent, OpenCode) in a browser terminal,
-wired to a Databricks workspace via the AI Gateway. It deploys as a Databricks
-App. Full architecture, endpoints, env vars, and skills catalog live in
-`README.md` — read it for feature/onboarding detail; this file is operating
-rules only.
+CoDA is a **Flask + Flask-SocketIO web app** that runs coding agents in a
+browser terminal, wired to a Databricks workspace via the AI Gateway. It deploys
+as a Databricks App. Full architecture, endpoints, env vars, and skills catalog
+live in `README.md` — read it for feature/onboarding detail; this file is
+operating rules only.
+
+**Active agents** (as configured in `app.yaml`; gateway/workspace dependent):
+Claude Code, Hermes Agent, OpenCode. Codex and Gemini are disabled when the
+workspace serves no compatible gateway endpoints (see comments in `app.yaml`).
+
+**Skills catalog** under `.claude/skills/` tracks the [ai-dev-kit](https://github.com/databricks-solutions/ai-dev-kit)
+`databricks-skills/` upstream — refresh with the `refresh-databricks-skills`
+skill (shallow-clones upstream, replaces the `databricks-*`/`spark-*` dirs,
+preserves everything else). `databricks-app-apx` is **CoDA-specific** (the APX
+FastAPI+React framework) with no upstream counterpart — it must survive a
+refresh; the Superpowers workflow skills and `refresh-databricks-skills` itself
+are likewise preserved.
 
 Key runtime facts an agent should know:
 
-- **Single gunicorn worker**, 16 gthread threads — PTY state is process-local.
+- **Single gunicorn worker** — thread count is in `gunicorn.conf.py` (not
+  hardcoded here). PTY state is process-local.
 - Setup runs at boot in `app.py` (`initialize_app` / `_setup_git_config` /
-  `setup_*.py`); agent CLIs install in parallel.
-- Auth: single-user app owned by the app service principal. A short-lived PAT is
-  pasted on first terminal session and **auto-rotates every 10 min**
-  (`pat_rotator.py`). Nothing is persisted across restarts by design.
-- Databricks CLI is pre-configured; test with `databricks current-user me`.
+  `setup_*.py`); agent CLIs install in parallel. `RUNNING` app status only
+  means gunicorn bound the port — check `/api/setup-status` or boot logs before
+  claiming setup-dependent features work.
+- **Auth (layered):** with `ENABLE_SP_APIKEYHELPER=true`, the app writes its own
+  SP OAuth profile at boot and all agents install without a paste. A short-lived
+  PAT pasted on first terminal session is the **fallback** and **auto-rotates
+  every 10 min** (`pat_rotator.py`). The rotator rewrites `~/.databrickscfg` on
+  every rotation — a known failure mode was clobbering co-owned profiles (e.g.
+  `omnigents-host` OAuth); fixed in `b5b11a6`, but any CLI call that must use
+  the file profile should go through `databrickscfg_only_env()` (see `utils.py`).
+- Databricks CLI: in the **container**, test with `databricks current-user me`.
+  On a **local Mac**, use `databricks auth describe --profile <profile>`.
 
 ---
 
@@ -75,23 +94,87 @@ Key runtime facts an agent should know:
 - **Understand every line you submit.** Code review is the bottleneck — small,
   reviewable diffs merge faster.
 - **Branch names** are descriptive: `feat/…`, `fix/…`.
+- **Check which branch you're on** before concluding a flag or call-site is
+  absent. A grep miss or reading a feature branch that excludes certain commits
+  produces false "dead config" reports — read the source on the relevant branch.
 - **Tests / verification:** if a change can't be unit-tested, include a manual
-  test plan (screenshots/video) in the PR. Deploy and verify on a workspace
-  before opening a PR.
+  test plan in the PR. Deploy and verify on a workspace before opening a PR —
+  *unless* the change is static (HTML/CSS/comment) and the live app risks a
+  boot-wedge (see §4); in that case defer to the next natural deploy or use
+  `stop` → `start`. Typical verification: deploy → `databricks apps logs` (boot
+  markers roll off the ~200-line tail quickly) → `tail ~/.sync.log`.
 - Prefer the repo's existing tools: `uv` for Python, the `Makefile` targets for
-  deploy/redeploy/status/cleanup.
+  deploy/redeploy/status/cleanup. **Read a Makefile target's recipe before
+  running it** — e.g. `redeploy-git` chains `grant-omnigent-host` before
+  `deploy-git`.
+
+### Deploy modes (no `databricks.yml` in this repo)
+
+| Mode | Makefile targets | What happens |
+|------|------------------|--------------|
+| **Workspace sync** | `deploy`, `redeploy`, `deploy-workshop`, … | Local files sync to Workspace path, then `apps deploy` |
+| **Git-linked** | `deploy-git`, `redeploy-git` | Workspace pulls directly from GitHub at deploy time |
+
+Detect Git-linked mode in the app UI: `repo-git-form-group=link` in the overview
+URL. Before any deploy: `databricks apps list --profile <profile>` — the
+Makefile default `APP_NAME=coding-agents` may not match the live instance
+(e.g. `coding-agents-2`, `coda`). Pass `APP_NAME=` explicitly.
+
+**Apps overlays replace, they don't merge.** `make deploy-workshop` swaps
+`app.yaml.workshop` in wholesale at deploy time — any env var in the base
+`app.yaml` but absent from the overlay silently disappears from the deployed
+container. Security-relevant settings the workshop box needs must live in the
+overlay itself (e.g. `CODA_DISABLE_OWNER_CHECK`).
+
+**Redeploy vs cold boot:** `apps deploy` restarts the process on the *same*
+container — cached binaries and old files survive. `apps stop` + `apps start`
+allocates a fresh host. Cold boot is what fleet instances experience; use it to
+prove reproducible installs.
+
+**Deploy sequencing:** `apps deploy` against a STOPPED app fails. Sequence:
+`start` → wait for ACTIVE compute → `deploy`. For live-app code updates on a
+running instance, prefer `stop` → `start` over rapid redeploys — rapid redeploys
+of the live `coda` app can wedge platform boot.
+
+### Git remotes (foot-guns)
+
+- `origin` → public `databrickslabs/coding-agents-databricks-apps` (PRs target
+  here). Push topic branches directly to `databrickslabs` for upstream PRs — fork
+  PRs don't work from the private mirror.
+- `private` → `<private-mirror>` (where the app
+  often deploys from). A reflexive `git push origin HEAD` from a
+  `private`-tracking branch publishes sensitive work to the public labs repo.
+- Confirm tracking with `git rev-parse --abbrev-ref --symbolic-full-name @{u}`,
+  not `remote.origin.url`.
 
 ---
 
 ## 3. Databricks auth notes (gotchas)
 
-- Authenticate with a **PAT** *or* a `CLIENT_ID`/`CLIENT_SECRET` pair — not both.
-  If login misbehaves, unset `DATABRICKS_CLIENT_ID` and
-  `DATABRICKS_CLIENT_SECRET` and retry so access is based purely on the owner's
-  credentials.
+- **Layered auth in-container:** SP OAuth at boot (`ENABLE_SP_APIKEYHELPER`) is
+  tried first; pasted PAT is the fallback. These coexist by design — not
+  "PAT or CLIENT_ID/SECRET, pick one."
 - Ambient app-SP env vars can shadow a `~/.databrickscfg` profile. The sync uses
   `databrickscfg_only_env()` (see `utils.py`) to strip them — reuse that helper
-  for any CLI call that must resolve to the file profile.
+  for any CLI call that must resolve to the file profile. If *any* CLI call
+  misbehaves in this repo (not just login), check for stale SP env vars first.
+- **`DEFAULT` profile PAT goes stale.** Named profiles (`<profile>`, `<dev-profile>`,
+  etc.) often still work. Use `PROFILE=<name>` on Makefile targets, or
+  `export DATABRICKS_CONFIG_PROFILE=<name>` for ad-hoc CLI sessions.
+- **(Claude Code only)** **Unity AI Gateway ≠ first-party Anthropic API** for the
+  same Claude Code env vars. Verify against `databricks/ucode` before applying
+  Claude Code docs.
+  Example: `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1` strips the `context-1m`
+  beta header on the raw API, but the gateway parses `[1m]` server-side off the
+  model-id string — the two coexist. `[1m]` applies to opus/sonnet ≥4.6 only,
+  never Haiku.
+- **Empty env vars are not always "disabled."** `DATABRICKS_GATEWAY_HOST=""`
+  was a no-op pre-fix because `if explicit:` treats `""` as falsy. When setting
+  an env var to turn off a feature, trace the consuming code's truthiness check
+  (`if value:` vs `if key in os.environ`) before committing.
+- **SP creds are stripped from env at boot** after `initialize_app()` captures
+  them for the Omnigent tunnel. From any fresh shell inside the container, those
+  env vars are absent — only the running host process holds them in memory.
 
 ---
 
@@ -102,14 +185,69 @@ Key runtime facts an agent should know:
 tail -n 20 ~/.sync.log
 
 # Rehydrate a project from Workspace after a container recycle
+# (container-internal path only — not usable from a local Mac shell)
 python /app/python/source_code/restore_from_workspace.py <repo-name>
 #   e.g. restore_from_workspace.py <private-mirror>
 
 # Manually trigger a sync for the current repo (if a commit's sync failed)
 python /app/python/source_code/sync_to_workspace.py "$(git rev-parse --show-toplevel)"
+
+# Confirm app name before deploying
+databricks apps list --profile <profile>
+
+# Start stopped compute before deploy
+databricks apps start <app-name> --profile <profile>
+# wait for ACTIVE, then deploy
+
+# Boot logs (check immediately — tail is ~200 lines)
+databricks apps logs <app-name> --profile <profile>
 ```
+
+**Known noisy boot warning (safe to ignore until wired):**
+`error resolving resource challenge-repo-token ... not found` — the secret key is
+`challenge-repo-read-token`.
+
+**`grant-omnigent-host` silently fails** when no Omnigent server app exists on
+the workspace (`databricks apps get-permissions omnigent` → "App does not
+exist"; stderr swallowed). On workspaces without an Omnigent server, use
+`make deploy-git` directly instead of `make redeploy-git`.
+
+---
+
+## 5. Omnigent host integration
+
+`OMNIGENTS_SERVER_URL` is the on/off switch — empty/absent means host attach is
+off. Before PRing branch code to `main`, ensure `OMNIGENTS_SERVER_URL`,
+`OMNIGENTS_WHEEL_SPEC`, `OMNIGENTS_FORCE_REINSTALL`, and personal-workspace
+values like `CLAUDE_CODE_OTEL_CATALOG_SCHEMA` are commented out or defaulted off.
+
+**Liveness check:** use `GET /api/omnigents-status` on the CoDA app itself
+(`stage=running` + `host_launched=True`). Do **not** use `/v1/hosts` as a health
+check — it returns only hosts the *calling identity* owns. App-side `✓
+Connected` is the correct client signal; absence from the host list is expected,
+not a failure.
+
+**Apps proxy identity:** the proxy injects `X-Forwarded-Email` for authenticated
+browser sessions. Raw `curl` with a workspace PAT gets `302 → OIDC` — it cannot
+verify container-internal state or exercise endpoints that read
+`get_request_user()`. Use an authenticated browser session for those.
+
+**Host-specific gotchas:**
+- `omnigent host` has no `--profile` flag; use `DATABRICKS_CONFIG_PROFILE`.
+- An SP-owned host is invisible in a human's personal picker unless shared via
+  `PUT /v1/hosts/{id}/permissions/{user_id}` (owner-only call from the SP).
+- Runner subprocess stdout goes to `~/.omnigent/logs/host-runner/`, not CoDA's
+  app log.
+- CoDA's host has SDK agents (Polly, Debby) configured; the native Claude Code
+  CLI harness (Claude Code only) requires `omnigent setup` inside the container.
+- Personal Omnigent server app `omnigents-<profile>` may be STOPPED (reversible with
+  `databricks apps start omnigents-<profile> --profile <profile>`).
+
+**E2E terminal output:** xterm.js renders to `<canvas>` — browser accessibility
+snapshots show garbage. Read CoDA app logs (`/api/logs`, `databricks apps logs`)
+or redirect terminal output to a file instead.
 
 ---
 
 *Maintainers: keep this file current. If you discover a new pitfall in this
-ephemeral environment, add it to §0.*
+ephemeral environment, add it to §0 or the relevant section above.*
