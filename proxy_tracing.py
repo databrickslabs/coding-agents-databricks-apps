@@ -153,16 +153,39 @@ def _ensure_mlflow():
     return mlflow
 
 
+def _header(headers: dict, name: str) -> str:
+    """Case-insensitive header lookup. HTTP header casing is unpredictable across
+    clients (Pi/OpenCode/http.client all differ), so match on lowercased keys —
+    a title-case `X-Coda-Session` must resolve the same as `x-coda-session`."""
+    if not headers:
+        return ""
+    low = name.lower()
+    for k in headers:
+        if k.lower() == low:
+            return headers[k] or ""
+    return ""
+
+
 def _agent_from_request(path: str, req: dict, headers: dict) -> str:
-    """Best-effort agent attribution (D-R2). Prefer an explicit header the CLI
-    sets; else infer from the request. Falls back to 'proxy-agent'."""
-    for h in ("x-coda-agent", "X-Coda-Agent"):
-        if headers.get(h):
-            return headers[h]
-    ua = (headers.get("user-agent") or headers.get("User-Agent") or "").lower()
+    """Best-effort agent attribution (D-R2). Priority:
+      1. explicit `x-coda-agent` header (set by the CLI when it can);
+      2. agent name in the User-Agent;
+      3. the request PROTOCOL as a coarse label — better than a useless
+         'proxy-agent'. Anthropic Messages (`/v1/messages`) vs OpenAI
+         (`/chat/completions`). Doesn't uniquely identify the agent (Pi+Claude
+         both speak Anthropic; OpenCode+Hermes both OpenAI), but tells you the
+         dialect, which is more useful than 'proxy-agent' for filtering."""
+    explicit = _header(headers, "x-coda-agent")
+    if explicit:
+        return explicit
+    ua = _header(headers, "user-agent").lower()
     for name in ("opencode", "hermes", "pi"):
         if name in ua:
             return name
+    if "/v1/messages" in path or "/v1/complete" in path:
+        return "anthropic-api"
+    if "/chat/completions" in path or "/completions" in path:
+        return "openai-api"
     return "proxy-agent"
 
 
@@ -224,9 +247,11 @@ def trace_request(*, path, request_body, response_body, status, headers,
         return
     agent = _agent_from_request(path, request_body or {}, headers or {})
     # session/user/project threaded via headers the app/CLI sets (D-R4/D-O2).
-    session_id = (headers or {}).get("x-coda-session") or os.environ.get("CODA_SESSION_ID", "")
-    user = (headers or {}).get("x-forwarded-email") or os.environ.get("CODA_USER", "")
-    project = (headers or {}).get("x-coda-project") or os.environ.get("CODA_PROJECT", "")
+    # Case-insensitive lookup — a client sending X-Coda-Session (title case) must
+    # still resolve, else session grouping silently breaks (review #8).
+    session_id = _header(headers or {}, "x-coda-session") or os.environ.get("CODA_SESSION_ID", "")
+    user = _header(headers or {}, "x-forwarded-email") or os.environ.get("CODA_USER", "")
+    project = _header(headers or {}, "x-coda-project") or os.environ.get("CODA_PROJECT", "")
     try:
         pool.submit(_emit, path, request_body, response_body, status, agent,
                     session_id, user, project, t_start, t_end)

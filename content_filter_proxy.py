@@ -682,12 +682,16 @@ class ProxyHandler(BaseHTTPRequestHandler):
             # every line here; sniffing the text/stop_reason deltas is cheap and stays
             # OFF the client's critical path (we only build strings). Fully guarded —
             # any reconstruction error must never break the client stream (D-N4).
-            _text_parts: list[str] = []
+            # Per-content-block text accumulators (keyed by block index) so multiple
+            # Anthropic text blocks stay separated instead of running together, plus
+            # tool_use capture (input_json_delta) so tool-only turns aren't blank.
+            _blocks: dict[int, dict] = {}      # index -> {"type","text"|"name"+"input"}
+            _oai_parts: list[str] = []         # OpenAI content deltas (single stream)
             _stop_reason = None
-            _usage = None
+            _usage: dict = {}
 
             def _sniff_stream_event(line_str):  # noqa: ANN001
-                nonlocal _stop_reason, _usage  # must precede any use of these names
+                nonlocal _stop_reason  # must precede any use of the name
                 if not line_str.startswith("data:"):
                     return
                 payload = line_str[5:].strip()
@@ -697,21 +701,44 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     evt = json.loads(payload)
                 except Exception:  # noqa: BLE001
                     return
-                # Anthropic: content_block_delta.delta.text ; OpenAI: choices[].delta.content
+
+                # --- Anthropic Messages streaming ---
+                idx = evt.get("index")
+                etype = evt.get("type")
+                if etype == "content_block_start" and idx is not None:
+                    cb = evt.get("content_block") or {}
+                    if cb.get("type") == "tool_use":
+                        _blocks[idx] = {"type": "tool_use", "name": cb.get("name"),
+                                        "input": ""}
+                    else:
+                        _blocks[idx] = {"type": "text", "text": ""}
                 delta = evt.get("delta") or {}
                 if isinstance(delta, dict):
-                    if delta.get("text"):
-                        _text_parts.append(delta["text"])
+                    # text_delta (assistant text) / input_json_delta (tool args)
+                    if delta.get("text") and idx is not None:
+                        _blocks.setdefault(idx, {"type": "text", "text": ""})
+                        _blocks[idx]["text"] = _blocks[idx].get("text", "") + delta["text"]
+                    if delta.get("partial_json") is not None and idx is not None:
+                        _blocks.setdefault(idx, {"type": "tool_use", "name": None, "input": ""})
+                        _blocks[idx]["input"] = _blocks[idx].get("input", "") + delta["partial_json"]
+                    # stop_reason arrives on the top-level message_delta.delta
                     if delta.get("stop_reason"):
                         _stop_reason = delta["stop_reason"]
+                # usage is SPLIT across message_start (input_tokens) and
+                # message_delta (output_tokens) — MERGE, don't overwrite (review #1).
+                if evt.get("usage"):
+                    _usage.update(evt["usage"])
+                msg = evt.get("message") or {}
+                if isinstance(msg, dict) and msg.get("usage"):
+                    _usage.update(msg["usage"])
+
+                # --- OpenAI Chat Completions streaming ---
                 for ch in evt.get("choices", []) or []:
                     cd = (ch or {}).get("delta") or {}
                     if cd.get("content"):
-                        _text_parts.append(cd["content"])
+                        _oai_parts.append(cd["content"])
                     if ch.get("finish_reason"):
                         _stop_reason = ch["finish_reason"]
-                if evt.get("usage"):
-                    _usage = evt["usage"]
 
             for raw_line in resp.iter_lines(decode_unicode=True):
                 if raw_line is None:
@@ -743,10 +770,22 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
             # spec-D: fire-and-forget span after the stream completes (D-N2).
             # Reconstruct the streamed response so the trace carries the model's reply.
-            _stream_resp = {
-                "content": [{"type": "text", "text": "".join(_text_parts)}],
-                "stop_reason": _stop_reason,
-            }
+            # Build a content[] that preserves block structure + tool_use (review #3):
+            # each Anthropic text block stays a separate {type:text} entry, and tool
+            # calls surface as {type:tool_use} with the accumulated JSON args — so a
+            # tool-only turn is no longer a blank trace. OpenAI deltas collapse to one
+            # text block (that dialect has no block indices).
+            _content = []
+            for _i in sorted(_blocks):
+                b = _blocks[_i]
+                if b.get("type") == "tool_use":
+                    _content.append({"type": "tool_use", "name": b.get("name"),
+                                     "input": b.get("input", "")})
+                elif b.get("text"):
+                    _content.append({"type": "text", "text": b["text"]})
+            if _oai_parts:
+                _content.append({"type": "text", "text": "".join(_oai_parts)})
+            _stream_resp = {"content": _content, "stop_reason": _stop_reason}
             if _usage:
                 _stream_resp["usage"] = _usage
             _trace_proxy_request(
