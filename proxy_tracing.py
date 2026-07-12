@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 log = logging.getLogger("proxy-tracing")
@@ -40,6 +41,79 @@ _pool: ThreadPoolExecutor | None = None
 _pool_lock = threading.Lock()
 _mlflow_ready = False
 _init_lock = threading.Lock()
+
+# App-SP M2M token for the OSS app. The proxy runs in a SEPARATE process from
+# Claude Code, so it does NOT inherit MLFLOW_TRACKING_TOKEN from
+# ~/.claude/settings.json (where setup_mlflow.py writes it). Databricks Apps
+# reject PATs/user bearers (302 → OIDC) and accept only an app-SP M2M token, so
+# this proxy must mint its OWN — same mechanism as setup_mlflow._mint_app_sp_token
+# and the proxy's upstream _get_fresh_token pattern. Cached under the ~1h token
+# life and refreshed in-process (no restart needed).
+_token_cache: dict = {"token": None, "minted_at": 0.0}
+_token_lock = threading.Lock()
+_TOKEN_TTL = 45 * 60  # refresh well under the ~1h OAuth token life
+
+
+def _mint_app_sp_token() -> str | None:
+    """Mint an app-SP OAuth (client-credentials/M2M) token for the OSS app URL.
+
+    Mirrors setup_mlflow._mint_app_sp_token: prefer the `omnigents-host` M2M
+    profile (written when the host integration is on); else the injected app-SP
+    client creds. Returns None if neither is available.
+    """
+    try:
+        from databricks.sdk.core import Config
+    except Exception:  # noqa: BLE001 — sdk missing → no token, no tracing
+        return None
+    try:
+        headers = Config(profile="omnigents-host").authenticate()
+        auth = (headers or {}).get("Authorization", "")
+        if auth.startswith("Bearer "):
+            return auth[7:].strip()
+    except Exception:  # noqa: BLE001 — try the injected creds next
+        pass
+    cid = os.environ.get("DATABRICKS_CLIENT_ID", "").strip()
+    csec = os.environ.get("DATABRICKS_CLIENT_SECRET", "").strip()
+    host = os.environ.get("DATABRICKS_HOST", "").strip()
+    if cid and csec and host:
+        try:
+            headers = Config(
+                host=host, client_id=cid, client_secret=csec, auth_type="oauth-m2m",
+            ).authenticate()
+            auth = (headers or {}).get("Authorization", "")
+            if auth.startswith("Bearer "):
+                return auth[7:].strip()
+        except Exception:  # noqa: BLE001
+            pass
+    return None
+
+
+def _refresh_oss_token() -> bool:
+    """Ensure a fresh app-SP token is in os.environ['MLFLOW_TRACKING_TOKEN'].
+
+    MLflow's HTTP client reads MLFLOW_TRACKING_TOKEN per request, so keeping this
+    env var current (in this process) is enough to authenticate every span emit.
+    Returns True if a token is available. Cached + time-refreshed under the token
+    life so we mint at most once per _TOKEN_TTL.
+    """
+    now = time.time()
+    tok = _token_cache["token"]
+    if tok and (now - _token_cache["minted_at"]) < _TOKEN_TTL:
+        os.environ["MLFLOW_TRACKING_TOKEN"] = tok
+        return True
+    with _token_lock:
+        tok = _token_cache["token"]
+        if tok and (now - _token_cache["minted_at"]) < _TOKEN_TTL:
+            os.environ["MLFLOW_TRACKING_TOKEN"] = tok
+            return True
+        fresh = _mint_app_sp_token()
+        if fresh:
+            _token_cache["token"] = fresh
+            _token_cache["minted_at"] = now
+            os.environ["MLFLOW_TRACKING_TOKEN"] = fresh
+            return True
+        log.warning("could not mint app-SP token for OSS app; spans will 302 without it")
+        return bool(_token_cache["token"])  # stale is better than nothing
 
 
 def _get_pool() -> ThreadPoolExecutor | None:
@@ -60,6 +134,11 @@ def _ensure_mlflow():
         import mlflow
     except Exception:  # noqa: BLE001 — mlflow not installed → no tracing
         return None
+    # Refresh the app-SP token on EVERY call (cheap when cache-hot), so a span
+    # emitted after the ~1h token expiry re-mints instead of silently 302-ing.
+    # Must run outside the _mlflow_ready gate — the URI is set once, the token
+    # is not. Without this the OSS app (a Databricks App) rejects the write.
+    _refresh_oss_token()
     if not _mlflow_ready:
         with _init_lock:
             if not _mlflow_ready:
