@@ -176,6 +176,35 @@ def sanitize_tool_schemas(data):
     return data
 
 
+# Served models that reject sampling params, keyed by a substring of the model id
+# (tolerant of the gateway's `global.` / `databricks-` prefixes), mapped to the
+# request fields to drop. claude-opus-4-8 returns 400 on `temperature` (and, by the
+# same class, other sampling controls) — see strip_unsupported_sampling_params.
+_MODEL_UNSUPPORTED_SAMPLING = {
+    "claude-opus-4-8": ("temperature", "top_p", "top_k"),
+}
+
+
+def strip_unsupported_sampling_params(data):
+    """Drop sampling params a specific served model rejects (400), by model id.
+
+    Only strips for models known to reject the param — most models accept
+    `temperature`, so this must NOT be unconditional. Matches on a substring of
+    the request's `model` so `global.anthropic.claude-opus-4-8`,
+    `databricks-claude-opus-4-8`, etc. all hit. No-op if `model` is absent.
+    """
+    model = (data.get("model") or "").lower()
+    if not model:
+        return data
+    for needle, fields in _MODEL_UNSUPPORTED_SAMPLING.items():
+        if needle in model:
+            for f in fields:
+                if f in data:
+                    log.info(f"  Stripped unsupported sampling param '{f}' for {model}")
+                    del data[f]
+    return data
+
+
 # ---------------------------------------------------------------------------
 # Request-side sanitization
 # ---------------------------------------------------------------------------
@@ -581,6 +610,13 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     log.info(f"Messages: {before} -> {after}")
             # Strip unsupported schema keys from tool definitions (all models)
             data = sanitize_tool_schemas(data)
+            # Strip sampling params that specific served models reject. Some callers
+            # (e.g. an agent's title-generation sub-call) send `temperature`, but the
+            # gateway-served `(global.)anthropic.claude-opus-4-8` returns 400
+            # "does not support the temperature parameter" — surfaced via tracing
+            # 2026-07-12. Model-targeted (like the Gemini key stripping), tolerant of
+            # the gateway's `global.`/`databricks-` name prefixes.
+            data = strip_unsupported_sampling_params(data)
             body = json.dumps(data).encode()
         except (json.JSONDecodeError, KeyError) as e:
             log.warning(f"Could not parse request body: {e}")
