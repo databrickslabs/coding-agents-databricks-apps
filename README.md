@@ -87,7 +87,7 @@ This isn't just a terminal in the cloud. Running coding agents on Databricks giv
 | 🎤 **Voice Input** | Dictate commands with your mic (Option+V) |
 | 📋 **Image Paste** | Paste or drag-and-drop images into the terminal — saved to `~/uploads/`, path inserted automatically |
 | ⌨️ **Customizable** | Fonts, font sizes, themes — all persisted across sessions |
-| 🔄 **Workspace Sync** | Every `git commit` auto-syncs to `/Workspace/Users/{you}/projects/` |
+| 🔄 **Workspace Sync** | Every `git commit` auto-syncs to `/Workspace/Shared/coda/{app-name}/` |
 | ✏️ **Micro Editor** | Modern terminal editor, pre-installed |
 | ⚙️ **Databricks CLI** | Installed at boot, configured interactively on first session |
 | 📊 **MLflow Tracing** | Every Claude Code session is automatically traced to your Databricks MLflow experiment |

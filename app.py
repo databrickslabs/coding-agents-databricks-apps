@@ -313,8 +313,14 @@ CoDA runs inside a Databricks App container whose disk can be recycled at any
 time (redeploy, restart, timeout, platform recycle). Local disk is scratch.
 
 A `post-commit` hook auto-syncs every repo under `~/projects/` to Databricks
-Workspace at `/Workspace/Users/{you}/projects/{repo}/`. **Nothing that isn't
+Workspace at `/Workspace/Shared/coda/{app-name}/{repo}/`. **Nothing that isn't
 committed survives a recycle.** So:
+
+> ⚠ **Shared CoDA:** this container's filesystem (`~/projects/`, git config, and
+> the Workspace sync-back) is **shared with everyone else on this app**. Two
+> people committing the same repo trample each other. Work in your **own git
+> worktree or branch** (`git worktree add ../<you>-<branch> -b <branch>`) — don't
+> commit on top of someone else's tree.
 
 1. **Commit small and commit often.** After every self-contained change — a
    working function, a passing test, a fixed bug — commit. Never batch a whole

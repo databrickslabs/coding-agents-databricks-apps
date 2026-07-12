@@ -4,7 +4,7 @@
 Inverse of ``sync_to_workspace.py``. This environment is ephemeral — the
 container's disk can be recycled at any time, and the only durable copy of a
 project is the one the post-commit hook synced to
-``/Workspace/Users/{you}/projects/{name}``. Use this to rehydrate a project
+``/Workspace/Shared/coda/{app-name}/{name}``. Use this to rehydrate a project
 after a recycle, before starting new work.
 
 Usage:
@@ -87,11 +87,12 @@ def restore_project(project_name: str, force: bool = False):
         return 3
 
     try:
-        user_email = get_user_email()
-        workspace_src = f"/Workspace/Users/{user_email}/projects/{project_name}"
+        get_user_email()  # validates ~/.databrickscfg auth + inits telemetry
+        from utils import databrickscfg_only_env, workspace_sync_dest
+
+        workspace_src = workspace_sync_dest(project_name)
 
         # Strip ambient creds so the CLI falls through to ~/.databrickscfg
-        from utils import databrickscfg_only_env
         restore_env = databrickscfg_only_env()
 
         local_dest.mkdir(parents=True, exist_ok=True)

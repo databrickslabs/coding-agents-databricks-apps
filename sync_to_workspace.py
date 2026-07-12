@@ -53,11 +53,12 @@ def sync_project(project_path: Path):
         return
 
     try:
-        user_email = get_user_email()
-        workspace_dest = f"/Workspace/Users/{user_email}/projects/{project_path.name}"
+        get_user_email()  # validates ~/.databrickscfg auth + inits telemetry
+        from utils import databrickscfg_only_env, workspace_sync_dest
+
+        workspace_dest = workspace_sync_dest(project_path.name)
 
         # Strip ambient creds so the CLI falls through to ~/.databrickscfg
-        from utils import databrickscfg_only_env
         sync_env = databrickscfg_only_env()
 
         result = subprocess.run(

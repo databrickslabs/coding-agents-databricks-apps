@@ -20,8 +20,10 @@ as scratch space, not storage.
 
 **The only durable backup is a git commit.** A `post-commit` hook auto-syncs
 every repo under `~/projects/` to Databricks Workspace at
-`/Workspace/Users/{you}/projects/{repo}/` (see `sync_to_workspace.py`). Nothing
-that isn't committed survives a recycle.
+`/Workspace/Shared/coda/{app-name}/{repo}/` (see `sync_to_workspace.py` /
+`utils.workspace_sync_dest`). The path is keyed on the instance name so
+same-identity instances (shared-app fleets) don't clobber each other's sync-back.
+Nothing that isn't committed survives a recycle.
 
 Therefore, non-negotiable operating rules:
 
