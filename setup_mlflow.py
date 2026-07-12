@@ -89,6 +89,10 @@ tracing_enabled = os.environ.get("MLFLOW_TRACING_ENABLED", "false").lower() == "
 oss_enabled = os.environ.get("MLFLOW_OSS_TRACKING_ENABLED", "false").lower() == "true"
 oss_url = os.environ.get("MLFLOW_OSS_URL", "").strip().rstrip("/")
 tracking_uri = "databricks"
+# Ensure the env dict exists BEFORE the OSS block writes into it (line-order bug
+# fix: this setdefault used to be below, so writing MLFLOW_TRACKING_TOKEN here
+# raised KeyError('env') and crashed setup_mlflow → no tracing wired at all).
+settings.setdefault("env", {})
 if oss_enabled and oss_url:
     tracking_uri = oss_url
     # Databricks Apps reject PATs (302 → OIDC login) and accept only an OAuth
