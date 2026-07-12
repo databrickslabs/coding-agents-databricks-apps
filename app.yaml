@@ -52,12 +52,12 @@ env:
   # Route all agent model calls through the Databricks AI Gateway. This value is
   # TRUSTED (no reachability probe - see utils.get_gateway_host tier 1), so it
   # must be a real, reachable gateway on the workspace this app deploys to.
-  # <profile> workspace 7405611912408878 (serves databricks-claude-opus-4-8 natively).
-  # A token minted here is only valid at THIS workspace's gateway — pointing at a
-  # different workspace's gateway causes "400 Invalid Token" on every model call.
+  # Coles workspace <workspace-id> (Azure region shard .15). A token minted
+  # here is only valid at THIS workspace's gateway — pointing at a different
+  # workspace's gateway causes "400 Invalid Token" on every model call.
   # An empty value would fall back to {DATABRICKS_HOST}/serving-endpoints.
   - name: DATABRICKS_GATEWAY_HOST
-    value: "https://adb-7405611912408878.18.azuredatabricks.net/ai-gateway"
+    value: "https://adb-<workspace-id>.15.azuredatabricks.net/ai-gateway"
   # Set CLAUDE_CODE_OTEL_ENABLED=true to send Claude Code OTEL signals to Unity
   # Catalog. Off by default; requires CLAUDE_CODE_OTEL_CATALOG_SCHEMA pointing at
   # a <catalog>.<schema> your app SP can write to.
@@ -87,10 +87,17 @@ env:
   # MLFLOW_OSS_URL instead of `databricks`, authed with the app SP's M2M OAuth
   # token. Requires the CoDA app SP to have CAN_USE on the OSS app
   # (grant_mlflow_host.sh). Off by default elsewhere — set true only where needed.
+  # BRAND-NEW-ENV ORDERING: this CoDA deploys FIRST on Coles ...2455, then deploys
+  # the coda-mlflow-oss app itself. On first boot the OSS app does not exist yet
+  # and the CoDA SP has no CAN_USE grant, so trace writes would fail. Sequence:
+  # (1) deploy this CoDA with tracking OFF -> (2) deploy coda-mlflow-oss on ...2455
+  # -> (3) ./grant_mlflow_host.sh --coda-app <coda> --mlflow-app coda-mlflow-oss
+  # -> (4) flip the flag to "true" and redeploy. URL is the deterministic mirror
+  # name, safe to set now.
   - name: MLFLOW_OSS_TRACKING_ENABLED
-    value: "true"
+    value: "false"
   - name: MLFLOW_OSS_URL
-    value: "https://coda-mlflow-oss-7405611912408878.18.azure.databricksapps.com"
+    value: "https://coda-mlflow-oss-<workspace-id>.15.azure.databricksapps.com"
   # Capture full prompt/response bodies in proxy trace spans (not just metadata
   # shapes). Default is false (privacy-preserving: n_messages/stop_reason only).
   # Enabled here so the Traces UI shows the actual model conversation. NOTE: this
@@ -122,12 +129,12 @@ env:
   # initialize_app() -> start_host() dials the server as the app SP, so the
   # deployed app self-registers as an always-on host on every restart/redeploy.
   # WHEEL_SPEC is the UC Volume the host CLI is installed from (needs the app
-  # SP's READ_VOLUME grant, granted to coda-01's SP on
-  # main.omnigent.artifacts).
+  # SP's READ_VOLUME grant on the wheel volume below
+  # (<catalog>.<schema>.ai.omnigents on Coles ...2455).
   - name: OMNIGENTS_SERVER_URL
-    value: "https://omnigent-7405611912408878.18.azure.databricksapps.com"
+    value: "https://omnigent-<workspace-id>.15.azure.databricksapps.com"
   - name: OMNIGENTS_WHEEL_SPEC
-    value: "/Volumes/main/omnigent/artifacts/wheels"
+    value: "/Volumes/<catalog>.<schema>/ai/omnigents/wheels"
   # Force-reinstall the host CLI on boot so a new wheel in the UC Volume is
   # actually installed (uv tool install otherwise no-ops when the tool exists).
   # Set only while rolling out a runner build; remove once the wheel is stable.
