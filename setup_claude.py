@@ -6,7 +6,13 @@ import subprocess
 from pathlib import Path
 
 from claude_otel import apply_claude_otel_env
-from utils import discover_serving_endpoints, ensure_https, get_gateway_host, pick_in_geo_model
+from utils import (
+    add_1m_context_suffix,
+    discover_serving_endpoints,
+    ensure_https,
+    get_gateway_host,
+    pick_in_geo_model,
+)
 
 # Set HOME if not properly set
 if not os.environ.get("HOME") or os.environ["HOME"] == "/":
@@ -124,8 +130,10 @@ if token:
         print(f"Claude apiKeyHelper installed: {helper_path}")
     else:
         settings["env"]["ANTHROPIC_AUTH_TOKEN"] = token
-    settings["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = opus_model
-    settings["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = sonnet_model
+    # Suffix opus/sonnet with [1m] so Claude Code requests the 1M context window
+    # via the gateway (see utils.add_1m_context_suffix). Haiku stays 200K-native.
+    settings["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = add_1m_context_suffix(opus_model)
+    settings["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = add_1m_context_suffix(sonnet_model)
     settings["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = haiku_model
     settings["env"]["ANTHROPIC_CUSTOM_HEADERS"] = "x-databricks-use-coding-agent-mode: true"
     settings["env"]["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] = "1"
