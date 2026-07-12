@@ -33,7 +33,28 @@ _ENABLED = (
     and bool(os.environ.get("MLFLOW_OSS_URL", "").strip())
 )
 _CAPTURE_CONTENT = os.environ.get("PROXY_TRACE_CONTENT", "false").lower() == "true"
-_EXPERIMENT = os.environ.get("MLFLOW_EXPERIMENT_NAME", "").strip()
+
+
+def _resolve_experiment() -> str:
+    """The experiment each CoDA's traces land in. Prefer an explicit
+    MLFLOW_EXPERIMENT_NAME; else DERIVE `/Users/{APP_OWNER}/{DATABRICKS_APP_NAME}`
+    — the SAME name setup_mlflow.py creates — from env every CoDA app already has.
+
+    FLEET-CRITICAL: without this the proxy leaves the experiment unset and every
+    CoDA's spans pile into the Default experiment (id 0) on the shared OSS server,
+    with no per-CoDA separation. Deriving per-app means coda-01, coda-02, … each
+    route to their OWN experiment automatically, no per-CoDA config needed."""
+    explicit = os.environ.get("MLFLOW_EXPERIMENT_NAME", "").strip()
+    if explicit:
+        return explicit
+    owner = os.environ.get("APP_OWNER", "").strip()
+    app = os.environ.get("DATABRICKS_APP_NAME", "").strip()
+    if owner and app:
+        return f"/Users/{owner}/{app}"
+    return ""  # cannot derive → server default (Default); logged in _ensure_mlflow
+
+
+_EXPERIMENT = _resolve_experiment()
 
 # Small bounded pool: span emission is I/O to the OSS server. If it saturates,
 # new spans are dropped (D-N1) rather than queued unboundedly.
@@ -145,7 +166,13 @@ def _ensure_mlflow():
                 try:
                     mlflow.set_tracking_uri(os.environ["MLFLOW_OSS_URL"].rstrip("/"))
                     if _EXPERIMENT:
+                        # set_experiment creates it if absent, so each fleet member
+                        # auto-provisions its own experiment on first trace.
                         mlflow.set_experiment(_EXPERIMENT)
+                        log.info("proxy tracing → experiment %s", _EXPERIMENT)
+                    else:
+                        log.warning("no experiment resolved (APP_OWNER/DATABRICKS_APP_NAME "
+                                    "unset) — traces will land in the OSS Default experiment")
                     _mlflow_ready = True
                 except Exception as e:  # noqa: BLE001
                     log.warning("MLflow tracing init failed (%s); disabling", e)
