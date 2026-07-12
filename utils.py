@@ -63,6 +63,41 @@ def pick_in_geo_model(preferred: list[str], available: set[str], fallback: str) 
     return fallback
 
 
+# Matches both the AI Gateway form (`databricks-claude-opus-4-8`) and the UC
+# model-services form (`system.ai.claude-opus-4-8`), capturing family + version.
+_CLAUDE_MODEL_RE = re.compile(
+    r"^(?:system\.ai\.)?(?:databricks-)?claude-(opus|sonnet|haiku)-(\d+)-(\d+)(.*)$"
+)
+
+
+def add_1m_context_suffix(model: str) -> str:
+    """Append Claude Code's ``[1m]`` suffix for gateway 1M-context routing.
+
+    Claude Code reads ``ANTHROPIC_DEFAULT_OPUS_MODEL`` / ``_SONNET_MODEL`` and,
+    when the id ends in ``[1m]``, requests the 1M context window. On the raw
+    Anthropic API that becomes the ``context-1m-2025-08-07`` beta header — which
+    ``CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`` (set alongside this) would strip.
+    But we route through the Databricks AI Gateway, which parses ``[1m]`` off the
+    model-id string server-side, so the suffix and the disable-betas flag coexist
+    (the flag is required because the gateway 400s on unknown ``anthropic-beta``
+    headers). This mirrors Databricks' own ``ucode`` wrapper.
+
+    Only opus/sonnet >= 4.6 get the suffix — Haiku 4.5 is 200K-native, and
+    suffixing it would produce an unroutable endpoint id. Idempotent: an id that
+    already ends in ``[1m]`` (or that doesn't parse as a Claude model) is
+    returned unchanged.
+    """
+    if model.endswith("[1m]"):
+        return model
+    match = _CLAUDE_MODEL_RE.match(model)
+    if not match:
+        return model
+    family, major_raw, minor_raw, _ = match.groups()
+    version = (int(major_raw), int(minor_raw))
+    should_suffix = family in ("opus", "sonnet") and version >= (4, 6)
+    return f"{model}[1m]" if should_suffix else model
+
+
 def _default_npm_min_age_days() -> int:
     """Read NPM_MIN_RELEASE_AGE_DAYS env var, default 7. Falls back to 7 on parse error."""
     try:

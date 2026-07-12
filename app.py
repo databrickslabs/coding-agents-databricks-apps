@@ -25,7 +25,7 @@ import requests
 import app_state
 import enterprise_config
 from claude_otel import apply_claude_otel_env
-from utils import ensure_https, get_gateway_host
+from utils import add_1m_context_suffix, ensure_https, get_gateway_host
 from pat_rotator import PATRotator
 from telemetry import log_telemetry, set_product_info
 
@@ -579,8 +579,10 @@ def _configure_all_cli_auth(token):
         settings["env"].pop("ANTHROPIC_AUTH_TOKEN", None)
     else:
         settings["env"]["ANTHROPIC_AUTH_TOKEN"] = token
-    settings["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = "databricks-claude-opus-4-8"
-    settings["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = "databricks-claude-sonnet-4-6"
+    # [1m] suffix requests the 1M context window via the gateway (opus/sonnet
+    # only; see utils.add_1m_context_suffix). Keep in sync with setup_claude.py.
+    settings["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = add_1m_context_suffix("databricks-claude-opus-4-8")
+    settings["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = add_1m_context_suffix("databricks-claude-sonnet-4-6")
     settings["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = "databricks-claude-haiku-4-5"
     settings["env"]["ANTHROPIC_CUSTOM_HEADERS"] = "x-databricks-use-coding-agent-mode: true"
     settings["env"]["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] = "1"
