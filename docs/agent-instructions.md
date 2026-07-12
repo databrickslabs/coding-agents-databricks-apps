@@ -238,8 +238,12 @@ verify container-internal state or exercise endpoints that read
   `PUT /v1/hosts/{id}/permissions/{user_id}` (owner-only call from the SP).
 - Runner subprocess stdout goes to `~/.omnigent/logs/host-runner/`, not CoDA's
   app log.
-- CoDA's host has SDK agents (Polly, Debby) configured; the native Claude Code
-  CLI harness (Claude Code only) requires `omnigent setup` inside the container.
+- CoDA's host has SDK agents (Polly, Debby) configured; the native CLI harnesses
+  (Claude Code, Codex, OpenCode, pi) all need `omnigent setup` to have run inside
+  the container — it auto-adopts CoDA's ambient AI-Gateway creds into
+  `~/.omnigent/config.yaml` for whatever harness the runner uses. CoDA runs it via
+  `_run_setup_once()` in `omnigents_host.py`, decoupled from the interactive PAT
+  bootstrap that gates `run_setup()`.
 - Personal Omnigent server app `omnigents-<profile>` may be STOPPED (reversible with
   `databricks apps start omnigents-<profile> --profile <profile>`).
 
