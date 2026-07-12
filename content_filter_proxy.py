@@ -687,6 +687,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             _usage = None
 
             def _sniff_stream_event(line_str):  # noqa: ANN001
+                nonlocal _stop_reason, _usage  # must precede any use of these names
                 if not line_str.startswith("data:"):
                     return
                 payload = line_str[5:].strip()
@@ -702,17 +703,14 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     if delta.get("text"):
                         _text_parts.append(delta["text"])
                     if delta.get("stop_reason"):
-                        nonlocal _stop_reason
                         _stop_reason = delta["stop_reason"]
                 for ch in evt.get("choices", []) or []:
                     cd = (ch or {}).get("delta") or {}
                     if cd.get("content"):
                         _text_parts.append(cd["content"])
                     if ch.get("finish_reason"):
-                        nonlocal _stop_reason
                         _stop_reason = ch["finish_reason"]
                 if evt.get("usage"):
-                    nonlocal _usage
                     _usage = evt["usage"]
 
             for raw_line in resp.iter_lines(decode_unicode=True):
