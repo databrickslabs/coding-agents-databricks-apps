@@ -677,6 +677,44 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
             processor = SSEProcessor()
 
+            # Accumulate the assembled response as SSE chunks stream past, so the
+            # trace can record the model's reply (not just null). We already iterate
+            # every line here; sniffing the text/stop_reason deltas is cheap and stays
+            # OFF the client's critical path (we only build strings). Fully guarded —
+            # any reconstruction error must never break the client stream (D-N4).
+            _text_parts: list[str] = []
+            _stop_reason = None
+            _usage = None
+
+            def _sniff_stream_event(line_str):  # noqa: ANN001
+                if not line_str.startswith("data:"):
+                    return
+                payload = line_str[5:].strip()
+                if not payload or payload == "[DONE]":
+                    return
+                try:
+                    evt = json.loads(payload)
+                except Exception:  # noqa: BLE001
+                    return
+                # Anthropic: content_block_delta.delta.text ; OpenAI: choices[].delta.content
+                delta = evt.get("delta") or {}
+                if isinstance(delta, dict):
+                    if delta.get("text"):
+                        _text_parts.append(delta["text"])
+                    if delta.get("stop_reason"):
+                        nonlocal _stop_reason
+                        _stop_reason = delta["stop_reason"]
+                for ch in evt.get("choices", []) or []:
+                    cd = (ch or {}).get("delta") or {}
+                    if cd.get("content"):
+                        _text_parts.append(cd["content"])
+                    if ch.get("finish_reason"):
+                        nonlocal _stop_reason
+                        _stop_reason = ch["finish_reason"]
+                if evt.get("usage"):
+                    nonlocal _usage
+                    _usage = evt["usage"]
+
             for raw_line in resp.iter_lines(decode_unicode=True):
                 if raw_line is None:
                     continue
@@ -687,6 +725,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     # Blank line = event boundary, send it
                     self._send_chunk(b"\r\n")
                     continue
+
+                try:
+                    _sniff_stream_event(line)
+                except Exception:  # noqa: BLE001 — tracing sniff must never break the stream
+                    pass
 
                 # Process through SSE fixer
                 output_lines = processor.process_line(line)
@@ -701,10 +744,17 @@ class ProxyHandler(BaseHTTPRequestHandler):
             self._send_chunk(b"")
 
             # spec-D: fire-and-forget span after the stream completes (D-N2).
-            # Streaming responses aren't reassembled here — emit metadata only.
+            # Reconstruct the streamed response so the trace carries the model's reply.
+            _stream_resp = {
+                "content": [{"type": "text", "text": "".join(_text_parts)}],
+                "stop_reason": _stop_reason,
+            }
+            if _usage:
+                _stream_resp["usage"] = _usage
             _trace_proxy_request(
                 path=self.path, req=_req_data, headers=self.headers,
-                resp_body=None, status=resp.status_code, t_start=_t_start,
+                resp_body=json.dumps(_stream_resp).encode(), status=resp.status_code,
+                t_start=_t_start,
             )
 
         except requests.exceptions.ConnectionError as e:
