@@ -4,12 +4,7 @@ This guide covers creating and managing Genie Spaces for SQL-based data explorat
 
 ## What is a Genie Space?
 
-A Genie Space connects to Unity Catalog tables and translates natural language questions into SQL queries. The system:
-
-1. **Understands** the table schemas and relationships
-2. **Generates** SQL queries from natural language
-3. **Executes** queries on a SQL warehouse
-4. **Presents** results in a conversational format
+A Genie Space connects to Unity Catalog tables and translates natural language questions into SQL — understanding schemas, generating queries, executing them on a SQL warehouse, and presenting results conversationally.
 
 ## Creation Workflow
 
@@ -18,7 +13,7 @@ A Genie Space connects to Unity Catalog tables and translates natural language q
 **Before creating a Genie Space, you MUST inspect the table schemas** to understand what data is available:
 
 ```python
-get_table_details(
+get_table_stats_and_schema(
     catalog="my_catalog",
     schema="sales",
     table_stat_level="SIMPLE"
@@ -45,7 +40,8 @@ Based on the schema information:
 Create the space with content tailored to the actual data:
 
 ```python
-create_or_update_genie(
+manage_genie(
+    action="create_or_update",
     display_name="Sales Analytics",
     table_identifiers=[
         "my_catalog.sales.customers",
@@ -153,17 +149,189 @@ Write sample questions that:
 
 ## Updating a Genie Space
 
-To update an existing space:
+`manage_genie(action="create_or_update")` handles both create and update automatically. There are two ways it locates an existing space to update:
 
-1. **Add/remove tables**: Call `create_or_update_genie` with updated `table_identifiers`
-2. **Update questions**: Include new `sample_questions`
-3. **Change warehouse**: Provide a different `warehouse_id`
+- **By `space_id`** (explicit, preferred): pass `space_id=` to target a specific space.
+- **By `display_name`** (implicit fallback): if `space_id` is omitted, the tool searches for a space with a matching name and updates it if found; otherwise it creates a new one.
 
-The tool finds the existing space by name and updates it.
+### Simple field updates (tables, questions, warehouse)
+
+To update metadata without a serialized config:
+
+```python
+manage_genie(
+    action="create_or_update",
+    display_name="Sales Analytics",
+    space_id="01abc123...",           # omit to match by name instead
+    table_identifiers=[               # updated table list
+        "my_catalog.sales.customers",
+        "my_catalog.sales.orders",
+        "my_catalog.sales.products",
+    ],
+    sample_questions=[                # updated sample questions
+        "What were total sales last month?",
+        "Who are our top 10 customers by revenue?",
+    ],
+    warehouse_id="abc123def456",      # omit to keep current / auto-detect
+    description="Updated description.",
+)
+```
+
+### Full config update via `serialized_space`
+
+To push a complete serialized configuration to an existing space (the dict contains all regular table metadata, plus it preserves all instructions, SQL examples, join specs, etc.):
+
+```python
+manage_genie(
+    action="create_or_update",
+    display_name="Sales Analytics",   # overrides title embedded in serialized_space
+    table_identifiers=[],             # ignored when serialized_space is provided
+    space_id="01abc123...",           # target space to overwrite
+    warehouse_id="abc123def456",      # overrides warehouse embedded in serialized_space
+    description="Updated description.",  # overrides description embedded in serialized_space; omit to keep the one in the payload
+    serialized_space=remapped_config, # JSON string from manage_genie(action="export") (after catalog remap if needed)
+)
+```
+
+> **Note:** When `serialized_space` is provided, `table_identifiers` and `sample_questions` are ignored — the full config comes from the serialized payload. However, `display_name`, `warehouse_id`, and `description` are still applied as top-level overrides on top of the serialized payload. Omit any of them to keep the values embedded in `serialized_space`.
+
+## Export, Import & Migration
+
+`manage_genie(action="export")` returns a dictionary with four top-level keys:
+
+| Key | Description |
+|-----|-------------|
+| `space_id` | ID of the exported space |
+| `title` | Display name of the space |
+| `description` | Description of the space |
+| `warehouse_id` | SQL warehouse associated with the space (workspace-specific — do **not** reuse across workspaces) |
+| `serialized_space` | JSON-encoded string with the full space configuration (see below) |
+
+This envelope enables cloning, backup, and cross-workspace migration. Use `manage_genie(action="export")` and `manage_genie(action="import")` for all export/import operations — no direct REST calls needed.
+
+### What is `serialized_space`?
+
+`serialized_space` is a JSON string (version 2) embedded inside the export envelope. Its top-level keys are:
+
+| Key | Contents |
+|-----|----------|
+| `version` | Schema version (currently `2`) |
+| `config` | Space-level config: `sample_questions` shown in the UI |
+| `data_sources` | `tables` array — each entry has a fully-qualified `identifier` (`catalog.schema.table`) and optional `column_configs` (format assistance, entity matching per column) |
+| `instructions` | `example_question_sqls` (certified Q&A pairs), `join_specs` (join relationships between tables), `sql_snippets` (`filters` and `measures` with display names and usage instructions) |
+| `benchmarks` | Evaluation Q&A pairs used to measure space quality |
+
+Catalog names appear **everywhere** inside `serialized_space` — in `data_sources.tables[].identifier`, SQL strings in `example_question_sqls`, `join_specs`, and `sql_snippets`. A single `.replace(src_catalog, tgt_catalog)` on the whole string is sufficient for catalog remapping.
+
+Minimum structure:
+```json
+{"version": 2, "data_sources": {"tables": [{"identifier": "catalog.schema.table"}]}}
+```
+
+### Exporting a Space
+
+Use `manage_genie(action="export")` to export the full configuration (requires CAN EDIT permission):
+
+```python
+exported = manage_genie(action="export", space_id="01abc123...")
+# Returns:
+# {
+#   "space_id": "01abc123...",
+#   "title": "Sales Analytics",
+#   "description": "Explore sales data...",
+#   "warehouse_id": "abc123def456",
+#   "serialized_space": "{\"version\":2,\"data_sources\":{...},\"instructions\":{...}}"
+# }
+```
+
+You can also get `serialized_space` inline via `manage_genie(action="get")`:
+
+```python
+details = manage_genie(action="get", space_id="01abc123...", include_serialized_space=True)
+serialized = details["serialized_space"]
+```
+
+### Cloning a Space (Same Workspace)
+
+```python
+# Step 1: Export the source space
+source = manage_genie(action="export", space_id="01abc123...")
+
+# Step 2: Import as a new space
+manage_genie(
+    action="import",
+    warehouse_id=source["warehouse_id"],
+    serialized_space=source["serialized_space"],
+    title=source["title"],  # override title; omit to keep original
+    description=source["description"],
+)
+# Returns: {"space_id": "01def456...", "title": "Sales Analytics (Dev Copy)", "operation": "imported"}
+```
+
+### Migrating Across Workspaces with Catalog Remapping
+
+When migrating between environments (e.g. prod → dev), Unity Catalog names are often different. The `serialized_space` string contains the source catalog name **everywhere** — in table identifiers, SQL queries, join specs, and filter snippets. You must remap it before importing.
+
+**Agent workflow (3 steps):**
+
+**Step 1 — Export from source workspace:**
+```python
+exported = manage_genie(action="export", space_id="01f106e1239d14b28d6ab46f9c15e540")
+# exported keys: warehouse_id, title, description, serialized_space
+# exported["serialized_space"] contains all references to source catalog
+```
+
+**Step 2 — Remap catalog name in `serialized_space`:**
+
+The agent does this as an inline string substitution between the two MCP calls:
+```python
+modified_serialized = exported["serialized_space"].replace(
+    "source_catalog_name",     # e.g. "healthverity_claims_sample_patient_dataset"
+    "target_catalog_name"      # e.g. "healthverity_claims_sample_patient_dataset_dev"
+)
+```
+This replaces all occurrences — table identifiers, SQL FROM clauses, join specs, and filter snippets.
+
+**Step 3 — Import to target workspace:**
+```python
+manage_genie(
+    action="import",
+    warehouse_id="<target_warehouse_id>",   # from manage_warehouse(action="list") on target
+    serialized_space=modified_serialized,
+    title=exported["title"],
+    description=exported["description"]
+)
+```
+
+### Batch Migration of Multiple Spaces
+
+To migrate several spaces at once, loop through space IDs. The agent exports, remaps the catalog, then imports each:
+
+```
+For each space_id in [id1, id2, id3]:
+  1. exported = manage_genie(action="export", space_id=space_id)
+  2. modified  = exported["serialized_space"].replace(src_catalog, tgt_catalog)
+  3. result    = manage_genie(action="import", warehouse_id=wh_id, serialized_space=modified, title=exported["title"], description=exported["description"])
+  4. record result["space_id"] for updating databricks.yml
+```
+
+After migration, update `databricks.yml` with the new dev `space_id` values under the `dev` target's `genie_space_ids` variable.
+
+### Updating an Existing Space with New Config
+
+To push a serialized config to an already-existing space (rather than creating a new one), use `manage_genie(action="create_or_update")` with `space_id=` and `serialized_space=`. The export → remap → push pattern is identical to the migration steps above; just replace `manage_genie(action="import")` with `manage_genie(action="create_or_update", space_id=TARGET_SPACE_ID, ...)` as the final call.
+
+### Permissions Required
+
+| Operation | Required Permission |
+|-----------|-------------------|
+| `manage_genie(action="export")` / `manage_genie(action="get", include_serialized_space=True)` | CAN EDIT on source space |
+| `manage_genie(action="import")` | Can create items in target workspace folder |
+| `manage_genie(action="create_or_update")` with `serialized_space` (update) | CAN EDIT on target space |
 
 ## Example End-to-End Workflow
 
-1. **Generate synthetic data** using `databricks-synthetic-data-generation` skill:
+1. **Generate synthetic data** using `databricks-synthetic-data-gen` skill:
    - Creates parquet files in `/Volumes/catalog/schema/raw_data/`
 
 2. **Create tables** using `databricks-spark-declarative-pipelines` skill:
@@ -171,7 +339,7 @@ The tool finds the existing space by name and updates it.
 
 3. **Inspect the tables**:
    ```python
-   get_table_details(catalog="catalog", schema="schema")
+   get_table_stats_and_schema(catalog="catalog", schema="schema")
    ```
 
 4. **Create the Genie Space**:
@@ -201,3 +369,27 @@ The tool finds the existing space by name and updates it.
 - Add table and column comments
 - Include sample questions that demonstrate the vocabulary
 - Add instructions via the Databricks Genie UI
+
+### `manage_genie(action="export")` returns empty `serialized_space`
+
+Requires at least **CAN EDIT** permission on the space.
+
+### `manage_genie(action="import")` fails with permission error
+
+Ensure you have CREATE privileges in the target workspace folder.
+
+### Tables not found after migration
+
+Catalog name was not remapped — replace the source catalog name in `serialized_space` before calling `manage_genie(action="import")`. The catalog appears in table identifiers, SQL FROM clauses, join specs, and filter snippets; a single `.replace(src_catalog, tgt_catalog)` on the whole string covers all occurrences.
+
+### `manage_genie` lands in the wrong workspace
+
+Each MCP server is workspace-scoped. Set up two named MCP server entries (one per profile) in your IDE's MCP config instead of switching a single server's profile mid-session.
+
+### MCP server doesn't pick up profile change
+
+The MCP process reads `DATABRICKS_CONFIG_PROFILE` once at startup — editing the config file requires an IDE reload to take effect.
+
+### `manage_genie(action="import")` fails with JSON parse error
+
+The `serialized_space` string may contain multi-line SQL arrays with `\n` escape sequences. Flatten SQL arrays to single-line strings before passing to avoid double-escaping issues.

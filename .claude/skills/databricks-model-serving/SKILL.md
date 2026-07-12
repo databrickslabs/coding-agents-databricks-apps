@@ -29,8 +29,7 @@ ALWAYS use exact endpoint names from this table. NEVER guess or abbreviate.
 
 | Endpoint Name | Provider | Notes |
 |--------------|----------|-------|
-| `databricks-gpt-5-3-codex` | OpenAI | Latest GPT Codex, 400K context |
-| `databricks-gpt-5-2` | OpenAI | GPT 5.2, 400K context |
+| `databricks-gpt-5-2` | OpenAI | Latest GPT, 400K context |
 | `databricks-gpt-5-1` | OpenAI | Instant + Thinking modes |
 | `databricks-gpt-5-1-codex-max` | OpenAI | Code-specialized (high perf) |
 | `databricks-gpt-5-1-codex-mini` | OpenAI | Code-specialized (cost-opt) |
@@ -102,7 +101,7 @@ dbutils.library.restartPython()
 
 Or via MCP:
 ```
-execute_databricks_command(code="%pip install -U mlflow==3.6.0 databricks-langchain langgraph==0.3.4 databricks-agents pydantic")
+execute_code(code="%pip install -U mlflow==3.6.0 databricks-langchain langgraph==0.3.4 databricks-agents pydantic")
 ```
 
 ### Step 2: Create Agent File
@@ -112,16 +111,17 @@ Create `agent.py` locally with `ResponsesAgent` pattern (see [3-genai-agents.md]
 ### Step 3: Upload to Workspace
 
 ```
-upload_folder(
-    local_folder="./my_agent",
-    workspace_folder="/Workspace/Users/you@company.com/my_agent"
+manage_workspace_files(
+    action="upload",
+    local_path="./my_agent",
+    workspace_path="/Workspace/Users/you@company.com/my_agent"
 )
 ```
 
 ### Step 4: Test Agent
 
 ```
-run_python_file_on_databricks(
+execute_code(
     file_path="./my_agent/test_agent.py",
     cluster_id="<cluster_id>"
 )
@@ -130,7 +130,7 @@ run_python_file_on_databricks(
 ### Step 5: Log Model
 
 ```
-run_python_file_on_databricks(
+execute_code(
     file_path="./my_agent/log_model.py",
     cluster_id="<cluster_id>"
 )
@@ -143,7 +143,8 @@ See [7-deployment.md](7-deployment.md) for job-based deployment that doesn't tim
 ### Step 7: Query Endpoint
 
 ```
-query_serving_endpoint(
+manage_serving_endpoint(
+    action="query",
     name="my-agent-endpoint",
     messages=[{"role": "user", "content": "Hello!"}]
 )
@@ -181,9 +182,8 @@ Then deploy via UI or SDK. See [1-classical-ml.md](1-classical-ml.md).
 
 | Tool | Purpose |
 |------|---------|
-| `upload_folder` | Upload agent files to workspace |
-| `run_python_file_on_databricks` | Test agent, log model |
-| `execute_databricks_command` | Install packages, quick tests |
+| `manage_workspace_files` (action="upload") | Upload agent files to workspace |
+| `execute_code` | Install packages, test agent, log model |
 
 ### Deployment
 
@@ -193,13 +193,37 @@ Then deploy via UI or SDK. See [1-classical-ml.md](1-classical-ml.md).
 | `manage_job_runs` (action="run_now") | Kick off deployment (async) |
 | `manage_job_runs` (action="get") | Check deployment job status |
 
-### Querying
+### manage_serving_endpoint - Querying
 
-| Tool | Purpose |
-|------|---------|
-| `get_serving_endpoint_status` | Check if endpoint is READY |
-| `query_serving_endpoint` | Send requests to endpoint |
-| `list_serving_endpoints` | List all endpoints |
+| Action | Description | Required Params |
+|--------|-------------|-----------------|
+| `get` | Check endpoint status (READY/NOT_READY/NOT_FOUND) | name |
+| `list` | List all endpoints | (none, optional limit) |
+| `query` | Send requests to endpoint | name + one of: messages, inputs, dataframe_records |
+
+**Example usage:**
+```python
+# Check endpoint status
+manage_serving_endpoint(action="get", name="my-agent-endpoint")
+
+# List all endpoints
+manage_serving_endpoint(action="list")
+
+# Query a chat/agent endpoint
+manage_serving_endpoint(
+    action="query",
+    name="my-agent-endpoint",
+    messages=[{"role": "user", "content": "Hello!"}],
+    max_tokens=500
+)
+
+# Query a traditional ML endpoint
+manage_serving_endpoint(
+    action="query",
+    name="sklearn-classifier",
+    dataframe_records=[{"age": 25, "income": 50000, "credit_score": 720}]
+)
+```
 
 ---
 
@@ -208,7 +232,7 @@ Then deploy via UI or SDK. See [1-classical-ml.md](1-classical-ml.md).
 ### Check Endpoint Status After Deployment
 
 ```
-get_serving_endpoint_status(name="my-agent-endpoint")
+manage_serving_endpoint(action="get", name="my-agent-endpoint")
 ```
 
 Returns:
@@ -223,7 +247,8 @@ Returns:
 ### Query a Chat/Agent Endpoint
 
 ```
-query_serving_endpoint(
+manage_serving_endpoint(
+    action="query",
     name="my-agent-endpoint",
     messages=[
         {"role": "user", "content": "What is Databricks?"}
@@ -235,7 +260,8 @@ query_serving_endpoint(
 ### Query a Traditional ML Endpoint
 
 ```
-query_serving_endpoint(
+manage_serving_endpoint(
+    action="query",
     name="sklearn-classifier",
     dataframe_records=[
         {"age": 25, "income": 50000, "credit_score": 720}
@@ -250,7 +276,7 @@ query_serving_endpoint(
 | Issue | Solution |
 |-------|----------|
 | **Invalid output format** | Use `self.create_text_output_item(text, id)` - NOT raw dicts! |
-| **Endpoint NOT_READY** | Deployment takes ~15 min. Use `get_serving_endpoint_status` to poll. |
+| **Endpoint NOT_READY** | Deployment takes ~15 min. Use `manage_serving_endpoint(action="get")` to poll. |
 | **Package not found** | Specify exact versions in `pip_requirements` when logging model |
 | **Tool timeout** | Use job-based deployment, not synchronous calls |
 | **Auth error on endpoint** | Ensure `resources` specified in `log_model` for auto passthrough |

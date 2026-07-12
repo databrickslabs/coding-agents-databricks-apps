@@ -57,7 +57,7 @@ one MLflow OSS server, as a Databricks App, backed by Lakebase.
 - **A-R2 — Lakebase backend store.** `--backend-store-uri` is a
   `postgresql://...` URL built from the Lakebase connection env
   (`PGHOST/PGDATABASE/PGUSER/PGPASSWORD/PGPORT` — injected when Lakebase is added
-  as an app resource, per `.claude/skills/databricks-app-python/5-lakebase.md`).
+  as an app resource, per `.claude/skills/databricks-apps-python/5-lakebase.md`).
   Requires `psycopg2-binary` (or `psycopg`) in `requirements.txt` — **the #1
   cause of Lakebase app crashes if omitted** (per the same skill). *(new.)*
 - **A-R3 — Shared, instance-keyed.** One Lakebase database serves the whole

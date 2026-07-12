@@ -11,12 +11,14 @@ Python SDK patterns for Zerobus Ingest: synchronous and asynchronous APIs, JSON 
 from zerobus.sdk.sync import ZerobusSdk
 
 # Asynchronous API (equivalent capabilities)
-from zerobus.sdk.asyncio import ZerobusSdk as AsyncZerobusSdk
+from zerobus.sdk.aio import ZerobusSdk as AsyncZerobusSdk
 
 # Shared types (used by both sync and async)
 from zerobus.sdk.shared import (
     RecordType,
-    IngestRecordResponse,
+    AckCallback,
+    ZerobusException,
+    NonRetriableException,
     StreamConfigurationOptions,
     TableProperties,
 )
@@ -49,8 +51,8 @@ stream = sdk.create_stream(client_id, client_secret, table_props, options)
 try:
     for i in range(100):
         record = {"device_name": f"sensor-{i}", "temp": 22, "humidity": 55}
-        ack = stream.ingest_record(record)
-        ack.wait_for_ack()  # Block until durably written
+        offset = stream.ingest_record_offset(record)
+        stream.wait_for_offset(offset)  # Block until durably written
 finally:
     stream.close()
 ``` -->
@@ -90,8 +92,8 @@ try:
             temp=22,
             humidity=55,
         )
-        ack = stream.ingest_record(record)
-        ack.wait_for_ack()
+        offset = stream.ingest_record_offset(record)
+        stream.wait_for_offset(offset)
 finally:
     stream.close()
 ```
@@ -100,17 +102,21 @@ finally:
 
 ## ACK Callback (Asynchronous Acknowledgment)
 
-Instead of blocking on each ACK, register a callback for background durability confirmation:
+Instead of blocking on each ACK, register an `AckCallback` subclass for background durability confirmation:
 
 ```python
-from zerobus.sdk.shared import IngestRecordResponse, StreamConfigurationOptions, RecordType
+from zerobus.sdk.shared import AckCallback, StreamConfigurationOptions, RecordType
 
-def on_ack(response: IngestRecordResponse) -> None:
-    print(f"Durable up to offset: {response.durability_ack_up_to_offset}")
+class MyAckHandler(AckCallback):
+    def on_ack(self, offset: int) -> None:
+        print(f"Durable up to offset: {offset}")
+
+    def on_error(self, offset: int, message: str) -> None:
+        print(f"Error at offset {offset}: {message}")
 
 options = StreamConfigurationOptions(
     record_type=RecordType.JSON,
-    ack_callback=on_ack,
+    ack_callback=MyAckHandler(),
 )
 
 # Create stream with callback
@@ -119,7 +125,7 @@ stream = sdk.create_stream(client_id, client_secret, table_props, options)
 try:
     for i in range(1000):
         record = {"device_name": f"sensor-{i}", "temp": 22, "humidity": 55}
-        stream.ingest_record(record)  # Non-blocking, ACKs arrive via callback
+        stream.ingest_record_nowait(record)  # Fire-and-forget, ACKs arrive via callback
     stream.flush()  # Ensure all buffered records are sent
 finally:
     stream.close()
@@ -135,12 +141,12 @@ A production-ready wrapper with retry logic, reconnection, and both JSON and Pro
 import os
 import time
 import logging
-from typing import Optional, Callable
+from typing import Optional
 
 from zerobus.sdk.sync import ZerobusSdk
 from zerobus.sdk.shared import (
     RecordType,
-    IngestRecordResponse,
+    AckCallback,
     StreamConfigurationOptions,
     TableProperties,
 )
@@ -159,7 +165,7 @@ class ZerobusClient:
         client_id: str,
         client_secret: str,
         record_type: RecordType = RecordType.JSON,
-        ack_callback: Optional[Callable[[IngestRecordResponse], None]] = None,
+        ack_callback: Optional[AckCallback] = None,
         proto_descriptor=None,
     ):
         self.server_endpoint = server_endpoint
@@ -199,8 +205,8 @@ class ZerobusClient:
             try:
                 if self.stream is None:
                     self.init_stream()
-                ack = self.stream.ingest_record(payload)
-                ack.wait_for_ack()
+                offset = self.stream.ingest_record_offset(payload)
+                self.stream.wait_for_offset(offset)
                 return True
             except Exception as e:
                 err = str(e).lower()
@@ -275,7 +281,7 @@ The SDK provides an equivalent async API for use with `asyncio`:
 
 ```python
 import asyncio
-from zerobus.sdk.asyncio import ZerobusSdk as AsyncZerobusSdk
+from zerobus.sdk.aio import ZerobusSdk as AsyncZerobusSdk
 from zerobus.sdk.shared import RecordType, StreamConfigurationOptions, TableProperties
 
 
@@ -289,8 +295,8 @@ async def ingest_async():
     try:
         for i in range(100):
             record = {"device_name": f"sensor-{i}", "temp": 22, "humidity": 55}
-            ack = await stream.ingest_record(record)
-            await ack.wait_for_ack()
+            offset = await stream.ingest_record_offset(record)
+            await stream.wait_for_offset(offset)
     finally:
         await stream.close()
 
@@ -304,7 +310,7 @@ asyncio.run(ingest_async())
 
 ## Batch Pattern
 
-For higher throughput, send records without blocking on each ACK and flush at the end:
+For higher throughput, use `ingest_record_nowait` (fire-and-forget) or batch methods, and flush at the end:
 
 ```python
 with ZerobusClient(
@@ -314,10 +320,39 @@ with ZerobusClient(
     client_id=os.environ["DATABRICKS_CLIENT_ID"],
     client_secret=os.environ["DATABRICKS_CLIENT_SECRET"],
     record_type=RecordType.JSON,
-    ack_callback=lambda resp: None,  # Discard individual ACKs
 ) as client:
     for i in range(10_000):
         record = {"device_name": f"sensor-{i}", "temp": 22, "humidity": 55}
-        client.stream.ingest_record(record)  # Non-blocking
+        client.stream.ingest_record_nowait(record)  # Fire-and-forget
     # flush() and close() called automatically by context manager
 ```
+
+For true batch ingestion, use the batch variants:
+
+```python
+records = [
+    {"device_name": f"sensor-{i}", "temp": 22, "humidity": 55}
+    for i in range(10_000)
+]
+# Fire-and-forget batch
+stream.ingest_records_nowait(records)
+stream.flush()
+
+# Or with offset tracking
+offset = stream.ingest_records_offset(records)
+stream.wait_for_offset(offset)
+```
+
+---
+
+## Ingestion Method Comparison
+
+| Method | Returns | Blocks? | Best For |
+|--------|---------|---------|----------|
+| `ingest_record_offset(record)` | offset | No (enqueues) | Single record with durability tracking |
+| `ingest_record_nowait(record)` | None | No | Max single-record throughput |
+| `ingest_records_offset(records)` | last offset | No (enqueues) | Batch with durability tracking |
+| `ingest_records_nowait(records)` | None | No | Max batch throughput |
+| `wait_for_offset(offset)` | None | Yes (until ACK) | Durability confirmation |
+| `flush()` | None | Yes (until sent) | Ensure all buffered records are sent |
+| `ingest_record(record)` | RecordAcknowledgment | No | Primary method in SDK v1.1.0+; pass `json.dumps(record)` for JSON |

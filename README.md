@@ -185,17 +185,17 @@ Open [http://localhost:8000](http://localhost:8000) — type `claude`, `codex`, 
 ---
 
 <details>
-<summary><strong>🧠 All 39 Skills</strong></summary>
+<summary><strong>🧠 All 41 Skills</strong></summary>
 
-### Databricks Skills (25) — [ai-dev-kit](https://github.com/databricks-solutions/ai-dev-kit)
+### Databricks Skills (27) — [ai-dev-kit](https://github.com/databricks-solutions/ai-dev-kit)
 
 | Category | Skills |
 |----------|--------|
-| AI & Agents | agent-bricks, genie, mlflow-eval, model-serving |
+| AI & Agents | agent-bricks, ai-functions, genie, mlflow-eval, model-serving |
 | Analytics | aibi-dashboards, unity-catalog, metric-views |
-| Data Engineering | declarative-pipelines, jobs, structured-streaming, synthetic-data, zerobus-ingest |
-| Development | asset-bundles, app-apx, app-python, python-sdk, config, spark-python-data-source |
-| Storage | lakebase-autoscale, lakebase-provisioned, vector-search |
+| Data Engineering | declarative-pipelines, jobs, structured-streaming, synthetic-data-gen, zerobus-ingest |
+| Development | bundles, app-apx, apps-python, python-sdk, config, execution-compute, spark-python-data-source |
+| Storage | iceberg, lakebase-autoscale, lakebase-provisioned, vector-search |
 | Reference | docs, dbsql, pdf-generation |
 | Meta | refresh-databricks-skills |
 
