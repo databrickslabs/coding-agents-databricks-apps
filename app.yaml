@@ -117,11 +117,11 @@ env:
   # deployed app self-registers as an always-on host on every restart/redeploy.
   # WHEEL_SPEC is the UC Volume the host CLI is installed from (needs the app
   # SP's READ_VOLUME grant, granted to coda-01's SP on
-  # edp_aisandbox_aisandbox_dev.ai.omnigents).
+  # main.omnigent.artifacts).
   - name: OMNIGENTS_SERVER_URL
-    value: "https://omnigent-7405614666872455.15.azure.databricksapps.com"
+    value: "https://omnigent-7405611912408878.18.azure.databricksapps.com"
   - name: OMNIGENTS_WHEEL_SPEC
-    value: "/Volumes/edp_aisandbox_aisandbox_dev/ai/omnigents/wheels"
+    value: "/Volumes/main/omnigent/artifacts/wheels"
   # Force-reinstall the host CLI on boot so a new wheel in the UC Volume is
   # actually installed (uv tool install otherwise no-ops when the tool exists).
   # Set only while rolling out a runner build; remove once the wheel is stable.
