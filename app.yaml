@@ -91,6 +91,12 @@ env:
     value: "true"
   - name: MLFLOW_OSS_URL
     value: "https://coda-mlflow-oss-7405611912408878.18.azure.databricksapps.com"
+  # Capture full prompt/response bodies in proxy trace spans (not just metadata
+  # shapes). Default is false (privacy-preserving: n_messages/stop_reason only).
+  # Enabled here so the Traces UI shows the actual model conversation. NOTE: this
+  # writes potentially sensitive prompt/response content into the OSS trace store.
+  - name: PROXY_TRACE_CONTENT
+    value: "true"
   # Browser-terminal ceiling. These are a FALLBACK: real traffic runs as
   # Omnigent runners (see OMNIGENT_HOST_MAX_RUNNERS below), and the terminal is
   # mainly used to debug an Omnigent problem — so keep a small reserve here and
