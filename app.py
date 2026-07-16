@@ -1,6 +1,7 @@
 import os
 import sys
 import hmac
+import codecs
 import pty
 import fcntl
 import struct
@@ -270,6 +271,11 @@ def _build_terminal_shell_env(base_env: dict) -> dict:
     """
     shell_env = base_env.copy()
     shell_env["TERM"] = "xterm-256color"
+    lc_all = shell_env.get("LC_ALL")
+    locale_value = lc_all if lc_all else shell_env.get("LANG", "")
+    if not locale_value.replace("-", "").replace("_", "").lower().endswith("utf8"):
+        shell_env["LANG"] = "C.UTF-8"
+        shell_env["LC_ALL"] = "C.UTF-8"
 
     # Always-strip fixed names
     for key in (
@@ -946,6 +952,22 @@ def read_pty_output(session_id, fd):
         return
     pid = session["pid"]
     session_lock = session["lock"]
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+
+    def emit_output(decoded):
+        if not decoded:
+            return
+        with session_lock:
+            # Buffer for HTTP polling fallback (AC-15)
+            session["output_buffer"].append(decoded)
+            session["last_poll_time"] = time.time()  # Keep session alive during WS output
+        # Push via WebSocket to the session room (AC-8)
+        try:
+            socketio.emit('terminal_output',
+                          {'session_id': session_id, 'output': decoded},
+                          room=session_id)
+        except Exception:
+            pass  # No WebSocket clients — HTTP polling handles it
 
     while True:
         with sessions_lock:
@@ -957,19 +979,9 @@ def read_pty_output(session_id, fd):
                 output = os.read(fd, 65536)
                 if not output:
                     # EOF — process exited
+                    emit_output(decoder.decode(b"", final=True))
                     break
-                decoded = output.decode(errors="replace")
-                with session_lock:
-                    # Buffer for HTTP polling fallback (AC-15)
-                    session["output_buffer"].append(decoded)
-                    session["last_poll_time"] = time.time()  # Keep session alive during WS output
-                # Push via WebSocket to the session room (AC-8)
-                try:
-                    socketio.emit('terminal_output',
-                                  {'session_id': session_id, 'output': decoded},
-                                  room=session_id)
-                except Exception:
-                    pass  # No WebSocket clients — HTTP polling handles it
+                emit_output(decoder.decode(output))
             else:
                 # select timed out — check if process is still alive
                 try:
