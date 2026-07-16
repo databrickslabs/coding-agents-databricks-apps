@@ -36,6 +36,33 @@ class TestPATStatusEndpoint:
             if original:
                 os.environ["DATABRICKS_TOKEN"] = original
 
+    def test_sp_apikeyhelper_is_valid_without_pat(self):
+        with mock.patch("app.initialize_app"):
+            import app as app_module
+            app_module.app.config["TESTING"] = True
+            client = app_module.app.test_client()
+
+        original_token = os.environ.pop("DATABRICKS_TOKEN", None)
+        original_creds = app_module._omnigent_sp_creds
+        original_owner = app_module.app_owner
+        try:
+            os.environ["ENABLE_SP_APIKEYHELPER"] = "true"
+            app_module._omnigent_sp_creds = {"client_id": "app-sp"}
+            app_module.app_owner = "owner@example.com"
+            resp = client.get("/api/pat-status")
+            assert resp.get_json() == {
+                "auth_mode": "sp_oauth",
+                "configured": True,
+                "valid": True,
+                "user": "owner@example.com",
+            }
+        finally:
+            os.environ.pop("ENABLE_SP_APIKEYHELPER", None)
+            app_module._omnigent_sp_creds = original_creds
+            app_module.app_owner = original_owner
+            if original_token:
+                os.environ["DATABRICKS_TOKEN"] = original_token
+
     def test_configure_pat_empty_token(self):
         with mock.patch("app.initialize_app"):
             import app as app_module

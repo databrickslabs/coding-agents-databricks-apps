@@ -94,6 +94,11 @@ class TestTerminalEnvStrip:
         assert env["LANG"] == "en_AU.UTF-8"
         assert "LC_ALL" not in env
 
+    def test_sp_apikeyhelper_selects_oauth_profile(self):
+        build = _build_terminal_shell_env()
+        env = build({"HOME": "/app", "ENABLE_SP_APIKEYHELPER": "true"})
+        assert env["DATABRICKS_CONFIG_PROFILE"] == "omnigents-host"
+
     def test_preserves_unrelated_env(self):
         """Other env vars (PATH, USER, custom workspace vars) pass through."""
         build = _build_terminal_shell_env()
