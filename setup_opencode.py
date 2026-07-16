@@ -22,6 +22,7 @@ from utils import (
     pick_in_geo_model,
 )
 from enterprise_config import npm_env
+from token_helper import resolve_databricks_token
 
 # Opt-out: allow operators to disable OpenCode bundling without removing the file.
 if os.environ.get("ENABLE_OPENCODE", "true").strip().lower() in ("false", "0", "no"):
@@ -39,7 +40,7 @@ if not os.environ.get("HOME") or os.environ["HOME"] == "/":
 home = Path(os.environ["HOME"])
 
 host = os.environ.get("DATABRICKS_HOST", "")
-token = os.environ.get("DATABRICKS_TOKEN", "")
+token = resolve_databricks_token() or ""
 anthropic_model = os.environ.get("ANTHROPIC_MODEL", "databricks-claude-opus-4-8")
 
 # 1. Install OpenCode CLI into ~/.local/bin (always, even without token)
@@ -107,7 +108,7 @@ if not host or not token:
 host = ensure_https(host.rstrip("/"))
 
 gateway_host = get_gateway_host()
-gateway_token = os.environ.get("DATABRICKS_TOKEN", "") if gateway_host else ""
+gateway_token = token if gateway_host else ""
 if gateway_host and not gateway_token:
     print("Warning: AI Gateway resolved but DATABRICKS_TOKEN missing, falling back to DATABRICKS_HOST")
     gateway_host = ""
