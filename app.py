@@ -276,6 +276,8 @@ def _build_terminal_shell_env(base_env: dict) -> dict:
     if not locale_value.replace("-", "").replace("_", "").lower().endswith("utf8"):
         shell_env["LANG"] = "C.UTF-8"
         shell_env["LC_ALL"] = "C.UTF-8"
+    if shell_env.get("ENABLE_SP_APIKEYHELPER", "").strip().lower() in ("true", "1", "yes"):
+        shell_env["DATABRICKS_CONFIG_PROFILE"] = "omnigents-host"
 
     # Always-strip fixed names
     for key in (
@@ -1438,6 +1440,18 @@ def pat_status():
     """Check if a valid, usable PAT is configured."""
     host = ensure_https(os.environ.get("DATABRICKS_HOST", ""))
     token = os.environ.get("DATABRICKS_TOKEN", "").strip()
+
+    if (
+        _omnigent_sp_creds
+        and os.environ.get("ENABLE_SP_APIKEYHELPER", "").strip().lower()
+        in ("true", "1", "yes")
+    ):
+        return jsonify({
+            "auth_mode": "sp_oauth",
+            "configured": True,
+            "valid": True,
+            "user": app_owner or "app-service-principal",
+        })
 
     if not token or pat_rotator.is_token_expired:
         # No token, or token lifetime exceeded (rotation stopped while no sessions)
