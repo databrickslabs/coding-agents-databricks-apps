@@ -26,6 +26,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
 import requests
+from token_helper import resolve_databricks_token
 
 UPSTREAM_BASE = os.environ.get("PROXY_UPSTREAM_BASE", "")
 LISTEN_HOST = os.environ.get("PROXY_HOST", "127.0.0.1")
@@ -96,6 +97,13 @@ def _get_fresh_token() -> str | None:
     )
     if cache_hot:
         return _TOKEN_CACHE["token"]
+
+    token = resolve_databricks_token()
+    if token:
+        _TOKEN_CACHE["token"] = token
+        _TOKEN_CACHE["read_at"] = now
+        _TOKEN_CACHE["mtime"] = mtime
+        return token
 
     try:
         config = configparser.ConfigParser()

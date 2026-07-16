@@ -14,6 +14,7 @@ Both are resolved fresh on each invocation, so a long-running agent survives
 PAT rotation / SP-OAuth expiry without a restart.
 """
 
+import configparser
 import os
 import sys
 from pathlib import Path
@@ -21,6 +22,29 @@ from pathlib import Path
 # The SP OAuth profile the Omnigent host writes (auth_type=oauth-m2m). Kept in
 # sync with omnigents_host._HOST_PROFILE and setup_claude._SP_PROFILE.
 SP_PROFILE = "omnigents-host"
+
+
+def resolve_databricks_token() -> str | None:
+    """Resolve a fresh SP OAuth token, falling back to the current PAT."""
+    try:
+        from databricks.sdk.core import Config
+        headers = Config(profile=SP_PROFILE).authenticate()
+        auth = (headers or {}).get("Authorization", "")
+        token = auth[7:].strip() if auth.startswith("Bearer ") else auth.strip()
+        if token:
+            return token
+    except Exception:
+        pass
+
+    token = os.environ.get("DATABRICKS_TOKEN", "").strip()
+    if token:
+        return token
+    try:
+        config = configparser.ConfigParser()
+        config.read(os.path.expanduser("~/.databrickscfg"))
+        return config.get("DEFAULT", "token", fallback="").strip() or None
+    except Exception:
+        return None
 
 _HELPER_SRC = '''#!/usr/bin/env python3
 """Print a Databricks bearer token for Claude Code / Pi token resolution.

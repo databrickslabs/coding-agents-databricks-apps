@@ -19,6 +19,7 @@ from urllib.request import urlopen, Request
 from urllib.error import URLError
 
 from utils import ensure_https, get_gateway_host
+from token_helper import resolve_databricks_token
 
 # The proxy exists solely for OpenCode — skip it when OpenCode is disabled.
 if os.environ.get("ENABLE_OPENCODE", "true").strip().lower() in ("false", "0", "no"):
@@ -70,10 +71,10 @@ pid_path.unlink(missing_ok=True)
 # Databricks configuration
 gateway_host = get_gateway_host()
 host = ensure_https(os.environ.get("DATABRICKS_HOST", "").rstrip("/"))
-token = os.environ.get("DATABRICKS_TOKEN", "")
+token = resolve_databricks_token() or ""
 
 if not token:
-    print("Warning: DATABRICKS_TOKEN not set, skipping proxy setup")
+    print("Warning: no SP OAuth or PAT token available, skipping proxy setup")
     sys.exit(0)
 
 # Determine the upstream base URL
@@ -90,6 +91,7 @@ log_path = home / ".content-filter-proxy.log"
 print(f"Starting content-filter proxy on {PROXY_HOST}:{PROXY_PORT}...")
 
 env = os.environ.copy()
+env["DATABRICKS_TOKEN"] = token
 env["PROXY_UPSTREAM_BASE"] = upstream_base
 env["PROXY_HOST"] = PROXY_HOST
 env["PROXY_PORT"] = str(PROXY_PORT)
