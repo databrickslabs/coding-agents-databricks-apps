@@ -86,3 +86,10 @@ class TestFreshTokenCacheInvalidation:
         monkeypatch.setattr(cfp, "resolve_databricks_token", lambda: "sp-oauth-token")
 
         assert cfp._get_fresh_token() == "sp-oauth-token"
+
+
+def test_sse_line_decodes_literal_utf8_without_latin1_mojibake():
+    from content_filter_proxy import _decode_sse_line
+
+    raw = 'data: {"text":"✓ café → │ ─ 😀"}'.encode("utf-8")
+    assert _decode_sse_line(raw) == 'data: {"text":"✓ café → │ ─ 😀"}'

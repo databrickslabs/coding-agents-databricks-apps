@@ -585,6 +585,13 @@ class SSEProcessor:
         return result
 
 
+def _decode_sse_line(raw_line: bytes | str) -> str:
+    """Decode SSE bytes as UTF-8 instead of requests' Latin-1 HTTP default."""
+    if isinstance(raw_line, bytes):
+        return raw_line.decode("utf-8")
+    return raw_line
+
+
 # ---------------------------------------------------------------------------
 # HTTP Server
 # ---------------------------------------------------------------------------
@@ -784,11 +791,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     if ch.get("finish_reason"):
                         _stop_reason = ch["finish_reason"]
 
-            for raw_line in resp.iter_lines(decode_unicode=True):
+            for raw_line in resp.iter_lines(decode_unicode=False):
                 if raw_line is None:
                     continue
 
-                line = raw_line.strip() if isinstance(raw_line, str) else raw_line.decode().strip()
+                line = _decode_sse_line(raw_line).strip()
 
                 if not line:
                     # Blank line = event boundary, send it
