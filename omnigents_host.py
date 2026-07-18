@@ -12,8 +12,8 @@ Two credentials, two jobs (see GOAL.md §3):
   the server **rejects PATs (302 → OIDC login) and accepts OAuth / service-
   principal tokens**, so the host MUST present an OAuth token minted from the
   app SP's ``DATABRICKS_CLIENT_ID`` / ``DATABRICKS_CLIENT_SECRET``. CoDA strips
-  those creds from the environment early in startup, so we capture them
-  *before* that strip and write a short-lived OAuth profile for the host.
+  those creds from the environment early in startup, so we capture them in the
+  app process and expose only short-lived tokens through a loopback broker.
 * **Harness LLM** — the runner the host spawns authenticates to AI Gateway via
   CoDA's already-injected ``ANTHROPIC_*`` env, forwarded host→runner by
   Omnigents' ``HARNESS_CREDENTIAL_ENV_VARS``. No new LLM credential is minted.
@@ -769,8 +769,9 @@ def _configure_omnigent_databricks_auth() -> None:
     this fixes all three harnesses on the runner, not just Pi.
 
     So overwrite the ``auth`` block with ``{type: databricks, profile:
-    omnigents-host}`` — the profile ``_write_oauth_profile`` already wrote. Read-
-    merge-write to preserve setup's other keys; idempotent; best-effort.
+    omnigents-host}``. That profile contains only the workspace host; its token
+    command is intercepted by the loopback-broker CLI shim. Read-merge-write to
+    preserve setup's other keys; idempotent; best-effort.
     """
     home = os.environ.get("HOME", "/app/python/source_code")
     config_path = os.path.join(home, ".omnigent", "config.yaml")
