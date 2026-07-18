@@ -157,7 +157,7 @@ Tracing setup is skipped gracefully when `APP_OWNER` is not set (e.g., local dev
 
 ## Omnigent Host Integration
 
-CoDA can register itself as a persistent **[Omnigent](https://github.com/earendil-works) agent host** — an always-on target the Omnigent server can drive coding-agent sessions into. Those sessions run *inside this container*, using the same filesystem, AI-Gateway credentials, and Unity Catalog scope as the browser terminals. So a deployed CoDA app becomes both an interactive terminal **and** a headless host that survives restarts and redeploys.
+CoDA can register itself as a persistent **[Omnigent](https://github.com/omnigent-ai/omnigent) agent host** — an always-on target the Omnigent server can drive coding-agent sessions into. Those sessions run *inside this container* and use the same filesystem as browser terminals. They authenticate to Databricks as the CoDA app service principal, not as the interactive browser user, so their Unity Catalog authority may differ. A deployed CoDA app becomes both an interactive terminal **and** a headless host that survives restarts and redeploys.
 
 **Off by default.** With `OMNIGENTS_SERVER_URL` unset, none of this runs and CoDA behaves exactly as before. This is opt-in, environment-specific wiring — the committed `app.yaml` keeps it commented out.
 
@@ -179,6 +179,15 @@ env:
     value: "1"
 ```
 
+Before deploying, grant the CoDA app service principal `CAN_USE` on the
+Omnigent server app plus `USE_CATALOG`, `USE_SCHEMA`, `READ_VOLUME`, and
+`WRITE_VOLUME` on the wheel-volume path. The repository's grant target applies
+the complete prerequisite set:
+
+```bash
+make grant-omnigent-host PROFILE=<profile> APP_NAME=<coda-app>
+```
+
 On boot, `initialize_app()` calls `start_host()`, which — only when `OMNIGENTS_SERVER_URL` is set — installs the `omnigents host` CLI from the wheel volume and launches it as a supervised background process that dials the server over an outbound WSS tunnel.
 
 ### Two credentials, two jobs
@@ -196,7 +205,7 @@ The non-obvious part of this design is that the host uses **two separate credent
 └──────────────────────────────────────────────────────────────┘
 ```
 
-* **Host tunnel** authenticates `omnigents host` *to the server*. The Databricks Apps ingress proxy **rejects PATs (302 → OIDC) and accepts OAuth/service-principal tokens**, so the host must present an OAuth token minted from the app SP's `DATABRICKS_CLIENT_ID` / `DATABRICKS_CLIENT_SECRET`. CoDA captures those creds *before* stripping them from the environment and writes a short-lived `[omnigents-host]` OAuth profile.
+* **Host tunnel** authenticates `omnigents host` *to the server*. The Databricks Apps ingress proxy **rejects PATs (302 → OIDC) and accepts OAuth/service-principal tokens**, so the host must present an OAuth token minted from the app SP's `DATABRICKS_CLIENT_ID` / `DATABRICKS_CLIENT_SECRET`. CoDA captures those credentials *before* stripping them from the environment and writes a persistent `[omnigents-host]` M2M profile; the SDK uses it to mint short-lived access tokens.
 * **Harness LLM** — the runner the host spawns authenticates to AI Gateway via CoDA's already-injected `ANTHROPIC_*` env. No new LLM credential is minted.
 
 ### Runtime controls
