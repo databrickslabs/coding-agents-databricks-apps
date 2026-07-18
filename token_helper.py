@@ -8,21 +8,22 @@ the two agents can never drift apart.
 
 The helper prints exactly one line to stdout: the bearer token. Resolution
 order (see the emitted script's docstring for the full rationale):
-  1. SP OAuth token minted from the ``omnigents-host`` M2M profile (host path).
-  2. The PAT from ``$DATABRICKS_TOKEN`` or ``~/.databrickscfg`` [DEFAULT].
-Both are resolved fresh on each invocation, so a long-running agent survives
+  1. SP OAuth token fetched from the loopback broker (host path).
+  2. Legacy ``omnigents-host`` M2M profile, for upgrades from older containers.
+  3. The PAT from ``$DATABRICKS_TOKEN`` or ``~/.databrickscfg`` [DEFAULT].
+All are resolved fresh on each invocation, so a long-running agent survives
 PAT rotation / SP-OAuth expiry without a restart.
 """
 
 import configparser
+import json
 import os
 import sys
-import json
 from pathlib import Path
 from urllib.request import urlopen
 
-# The SP OAuth profile the Omnigent host writes (auth_type=oauth-m2m). Kept in
-# sync with omnigents_host._HOST_PROFILE and setup_claude._SP_PROFILE.
+# Legacy SP OAuth profile name. New installs persist only a secret-free host
+# pointer under this name and fetch bearers from the loopback broker.
 SP_PROFILE = "omnigents-host"
 
 
@@ -93,7 +94,9 @@ def _sp_oauth_token():
         except Exception:
             pass
 
-    # Mint the SP token via the SDK. The M2M (client_id/secret) profile the
+    # Upgrade fallback: mint via an older persisted M2M profile. New installs
+    # never write client_id/client_secret to terminal-visible HOME.
+    # The M2M (client_id/secret) profile the
     # Omnigent host writes is NOT usable via `databricks auth token` (that CLI
     # verb is U2M-only and refuses M2M); Config.authenticate() does the
     # client-credentials flow. Verified accepted by /anthropic (C-O1, HTTP 200).
@@ -153,7 +156,7 @@ def _pat_token():
 def main():
     token = _sp_oauth_token() or _pat_token()
     if not token:
-        print("no token source (no SP OAuth profile, no PAT)", file=sys.stderr)
+        print("no token source (no SP token broker, no PAT)", file=sys.stderr)
         sys.exit(1)
     sys.stdout.write(token)
 

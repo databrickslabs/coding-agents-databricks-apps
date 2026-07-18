@@ -77,12 +77,14 @@ Key runtime facts an agent should know:
   `setup_*.py`); agent CLIs install in parallel. `RUNNING` app status only
   means gunicorn bound the port — check `/api/setup-status` or boot logs before
   claiming setup-dependent features work.
-- **Auth (layered):** with `ENABLE_SP_APIKEYHELPER=true`, the app writes its own
-  SP OAuth profile at boot and all agents install without a paste. A short-lived
+- **Auth (layered):** with `ENABLE_SP_APIKEYHELPER=true`, the app keeps its SP
+  client secret in-process and brokers short-lived OAuth tokens over loopback;
+  the on-disk `omnigents-host` profile contains only the workspace host. Agents
+  install without a paste. A short-lived
   PAT pasted on first terminal session is the **fallback** and **auto-rotates
   every 10 min** (`pat_rotator.py`). The rotator rewrites `~/.databrickscfg` on
   every rotation — a known failure mode was clobbering co-owned profiles (e.g.
-  `omnigents-host` OAuth); fixed in `b5b11a6`, but any CLI call that must use
+  `omnigents-host`); fixed in `b5b11a6`, but any CLI call that must use
   the file profile should go through `databrickscfg_only_env()` (see `utils.py`).
 - Databricks CLI: in the **container**, test with `databricks current-user me`.
   On a **local Mac**, use `databricks auth describe --profile <profile>`.
@@ -153,7 +155,7 @@ of the live `coda` app can wedge platform boot.
 
 ## 3. Databricks auth notes (gotchas)
 
-- **Layered auth in-container:** SP OAuth at boot (`ENABLE_SP_APIKEYHELPER`) is
+- **Layered auth in-container:** brokered SP OAuth at boot (`ENABLE_SP_APIKEYHELPER`) is
   tried first; pasted PAT is the fallback. These coexist by design — not
   "PAT or CLIENT_ID/SECRET, pick one."
 - Ambient app-SP env vars can shadow a `~/.databrickscfg` profile. The sync uses
