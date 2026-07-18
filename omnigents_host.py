@@ -825,7 +825,7 @@ def _run_host_once(server_url: str, stop_event: threading.Event | None = None) -
     # would otherwise shadow the profile in the SDK's unified-auth resolution.
     # In particular DATABRICKS_WORKSPACE_ID + the DATABRICKS_APP_* vars (which
     # Apps injects) steer auth to the app's ambient identity and cause the
-    # tunnel to 302 â OIDC even with the M2M profile present. Verified: a clean
+    # tunnel to 302 → OIDC even with the M2M profile present. Verified: a clean
     # env with only the profile vars connects; leaving these in does not.
     env = config_profile_env(_HOST_PROFILE)
     local_bin = os.path.join(home, ".local", "bin")

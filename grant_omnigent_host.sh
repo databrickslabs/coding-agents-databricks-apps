@@ -5,7 +5,7 @@
 # For a deployed CoDA app to appear as a selectable host in the Omnigent picker,
 # its container must successfully run `omnigent host <server>`. That requires the
 # app's service principal to have BOTH:
-#   1. CAN_USE on the Omnigent server app  â or the host tunnel (WebSocket
+#   1. CAN_USE on the Omnigent server app — or the host tunnel (WebSocket
 #      upgrade) is rejected and the host never registers.
 #   2. UC access to the wheel volume = the FULL traversal chain:
 #        a. USE_CATALOG on the catalog
@@ -136,7 +136,7 @@ for a in d.get('privilege_assignments',[]):
 missing=[p for p in ('READ_VOLUME','WRITE_VOLUME') if p not in have]
 print(','.join(missing))")
 if [[ -z "$MISSING" ]]; then
-  echo "    already granted Ã¢ skipping"
+  echo "    already granted — skipping"
 else
   ADD_JSON=$(CODA_SP="$CODA_SP" MISSING="$MISSING" python3 -c "
 import os,json
