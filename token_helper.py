@@ -24,8 +24,8 @@ from pathlib import Path
 SP_PROFILE = "omnigents-host"
 
 
-def resolve_databricks_token() -> str | None:
-    """Resolve a fresh SP OAuth token, falling back to the current PAT."""
+def resolve_sp_oauth_token() -> str | None:
+    """Resolve a fresh token from the Omnigent host M2M profile."""
     try:
         from databricks.sdk.core import Config
         headers = Config(profile=SP_PROFILE).authenticate()
@@ -35,6 +35,14 @@ def resolve_databricks_token() -> str | None:
             return token
     except Exception:
         pass
+    return None
+
+
+def resolve_databricks_token() -> str | None:
+    """Resolve a fresh SP OAuth token, falling back to the current PAT."""
+    token = resolve_sp_oauth_token()
+    if token:
+        return token
 
     token = os.environ.get("DATABRICKS_TOKEN", "").strip()
     if token:
