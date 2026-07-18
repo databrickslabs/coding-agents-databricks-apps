@@ -139,11 +139,8 @@ CoDA's container.
 ---
 
 ## Cleanup / hygiene owed
-- **Live PAT to revoke:** `bea9756ceb8e1656e8a00e454985784e6d239e7cdffc93cac85f22cf6ea9e9f4`
-  (comment `coda-auto-rotated`) — this is the CoDA-rotated token derived from the PAT pasted into
-  the terminal for log-debugging. It's CoDA's *active* terminal credential; revoke when done with
-  the terminal: `databricks tokens delete <id> --profile daveok`. (Earlier prior-session ~90-day
-  PAT was already revoked.)
+- **Exposed PAT:** the plaintext value has been removed from this public handoff. Treat every
+  token ever committed here as compromised and verify it is revoked before reusing the environment.
 - **`omnigents-daveok` app:** currently **RUNNING** (restarted this session for testing). To halt
   metering: `databricks apps stop omnigents-daveok --profile daveok`. App + its Lakebase branch
   (`projects/omnigents-daveok/branches/production` on the SHARED `ot-demo-lakebase` CU_1) stay
@@ -152,12 +149,12 @@ CoDA's container.
 ---
 
 ## Key environment facts (so you don't re-derive them)
-- coda app SP: `793257c7-63d3-464f-b6fb-3bc11880bf2d` (`app-2hnbfl coda`).
-- Stable host_id (deterministic): `host_30023c7760d5a8726abf9820d912b4e0`
+- coda app SP: `<coda-app-service-principal-client-id>`.
+- Stable host_id (deterministic): `host_<sha256-prefix>`
   = `_stable_host_identity()` = sha256(`coda-omnigents-host:<SP client_id>`).
 - Omnigent server runs **header auth mode** (default; accepts SP via proxy `X-Forwarded-Email`).
 - OSS source is the authoritative ref: `github.com/omnigent-ai/omnigent` (Databricks open-sourced
-  it 2026-06-13; same codebase as internal agent-framework). Use `gh api repos/omnigent-ai/omnigent/contents/<path> --jq .content | base64 -d` to read files (account: `david-okeeffe_data`).
+  it 2026-06-13; same codebase as internal agent-framework). Use `gh api repos/omnigent-ai/omnigent/contents/<path> --jq .content | base64 -d` to read files.
 - Host visibility = the identity on the tunnel at `omnigent host` launch; owner-scoped in
   `server/host_registry.py` + `auth.py`.
 - CoDA terminal driving (e2e): mint short-lived PAT → paste into terminal `Token:` gate (user
