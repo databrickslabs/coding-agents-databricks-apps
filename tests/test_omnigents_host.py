@@ -201,6 +201,27 @@ def test_write_oauth_profile_is_idempotent(monkeypatch, tmp_path):
     assert "client_id = cid" in cfg
 
 
+def test_write_oauth_profile_refreshes_rotated_credentials(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    cfg_path = tmp_path / ".databrickscfg"
+    cfg_path.write_text("[DEFAULT]\ntoken = dapi-user\n")
+
+    oh._write_oauth_profile(
+        {"client_id": "old-id", "client_secret": "old-secret", "host": "https://old"}
+    )
+    oh._write_oauth_profile(
+        {"client_id": "new-id", "client_secret": "new-secret", "host": "https://new"}
+    )
+
+    cfg = cfg_path.read_text()
+    assert "token = dapi-user" in cfg
+    assert "client_id = new-id" in cfg
+    assert "client_secret = new-secret" in cfg
+    assert "host = https://new" in cfg
+    assert "old-secret" not in cfg
+    assert cfg.count(f"[{oh._HOST_PROFILE}]") == 1
+
+
 def test_run_host_once_prepends_local_bin_to_path(monkeypatch, tmp_path):
     oh.reset_for_tests()
     monkeypatch.setenv("HOME", str(tmp_path))
