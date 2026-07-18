@@ -18,6 +18,7 @@ import configparser
 import os
 import sys
 from pathlib import Path
+from urllib.request import urlopen
 
 # The SP OAuth profile the Omnigent host writes (auth_type=oauth-m2m). Kept in
 # sync with omnigents_host._HOST_PROFILE and setup_claude._SP_PROFILE.
@@ -26,6 +27,15 @@ SP_PROFILE = "omnigents-host"
 
 def resolve_sp_oauth_token() -> str | None:
     """Resolve a fresh token from the Omnigent host M2M profile."""
+    broker_url = os.environ.get("CODA_SP_TOKEN_BROKER_URL", "").strip()
+    if broker_url:
+        try:
+            with urlopen(broker_url, timeout=5) as response:
+                token = response.read().decode().strip()
+            if token:
+                return token
+        except Exception:
+            pass
     try:
         from databricks.sdk.core import Config
         headers = Config(profile=SP_PROFILE).authenticate()
@@ -64,6 +74,7 @@ import os
 import shutil
 import subprocess
 import sys
+from urllib.request import urlopen
 
 SP_PROFILE = "omnigents-host"
 # Set on the uv re-run so the child (which has the SDK) doesn't recurse.
@@ -71,6 +82,16 @@ _REEXEC_GUARD = "OMNIGENTS_APIKEY_HELPER_REEXEC"
 
 
 def _sp_oauth_token():
+    broker_url = os.environ.get("CODA_SP_TOKEN_BROKER_URL", "").strip()
+    if broker_url:
+        try:
+            with urlopen(broker_url, timeout=5) as response:
+                token = response.read().decode().strip()
+            if token:
+                return token
+        except Exception:
+            pass
+
     # Mint the SP token via the SDK. The M2M (client_id/secret) profile the
     # Omnigent host writes is NOT usable via `databricks auth token` (that CLI
     # verb is U2M-only and refuses M2M); Config.authenticate() does the
