@@ -19,6 +19,7 @@ def tmp_cfg(tmp_path, monkeypatch):
     import content_filter_proxy as cfp
     monkeypatch.setattr(cfp, "_DATABRICKSCFG_PATH", str(cfg))
     monkeypatch.setattr(cfp, "_TOKEN_CACHE", {"token": None, "read_at": 0.0, "mtime": 0.0})
+    monkeypatch.setattr(cfp, "resolve_sp_oauth_token", lambda: None)
     monkeypatch.setattr(cfp, "resolve_databricks_token", lambda: None)
     return cfg
 
@@ -28,6 +29,16 @@ def _write_cfg(path, token):
 
 
 class TestFreshTokenCacheInvalidation:
+    def test_rotated_pat_beats_stale_proxy_env_token(self, tmp_cfg, monkeypatch):
+        from content_filter_proxy import _get_fresh_token
+        _write_cfg(tmp_cfg, "dapi-rotated")
+        monkeypatch.setattr(
+            "content_filter_proxy.resolve_databricks_token",
+            lambda: "dapi-startup",
+        )
+
+        assert _get_fresh_token() == "dapi-rotated"
+
     def test_cache_invalidates_on_mtime_change(self, tmp_cfg):
         from content_filter_proxy import _get_fresh_token
         _write_cfg(tmp_cfg, "dapi-old")
