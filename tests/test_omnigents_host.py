@@ -191,14 +191,17 @@ def test_capture_sp_credentials_adds_https_scheme(monkeypatch):
     assert creds["host"] == "https://adb-123.azuredatabricks.net"
 
 
-def test_write_oauth_profile_is_idempotent(monkeypatch, tmp_path):
+def test_write_oauth_profile_contains_host_but_no_long_lived_secret(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     creds = {"client_id": "cid", "client_secret": "sec", "host": "https://h"}
     oh._write_oauth_profile(creds)
     oh._write_oauth_profile(creds)  # second call must not duplicate the block
     cfg = (tmp_path / ".databrickscfg").read_text()
     assert cfg.count(f"[{oh._HOST_PROFILE}]") == 1
-    assert "client_id = cid" in cfg
+    assert "host = https://h" in cfg
+    assert "client_id" not in cfg
+    assert "client_secret" not in cfg
+    assert "token" not in cfg
 
 
 def test_write_oauth_profile_refreshes_rotated_credentials(monkeypatch, tmp_path):
@@ -215,10 +218,9 @@ def test_write_oauth_profile_refreshes_rotated_credentials(monkeypatch, tmp_path
 
     cfg = cfg_path.read_text()
     assert "token = dapi-user" in cfg
-    assert "client_id = new-id" in cfg
-    assert "client_secret = new-secret" in cfg
     assert "host = https://new" in cfg
     assert "old-secret" not in cfg
+    assert "new-secret" not in cfg
     assert cfg.count(f"[{oh._HOST_PROFILE}]") == 1
 
 
@@ -229,10 +231,14 @@ def test_run_host_once_prepends_local_bin_to_path(monkeypatch, tmp_path):
     monkeypatch.setenv("DATABRICKS_APP_NAME", "coda")
     monkeypatch.setenv("DATABRICKS_HOST", "https://ambient.example.com")
     monkeypatch.setattr(oh, "_omnigents_bin", lambda: "/bin/omnigent")
+    monkeypatch.setattr(oh, "fetch_sp_token", lambda: "short-lived-token")
     monkeypatch.setattr(
         oh,
         "_sp_creds",
-        {"client_id": "793257c7-63d3-464f-b6fb-3bc11880bf2d"},
+        {
+            "client_id": "793257c7-63d3-464f-b6fb-3bc11880bf2d",
+            "host": "https://ambient.example.com",
+        },
     )
 
     captured = {}
@@ -262,11 +268,16 @@ def test_run_host_once_prepends_local_bin_to_path(monkeypatch, tmp_path):
         b"coda-omnigents-host:793257c7-63d3-464f-b6fb-3bc11880bf2d"
     ).hexdigest()[:32]
     assert captured["cwd"] == str(tmp_path)
-    assert env["PATH"].split(":")[0] == str(tmp_path / ".local" / "bin")
+    assert env["PATH"].split(":")[:2] == [
+        str(tmp_path / ".coda-broker-bin"),
+        str(tmp_path / ".local" / "bin"),
+    ]
     assert env["OMNIGENT_HOST_ID"] == expected_host_id
     assert env["OMNIGENT_HOST_NAME"] == "coda"
-    assert env["DATABRICKS_CONFIG_PROFILE"] == oh._HOST_PROFILE
-    assert "DATABRICKS_HOST" not in env
+    assert env["DATABRICKS_TOKEN"] == "short-lived-token"
+    assert env["DATABRICKS_HOST"] == "https://ambient.example.com"
+    assert "DATABRICKS_CONFIG_PROFILE" not in env
+    assert "DATABRICKS_CLIENT_SECRET" not in env
 
 
 def _fail(name):

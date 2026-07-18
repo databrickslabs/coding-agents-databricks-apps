@@ -29,6 +29,7 @@ import hashlib
 import json
 import logging
 import os
+import shutil
 import select
 import subprocess
 import sys
@@ -38,6 +39,8 @@ import time
 
 import yaml
 
+from sp_token_broker import fetch_sp_token
+from token_helper import write_databricks_token_wrapper
 from utils import config_profile_env, ensure_https
 
 logger = logging.getLogger(__name__)
@@ -306,12 +309,7 @@ def capture_sp_credentials() -> dict[str, str] | None:
 
 
 def _write_oauth_profile(creds: dict[str, str]) -> None:
-    """Write an OAuth (M2M) profile to ~/.databrickscfg for the host.
-
-    Uses the Databricks SDK config-file format so ``omnigents host
-    --profile omnigents-host`` resolves an OAuth token (client-credentials
-    flow) rather than a PAT — the token type the Apps proxy accepts.
-    """
+    """Write the broker-owned workspace pointer without persisting SP creds."""
     home = os.environ.get("HOME", "/app/python/source_code")
     cfg_path = os.path.join(home, ".databrickscfg")
 
@@ -320,9 +318,6 @@ def _write_oauth_profile(creds: dict[str, str]) -> None:
         config.read(cfg_path)
     config[_HOST_PROFILE] = {
         "host": creds["host"],
-        "client_id": creds["client_id"],
-        "client_secret": creds["client_secret"],
-        "auth_type": "oauth-m2m",
     }
 
     fd, tmp_path = tempfile.mkstemp(dir=home, prefix=".databrickscfg.")
@@ -334,7 +329,7 @@ def _write_oauth_profile(creds: dict[str, str]) -> None:
     finally:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
-    logger.info("Wrote OAuth profile '%s' for Omnigents host tunnel", _HOST_PROFILE)
+    logger.info("Wrote secret-free profile '%s' for Omnigent runner routing", _HOST_PROFILE)
 
 
 def _ensure_claude() -> None:
@@ -805,32 +800,42 @@ def _configure_omnigent_databricks_auth() -> None:
         logger.warning("could not pin omnigent databricks auth (non-fatal): %s", e)
 
 
+def _install_broker_cli_wrapper() -> None:
+    """Intercept only Omnigent's profile token command; delegate all other CLI use."""
+    real_cli = shutil.which("databricks")
+    if not real_cli:
+        raise RuntimeError("Databricks CLI is required for Omnigent native harness auth")
+    home = os.environ.get("HOME", "/app/python/source_code")
+    wrapper_dir = os.path.join(home, ".coda-broker-bin")
+    wrapper = write_databricks_token_wrapper(wrapper_dir, real_cli)
+    logger.info("Installed Omnigent token-broker CLI wrapper at %s", wrapper)
+
+
 def _run_host_once(server_url: str, stop_event: threading.Event | None = None) -> int:
     """Run ``omnigents host`` in the foreground until it exits. Returns rc."""
     global _proc
 
     home = os.environ.get("HOME", "/app/python/source_code")
     # `omnigent host` takes only the server URL (no --profile on current main).
-    # Auth is driven by DATABRICKS_CONFIG_PROFILE in the env below.
     cmd = [_omnigents_bin(), "host", server_url]
 
     # The runner inherits this env; CoDA's ANTHROPIC_* AI-Gateway creds are
     # already present and get forwarded host→runner via Omnigents'
-    # HARNESS_CREDENTIAL_ENV_VARS. We do NOT inject the SP secret here — the
-    # host resolves it from the OAuth profile we wrote.
-    # Omnigents' token factory calls _resolve_databricks_auth() WITHOUT a
-    # profile, so `--profile` is ignored for the tunnel token; it uses the
-    # SDK's default resolution. Point that resolution at our M2M profile via
-    # DATABRICKS_CONFIG_PROFILE, and clear every ambient Databricks env var that
-    # would otherwise shadow the profile in the SDK's unified-auth resolution.
-    # In particular DATABRICKS_WORKSPACE_ID + the DATABRICKS_APP_* vars (which
-    # Apps injects) steer auth to the app's ambient identity and cause the
-    # tunnel to 302 → OIDC even with the M2M profile present. Verified: a clean
-    # env with only the profile vars connects; leaving these in does not.
+    # HARNESS_CREDENTIAL_ENV_VARS. We never inject the SP secret here. Fetch a
+    # short-lived bearer from the loopback broker for this tunnel launch and
+    # clear ambient Databricks vars that could shadow it in unified auth.
     env = config_profile_env(_HOST_PROFILE)
+    env.pop("DATABRICKS_CONFIG_PROFILE", None)
+    token = fetch_sp_token()
+    if not token:
+        raise RuntimeError("SP token broker returned no token for host launch")
+    env["DATABRICKS_HOST"] = (_sp_creds or {}).get("host", "")
+    env["DATABRICKS_TOKEN"] = token
+    env["DATABRICKS_AUTH_TYPE"] = "pat"
     local_bin = os.path.join(home, ".local", "bin")
-    if local_bin not in env.get("PATH", ""):
-        env["PATH"] = f"{local_bin}:{env.get('PATH', '')}"
+    broker_bin = os.path.join(home, ".coda-broker-bin")
+    path_parts = [broker_bin, local_bin, env.get("PATH", "")]
+    env["PATH"] = ":".join(part for part in path_parts if part)
     stable_identity = _stable_host_identity()
     if stable_identity is not None:
         env.setdefault("OMNIGENT_HOST_ID", stable_identity[0])
@@ -904,8 +909,9 @@ def _supervise(
     _set(installed=True, stage="writing_profile")
     try:
         _write_oauth_profile(sp_creds)
+        _install_broker_cli_wrapper()
     except Exception as e:
-        logger.warning("Could not write OAuth host profile: %s; host NOT started", e)
+        logger.warning("Could not configure broker-backed host auth: %s; host NOT started", e)
         _set(stage="profile_failed", last_error=str(e))
         return
     # Configure harnesses from CoDA's ambient LLM creds so runners can auth

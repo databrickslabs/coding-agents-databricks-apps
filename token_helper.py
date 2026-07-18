@@ -17,6 +17,7 @@ PAT rotation / SP-OAuth expiry without a restart.
 import configparser
 import os
 import sys
+import json
 from pathlib import Path
 from urllib.request import urlopen
 
@@ -185,3 +186,45 @@ def helper_command(helper_path) -> str:
     """
     py = os.environ.get("CODA_VENV_PYTHON") or sys.executable or "python3"
     return f"!{py} {helper_path}"
+
+
+def write_databricks_token_wrapper(target_dir, real_cli: str) -> Path:
+    """Write a narrow CLI shim for Omnigent's profile-based auth command."""
+    target_dir = Path(target_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    wrapper_path = target_dir / "databricks"
+    source = f'''#!{sys.executable}
+import json
+import os
+import sys
+from urllib.request import urlopen
+
+REAL_CLI = {json.dumps(real_cli)}
+PROFILE = {json.dumps(SP_PROFILE)}
+
+
+def _profile(args):
+    for index, arg in enumerate(args):
+        if arg == "--profile" and index + 1 < len(args):
+            return args[index + 1]
+        if arg.startswith("--profile="):
+            return arg.split("=", 1)[1]
+    return None
+
+
+args = sys.argv[1:]
+if args[:2] == ["auth", "token"] and _profile(args) == PROFILE:
+    url = os.environ.get("CODA_SP_TOKEN_BROKER_URL", "")
+    with urlopen(url, timeout=5) as response:
+        token = response.read().decode().strip()
+    if "--output" in args and args[args.index("--output") + 1] == "json":
+        print(json.dumps({{"access_token": token}}))
+    else:
+        print(token)
+    raise SystemExit(0)
+
+os.execv(REAL_CLI, [REAL_CLI, *args])
+'''
+    wrapper_path.write_text(source)
+    wrapper_path.chmod(0o700)
+    return wrapper_path
