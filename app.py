@@ -28,6 +28,7 @@ import enterprise_config
 from claude_otel import apply_claude_otel_env
 from utils import add_1m_context_suffix, ensure_https, get_gateway_host
 from pat_rotator import PATRotator
+from sp_token_broker import BROKER_URL_ENV, broker_url, mint_sp_token, start_sp_token_broker
 from telemetry import log_telemetry, set_product_info
 
 # Sanitize DATABRICKS_TOKEN early — the platform sometimes injects trailing
@@ -185,6 +186,7 @@ def _get_setup_state_snapshot():
 # Single-user security: only the token owner can access the terminal
 app_owner = None
 _omnigent_sp_creds = None
+_sp_token_broker_server = None
 
 
 def _owner_check_disabled() -> bool:
@@ -1879,7 +1881,7 @@ def close_session():
 
 def initialize_app(local_dev=False):
     """One-time init: detect owner, start cleanup thread."""
-    global app_owner, _omnigent_sp_creds
+    global app_owner, _omnigent_sp_creds, _sp_token_broker_server
 
     # Install SIGTERM handler only for gunicorn (production).
     # For local dev, SIG_DFL is fine — the process just exits cleanly.
@@ -1903,16 +1905,23 @@ def initialize_app(local_dev=False):
     else:
         logger.warning("Could not determine app owner - authorization disabled")
 
-    # SP-auth workshop path: write the omnigents-host OAuth (M2M) profile at
-    # boot from the app's OWN SP creds, so token_helper._sp_oauth_token()
-    # resolves without a pasted PAT. Normally _write_oauth_profile runs only
-    # when OMNIGENTS_SERVER_URL is set (host path); the workshop app omits that
-    # var, so arm it here when ENABLE_SP_APIKEYHELPER=true. Idempotent; no-op
-    # without SP creds (local dev / per-user deploy keeps the PAT path).
-    if _omnigent_sp_creds and os.environ.get("ENABLE_SP_APIKEYHELPER", "").strip().lower() in ("true", "1", "yes"):
+    sp_helper_enabled = os.environ.get("ENABLE_SP_APIKEYHELPER", "").strip().lower() in (
+        "true", "1", "yes",
+    )
+    host_enabled = bool(os.environ.get("OMNIGENTS_SERVER_URL", "").strip())
+    if _omnigent_sp_creds and (sp_helper_enabled or host_enabled):
+        _sp_token_broker_server = start_sp_token_broker(
+            lambda: mint_sp_token(_omnigent_sp_creds)
+        )
+        os.environ[BROKER_URL_ENV] = broker_url(_sp_token_broker_server)
+        logger.info("SP token broker listening on loopback")
+
+    # The profile retains only the workspace host for Omnigent routing. The
+    # long-lived client secret stays in this process; helpers mint via broker.
+    if _omnigent_sp_creds and sp_helper_enabled:
         from omnigents_host import _write_oauth_profile
         _write_oauth_profile(_omnigent_sp_creds)
-        logger.info("SP apikeyhelper: wrote omnigents-host OAuth profile at boot (no PAT paste needed)")
+        logger.info("SP apikeyhelper: wrote secret-free host profile at boot")
 
     # Strip SP credentials — only needed for owner resolution above.
     # Keeping them causes SDK to silently fall back to SP auth when PAT is dead.

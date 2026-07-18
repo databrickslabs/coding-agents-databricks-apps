@@ -44,6 +44,13 @@ class TestSpBranch:
 
         assert token_helper.resolve_sp_oauth_token() == "broker-token"
 
+    def test_broker_token_wins_without_persisted_profile(self, monkeypatch):
+        mod = _load_helper_module()
+        monkeypatch.setenv("CODA_SP_TOKEN_BROKER_URL", "http://127.0.0.1:4010/token")
+        monkeypatch.setattr(mod, "urlopen", lambda *_a, **_k: _BrokerResponse(b"broker-tok"))
+
+        assert mod._sp_oauth_token() == "broker-tok"
+
     def test_sdk_mint_strips_bearer_prefix(self, monkeypatch):
         """SP path returns the raw token with 'Bearer ' stripped."""
         mod = _load_helper_module()
