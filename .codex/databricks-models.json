@@ -1,6 +1,33 @@
 {
     "models": [
       {
+        "slug": "databricks-gpt-5-6-sol",
+        "display_name": "Databricks GPT-5.6 Sol",
+        "description": "GPT-5.6 Sol hosted through Databricks AI Gateway",
+        "default_reasoning_level": "medium",
+        "supported_reasoning_levels": [
+          { "effort": "low", "description": "Fast responses with lighter reasoning" },
+          { "effort": "medium", "description": "Balanced speed and reasoning depth" },
+          { "effort": "high", "description": "Greater reasoning depth for complex tasks" },
+          { "effort": "xhigh", "description": "Maximum reasoning depth for complex tasks" }
+        ],
+        "shell_type": "default",
+        "visibility": "list",
+        "supported_in_api": true,
+        "priority": 110,
+        "additional_speed_tiers": [],
+        "availability_nux": null,
+        "upgrade": null,
+        "base_instructions": "",
+        "supports_reasoning_summaries": true,
+        "support_verbosity": true,
+        "default_verbosity": null,
+        "apply_patch_tool_type": null,
+        "truncation_policy": { "mode": "tokens", "limit": 200000 },
+        "supports_parallel_tool_calls": true,
+        "experimental_supported_tools": []
+      },
+      {
         "slug": "databricks-gpt-5-5",
         "display_name": "Databricks GPT-5.5",
         "description": "GPT-5.5 hosted through Databricks AI Gateway",
