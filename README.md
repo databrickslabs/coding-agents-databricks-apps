@@ -205,7 +205,7 @@ The non-obvious part of this design is that the host uses **two separate credent
 └──────────────────────────────────────────────────────────────┘
 ```
 
-* **Host tunnel** authenticates `omnigents host` *to the server*. The Databricks Apps ingress proxy **rejects PATs (302 → OIDC) and accepts OAuth/service-principal tokens**, so the host must present an OAuth token minted from the app SP's `DATABRICKS_CLIENT_ID` / `DATABRICKS_CLIENT_SECRET`. CoDA captures those credentials *before* stripping them from the environment and writes a persistent `[omnigents-host]` M2M profile; the SDK uses it to mint short-lived access tokens.
+* **Host tunnel and runners** authenticate to the server through short-lived app-SP OAuth tokens. CoDA captures the SP credentials before stripping them from the environment, keeps the client secret only in Flask process memory, and exposes fresh tokens through a loopback-only broker. The on-disk `[omnigents-host]` profile contains only the workspace host; spawned Omnigent runners receive a refresh command, not a static bearer or client secret.
 * **Harness LLM** — the runner the host spawns authenticates to AI Gateway via CoDA's already-injected `ANTHROPIC_*` env. No new LLM credential is minted.
 
 ### Runtime controls
@@ -222,7 +222,7 @@ Beyond boot registration, the host can be driven at runtime:
 
 ### Related
 
-`ENABLE_SP_APIKEYHELPER=true` pairs naturally with this: it has Claude Code fetch its gateway bearer via an apiKeyHelper that mints a fresh app-SP OAuth token per TTL, reusing the same `[omnigents-host]` OAuth profile this integration writes.
+`ENABLE_SP_APIKEYHELPER=true` enables the same loopback-broker boundary for agent gateway calls: helpers fetch short-lived app-SP OAuth tokens without persisting the SP client secret or a static token in terminal-visible configuration.
 
 ---
 
@@ -395,7 +395,7 @@ Open [http://localhost:8000](http://localhost:8000) — type `claude`, `codex`, 
 | `OMNIGENTS_SERVER_URL` | No | Omnigent server to register against on boot. Unset = host integration off (default). See [Omnigent Host Integration](#omnigent-host-integration) |
 | `OMNIGENTS_WHEEL_SPEC` | No | UC Volume path holding the `omnigents host` wheels (app SP needs `READ_VOLUME`). Required when `OMNIGENTS_SERVER_URL` is set |
 | `OMNIGENTS_FORCE_REINSTALL` | No | Set `"1"` to reinstall the host CLI on boot (for rolling out a new wheel); otherwise `uv tool install` no-ops on an existing binary |
-| `ENABLE_SP_APIKEYHELPER` | No | Set `"true"` so Claude Code mints a fresh app-SP OAuth token per TTL via apiKeyHelper (pairs with the Omnigent host OAuth profile) |
+| `ENABLE_SP_APIKEYHELPER` | No | Set `"true"` to broker short-lived app-SP OAuth tokens over loopback without persisting the client secret in terminal-visible configuration |
 | `DEEPWIKI_MCP_URL` | No | Override or disable the DeepWiki MCP server (set to `""` to remove) |
 | `EXA_MCP_URL` | No | Override or disable the Exa MCP server (set to `""` to remove) |
 | `TEAM_MEMORY_MCP_URL` | No | Optional shared-org-memory MCP server URL |
