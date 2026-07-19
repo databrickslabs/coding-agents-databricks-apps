@@ -8,6 +8,8 @@ without the OAuth-capable SP creds (a PAT alone is rejected by the Apps proxy).
 from __future__ import annotations
 
 import hashlib
+import shlex
+import sys
 
 import yaml
 
@@ -276,6 +278,9 @@ def test_run_host_once_prepends_local_bin_to_path(monkeypatch, tmp_path):
     assert env["OMNIGENT_HOST_NAME"] == "coda"
     assert env["DATABRICKS_TOKEN"] == "short-lived-token"
     assert env["DATABRICKS_HOST"] == "https://ambient.example.com"
+    assert env["OMNIGENT_DATABRICKS_TOKEN_COMMAND"] == (
+        shlex.join([sys.executable, str(tmp_path / ".claude" / "anthropic-token-helper.py")])
+    )
     assert "DATABRICKS_CONFIG_PROFILE" not in env
     assert "DATABRICKS_CLIENT_SECRET" not in env
 
