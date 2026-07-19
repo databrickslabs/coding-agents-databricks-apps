@@ -31,6 +31,7 @@ import logging
 import os
 import shutil
 import select
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -833,6 +834,9 @@ def _run_host_once(server_url: str, stop_event: threading.Event | None = None) -
     env["DATABRICKS_HOST"] = (_sp_creds or {}).get("host", "")
     env["DATABRICKS_TOKEN"] = token
     env["DATABRICKS_AUTH_TYPE"] = "pat"
+    env["OMNIGENT_DATABRICKS_TOKEN_COMMAND"] = shlex.join(
+        [sys.executable, os.path.join(home, ".claude", "anthropic-token-helper.py")]
+    )
     local_bin = os.path.join(home, ".local", "bin")
     broker_bin = os.path.join(home, ".coda-broker-bin")
     path_parts = [broker_bin, local_bin, env.get("PATH", "")]
