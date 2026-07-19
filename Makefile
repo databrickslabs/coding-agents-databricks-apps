@@ -66,7 +66,7 @@ e2e-auth: ## Record SSO session for e2e tests (one-time per cookie expiry)
 	@url=$$(databricks apps get coding-agents --profile $(PROFILE) --output json 2>/dev/null \
 		| python3 -c "import sys,json; print(json.load(sys.stdin)['url'])") && \
 	echo "Recording SSO session against $$url ..." && \
-	uv run playwright codegen --save-storage tests/e2e/auth.json "$$url"
+	uv run python tests/e2e/record_auth.py "$$url" --output tests/e2e/auth.json
 	@echo ""
 	@echo "Auth state saved to tests/e2e/auth.json (gitignored)."
 	@echo "Run `make e2e-test PROFILE=$(PROFILE)` to execute the suite."
@@ -302,4 +302,3 @@ clean: ## Remove the app (destructive)
 	@databricks apps delete $(APP_NAME) --profile $(PROFILE) 2>/dev/null && \
 		echo "    App '$(APP_NAME)' deleted." || \
 		echo "    App '$(APP_NAME)' not found or already deleted."
-
