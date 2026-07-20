@@ -332,6 +332,11 @@ def test_configure_omnigent_auth_writes_databricks_profile(monkeypatch, tmp_path
     oh._configure_omnigent_databricks_auth()
     cfg = yaml.safe_load((tmp_path / ".omnigent" / "config.yaml").read_text())
     assert cfg["auth"] == {"type": "databricks", "profile": oh._HOST_PROFILE}
+    assert cfg["providers"]["coda-databricks"] == {
+        "kind": "databricks",
+        "default": True,
+        "profile": oh._HOST_PROFILE,
+    }
 
 
 def test_configure_omnigent_auth_preserves_other_keys(monkeypatch, tmp_path):

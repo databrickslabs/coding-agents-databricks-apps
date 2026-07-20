@@ -777,6 +777,11 @@ def _configure_omnigent_databricks_auth() -> None:
     home = os.environ.get("HOME", "/app/python/source_code")
     config_path = os.path.join(home, ".omnigent", "config.yaml")
     desired = {"type": "databricks", "profile": _HOST_PROFILE}
+    desired_provider = {
+        "kind": "databricks",
+        "default": True,
+        "profile": _HOST_PROFILE,
+    }
     try:
         try:
             with open(config_path) as f:
@@ -785,10 +790,15 @@ def _configure_omnigent_databricks_auth() -> None:
             config = {}
         if not isinstance(config, dict):
             config = {}
-        if config.get("auth") == desired:
+        providers = config.get("providers")
+        if not isinstance(providers, dict):
+            providers = {}
+        if config.get("auth") == desired and providers.get("coda-databricks") == desired_provider:
             logger.info("omnigent auth already pinned to '%s' profile", _HOST_PROFILE)
             return
         config["auth"] = desired
+        providers["coda-databricks"] = desired_provider
+        config["providers"] = providers
         os.makedirs(os.path.dirname(config_path), exist_ok=True)
         tmp = f"{config_path}.tmp"
         with open(tmp, "w") as f:
