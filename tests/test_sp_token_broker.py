@@ -68,6 +68,22 @@ def test_databricks_wrapper_intercepts_only_broker_profile(tmp_path):
         now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
         assert now < parsed <= now + datetime.timedelta(minutes=6)
 
+        # The SDK's DatabricksCliTokenSource builds `auth token --profile <p>`
+        # WITHOUT `--output json` yet still json.loads()s stdout. So the shim
+        # must emit JSON on the no-flag path too — this is the exact regression
+        # that collapsed pi's model picker (SDK: "cannot unmarshal CLI result").
+        no_flag = subprocess.run(
+            [str(wrapper), "auth", "token", "--profile", "omnigents-host"],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        no_flag_payload = json.loads(no_flag.stdout)
+        assert no_flag_payload["access_token"] == "fresh-token"
+        assert no_flag_payload["token_type"] == "Bearer"
+        assert "expiry" in no_flag_payload
+
         delegated = subprocess.run([str(wrapper), "--version"], env=env, check=False)
         assert delegated.returncode == 1
     finally:

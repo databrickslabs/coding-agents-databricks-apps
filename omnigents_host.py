@@ -361,19 +361,33 @@ def capture_sp_credentials() -> dict[str, str] | None:
 def _write_oauth_profile(creds: dict[str, str]) -> None:
     """Write the broker-owned workspace pointer without persisting SP creds.
 
-    The profile holds only ``host`` + ``auth_type = databricks-cli``. The
-    ``databricks-cli`` auth type makes the databricks-sdk resolve a token by
-    running ``databricks auth token --profile omnigents-host`` — which resolves
-    to the loopback-broker CLI shim (first on the runner's PATH). This is what
-    lets ``Config(profile="omnigents-host").authenticate()`` succeed: omnigent's
-    ``resolve_databricks_workspace`` uses it for the model-catalog fetch, and
-    without an authable profile that fetch fails and pi shows only its single
-    hard-coded default model instead of the workspace's full endpoint list.
-    (The shim emits the full ``access_token``/``token_type``/``expiry`` shape the
-    SDK's CLI token source requires — see ``write_databricks_token_wrapper``.)
+    The profile holds ``host`` + ``auth_type = databricks-cli`` +
+    ``databricks_cli_path`` pointing at the loopback-broker CLI shim. This is
+    what lets ``Config(profile="omnigents-host").authenticate()`` succeed:
+    omnigent's ``resolve_databricks_workspace`` uses it for the model-catalog
+    fetch, and without an authable profile that fetch fails and pi shows only
+    its single hard-coded default model instead of the workspace's full list.
+
+    Both keys are load-bearing and BOTH are read from the profile (no env var):
+
+    - ``auth_type = databricks-cli`` selects the SDK's CLI token source, which
+      mints by running ``databricks auth token --profile omnigents-host``.
+    - ``databricks_cli_path = <shim>`` pins WHICH binary that token source runs.
+      The SDK resolves ``databricks`` via its OWN lookup (NOT ``$PATH``), so a
+      bare PATH prepend does not route it to the shim — it finds the real CLI in
+      ``~/.local/bin``, which has no OAuth cache and fails ("databricks OAuth is
+      not configured"). ``databricks_cli_path`` is a normal ``Config`` attribute
+      the SDK reads straight from the ``.databrickscfg`` profile, so writing it
+      here reaches the in-runner catalog fetch WITHOUT depending on the runner's
+      env allowlist (omnigent's host→runner env is an allowlist we don't own).
+
+    (The shim emits the full ``access_token``/``token_type``/``expiry`` JSON the
+    SDK's CLI token source requires — including on the no-``--output json`` path
+    the SDK actually invokes — see ``write_databricks_token_wrapper``.)
     """
     home = os.environ.get("HOME", "/app/python/source_code")
     cfg_path = os.path.join(home, ".databrickscfg")
+    broker_cli = os.path.join(home, ".coda-broker-bin", "databricks")
 
     config = configparser.ConfigParser(interpolation=None)
     if os.path.exists(cfg_path):
@@ -381,6 +395,7 @@ def _write_oauth_profile(creds: dict[str, str]) -> None:
     config[_HOST_PROFILE] = {
         "host": creds["host"],
         "auth_type": "databricks-cli",
+        "databricks_cli_path": broker_cli,
     }
 
     fd, tmp_path = tempfile.mkstemp(dir=home, prefix=".databrickscfg.")
