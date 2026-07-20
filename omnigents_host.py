@@ -156,6 +156,30 @@ def _omnigents_bin() -> str:
     return os.path.join(bindir, "omnigent")  # default for the install check
 
 
+def _list_wheels_recursive(w, root: str, *, max_depth: int = 4) -> list:
+    """Recursively collect ``.whl`` directory entries under a UC Volume path.
+
+    The omnigent build publishes wheels under ``wheels/<version>/`` rather than
+    flat at the volume root, so a top-level-only listing misses them. Walks the
+    tree with a bounded depth so a pathological/looping layout can't spin.
+    """
+    out: list = []
+    stack = [(root, 0)]
+    while stack:
+        path, depth = stack.pop()
+        try:
+            entries = list(w.files.list_directory_contents(path))
+        except Exception:  # noqa: BLE001 — an unreadable subdir must not abort the walk
+            continue
+        for e in entries:
+            if getattr(e, "is_directory", False):
+                if depth < max_depth:
+                    stack.append((e.path, depth + 1))
+            elif (e.path or "").endswith(".whl"):
+                out.append(e)
+    return out
+
+
 def _materialize_spec(spec: str, sp_creds: dict[str, str] | None = None) -> str:
     """Resolve OMNIGENTS_WHEEL_SPEC to a locally-usable install source.
 
@@ -188,8 +212,33 @@ def _materialize_spec(spec: str, sp_creds: dict[str, str] | None = None) -> str:
             ))
         else:
             w = WorkspaceClient()
-        listed = list(w.files.list_directory_contents(spec))
-        wheels = [e for e in listed if (e.path or "").endswith(".whl")]
+        # Wheels may sit flat at the volume root OR nested under
+        # ``wheels/<version>/`` (the omnigent build's versioned layout). List
+        # the root first; if it has no wheels, recurse. When wheels live in
+        # per-version subdirs, pick the directory holding the newest-uploaded
+        # main ``omnigent-`` wheel and install every wheel from THAT dir, so a
+        # stale older version sitting alongside a new one isn't mixed in.
+        top = list(w.files.list_directory_contents(spec))
+        wheels = [e for e in top if (e.path or "").endswith(".whl")]
+        if not wheels:
+            all_wheels = _list_wheels_recursive(w, spec)
+            mains = [
+                e for e in all_wheels
+                if os.path.basename(e.path or "").startswith("omnigent-")
+            ]
+            if not mains:
+                raise FileNotFoundError(
+                    f"no omnigent-*.whl in UC Volume {spec} (searched subdirectories)"
+                )
+            newest = max(mains, key=lambda e: getattr(e, "last_modified", 0) or 0)
+            src_dir = os.path.dirname(newest.path)
+            wheels = [
+                e for e in all_wheels if os.path.dirname(e.path or "") == src_dir
+            ]
+            logger.info(
+                "Resolved nested host wheels dir %s (newest main wheel %s)",
+                src_dir, os.path.basename(newest.path),
+            )
         if not wheels:
             raise FileNotFoundError(f"no .whl in UC Volume {spec}")
         for entry in wheels:
