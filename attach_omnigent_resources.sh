@@ -28,12 +28,12 @@
 #
 # This script ISSUES IAM/RESOURCE CHANGES. Review the args before running.
 #
-# Example (aws-daveok):
+# Example:
 #   ./attach_omnigent_resources.sh \
-#       --profile aws-daveok \
+#       --profile DEFAULT \
 #       --coda-app coda \
-#       --server-url https://omnigent-7474660536734442.aws.databricksapps.com \
-#       --wheel-volume dok_aws_sandbox_catalog.omnigent.artifacts \
+#       --server-url https://omnigent-<workspace-id>.<cloud>.databricksapps.com \
+#       --wheel-volume <catalog>.<schema>.<volume> \
 #       --secret-scope coda-omnigent \
 #       --secret-key omnigent-server-url
 
