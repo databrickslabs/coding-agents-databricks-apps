@@ -124,17 +124,31 @@ env:
   - name: CODA_DISABLE_OWNER_CHECK
     value: "true"
 
-  # ─── Omnigent host integration ────────────────────────────────────────────
-  # Register this app as a persistent Omnigent host on boot:
-  # initialize_app() -> start_host() dials the server as the app SP, so the
-  # deployed app self-registers as an always-on host on every restart/redeploy.
-  # WHEEL_SPEC is the UC Volume the host CLI is installed from (needs the app
-  # SP's READ_VOLUME grant on the wheel volume below
-  # (edp_aisandbox_aisandbox_dev.ai.omnigents on Coles ...2455).
+  # ─── Omnigent host integration (resource-gated) ─────────────────────────
+  # Register this app as a persistent Omnigent host on boot: initialize_app()
+  # -> start_host() dials the server as the app SP, so the deployed app self-
+  # registers as an always-on host on every restart/redeploy.
+  #
+  # The host is ON when the two valueFrom resources below are attached to the
+  # app (via `make attach-omnigent-resources` or the UI); it's OFF otherwise —
+  # an unresolved valueFrom yields an empty string and omnigents_host_enabled()
+  # returns False. So the on/off switch is "are the resources attached," not
+  # "did you edit this committed file" — keeping app.yaml generic and git-deploy
+  # friendly. See attach_omnigent_resources.sh and docs/deployment.md.
+  #
+  # OMNIGENTS_SERVER_URL — the Omnigent server app URL for THIS workspace.
+  #   valueFrom: omnigent-server-url  → a Secret resource holding the URL.
+  #   (No "URL of another app" resource type exists, so it's carried as a
+  #    secret. attach_omnigent_resources.sh stores + attaches it.)
   - name: OMNIGENTS_SERVER_URL
-    value: "https://omnigent-7405614666872455.15.azure.databricksapps.com"
+    valueFrom: omnigent-server-url
+  # OMNIGENTS_WHEEL_SPEC — the UC Volume holding omnigent-*.whl +
+  # omnigent_client-*.whl + omnigent_ui_sdk-*.whl (flat, top level).
+  #   valueFrom: omnigent-wheels  → a UC Volume resource (resolved to
+  #   /Volumes/<catalog>/<schema>/<volume> at runtime). Needs the app SP's
+  #   READ_VOLUME grant (grant_omnigent_host.sh).
   - name: OMNIGENTS_WHEEL_SPEC
-    value: "/Volumes/edp_aisandbox_aisandbox_dev/ai/omnigents/wheels"
+    valueFrom: omnigent-wheels
   # Force-reinstall the host CLI on boot so a new wheel in the UC Volume is
   # actually installed (uv tool install otherwise no-ops when the tool exists).
   # Set only while rolling out a runner build; remove once the wheel is stable.
@@ -162,7 +176,6 @@ env:
   # helper falls back to the PAT if it's ever absent.
   - name: ENABLE_SP_APIKEYHELPER
     value: "true"
-
   # Workshop challenge repo (A-R7)
   # PRIVATE repo cloned from its main branch at container startup into
   # ~/projects/<name>; the attendee terminal opens directly inside it. The read
@@ -175,7 +188,6 @@ env:
     value: "https://github.com/david-okeeffe_data/dok-sandbox"
   - name: CHALLENGE_REPO_READ_TOKEN
     valueFrom: challenge-repo-token
-
   # ─── Enterprise mode (proxy / registry redirects) ────────────────────────
   # Uncomment and set the env vars below to run CoDA in locked-down enterprise
   # networks. All are optional — set only what your environment requires.
