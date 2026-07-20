@@ -359,7 +359,19 @@ def capture_sp_credentials() -> dict[str, str] | None:
 
 
 def _write_oauth_profile(creds: dict[str, str]) -> None:
-    """Write the broker-owned workspace pointer without persisting SP creds."""
+    """Write the broker-owned workspace pointer without persisting SP creds.
+
+    The profile holds only ``host`` + ``auth_type = databricks-cli``. The
+    ``databricks-cli`` auth type makes the databricks-sdk resolve a token by
+    running ``databricks auth token --profile omnigents-host`` — which resolves
+    to the loopback-broker CLI shim (first on the runner's PATH). This is what
+    lets ``Config(profile="omnigents-host").authenticate()`` succeed: omnigent's
+    ``resolve_databricks_workspace`` uses it for the model-catalog fetch, and
+    without an authable profile that fetch fails and pi shows only its single
+    hard-coded default model instead of the workspace's full endpoint list.
+    (The shim emits the full ``access_token``/``token_type``/``expiry`` shape the
+    SDK's CLI token source requires — see ``write_databricks_token_wrapper``.)
+    """
     home = os.environ.get("HOME", "/app/python/source_code")
     cfg_path = os.path.join(home, ".databrickscfg")
 
@@ -368,6 +380,7 @@ def _write_oauth_profile(creds: dict[str, str]) -> None:
         config.read(cfg_path)
     config[_HOST_PROFILE] = {
         "host": creds["host"],
+        "auth_type": "databricks-cli",
     }
 
     fd, tmp_path = tempfile.mkstemp(dir=home, prefix=".databrickscfg.")

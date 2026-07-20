@@ -197,6 +197,7 @@ def write_databricks_token_wrapper(target_dir, real_cli: str) -> Path:
     target_dir.mkdir(parents=True, exist_ok=True)
     wrapper_path = target_dir / "databricks"
     source = f'''#!{sys.executable}
+import datetime
 import json
 import os
 import sys
@@ -221,7 +222,28 @@ if args[:2] == ["auth", "token"] and _profile(args) == PROFILE:
     with urlopen(url, timeout=5) as response:
         token = response.read().decode().strip()
     if "--output" in args and args[args.index("--output") + 1] == "json":
-        print(json.dumps({{"access_token": token}}))
+        # Emit the FULL OAuth token shape the databricks-sdk CLI token source
+        # (DatabricksCliTokenSource) requires: access_token + token_type +
+        # expiry. Without token_type/expiry the SDK raises "cannot unmarshal
+        # CLI result", so a `Config(profile=...).authenticate()` — which
+        # omnigent's resolve_databricks_workspace uses for the model-catalog
+        # fetch — fails and pi falls back to a single-model picker.
+        #
+        # The broker returns only the raw token (no expiry metadata), and it
+        # always mints a FRESH token per call. Set a short, conservative expiry
+        # (now + 5 min, well inside the ~1h SP-OAuth TTL) so the SDK re-invokes
+        # this shim — re-hitting the broker for a fresh token — rather than
+        # caching a token we can't prove the real lifetime of. Format matches
+        # CliTokenSource._parse_expiry ("%Y-%m-%dT%H:%M:%S", trailing Z ok).
+        expiry = (
+            datetime.datetime.now(datetime.timezone.utc)
+            + datetime.timedelta(minutes=5)
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        print(json.dumps({{
+            "access_token": token,
+            "token_type": "Bearer",
+            "expiry": expiry,
+        }}))
     else:
         print(token)
     raise SystemExit(0)

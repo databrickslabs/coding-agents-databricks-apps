@@ -201,6 +201,9 @@ def test_write_oauth_profile_contains_host_but_no_long_lived_secret(monkeypatch,
     cfg = (tmp_path / ".databrickscfg").read_text()
     assert cfg.count(f"[{oh._HOST_PROFILE}]") == 1
     assert "host = https://h" in cfg
+    # databricks-cli auth type routes Config(profile=...).authenticate() through
+    # the broker CLI shim, so omnigent's model-catalog fetch can mint a token.
+    assert "auth_type = databricks-cli" in cfg
     assert "client_id" not in cfg
     assert "client_secret" not in cfg
     assert "token" not in cfg
