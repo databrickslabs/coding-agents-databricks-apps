@@ -1406,13 +1406,20 @@ def omnigent_host_disconnect():
 
 @app.route("/api/omnigent-host/share", methods=["POST"])
 def omnigent_host_share():
-    """Share this SP-owned host with the app owner so it shows in their picker.
+    """Share this SP-owned host with a user so it shows in their picker.
 
-    The host is owned by the app SP, so the operator's personal Omnigent UI
-    can't see it until the owner (SP) grants them ``use``. This issues that
-    grant — and optionally launches a runner — using the captured SP creds.
+    The host is owned by the app SP, so a user's personal Omnigent UI can't
+    see it until the owner (SP) grants them ``use``. This issues that grant —
+    and optionally launches a runner — using the captured SP creds.
     Owner-gated identically to configure-pat: only the resolved app owner may
     invoke it, since it acts with the SP's authority.
+
+    Body (all optional):
+      grant_user: email to share to. Defaults to the calling user (the owner),
+                  so a bare POST self-shares (the browser auto-share path).
+                  Pass an explicit email to share to a different user, e.g.
+                  a teammate who needs to run sessions on this host.
+      launch:     also launch a runner after granting (default true).
     """
     if _is_databricks_apps() and app_owner:
         if get_request_user() != app_owner:
@@ -1425,12 +1432,14 @@ def omnigent_host_share():
     if not server_url:
         return jsonify({"error": "no server_url; connect the host first"}), 400
 
-    grant_user = get_request_user() or app_owner
-    if not grant_user:
-        return jsonify({"error": "could not resolve a user to grant"}), 400
-
     data = request.get_json(silent=True) or {}
     launch = bool(data.get("launch", True))
+    # Default: share to the calling user (owner). An explicit grant_user lets the
+    # owner share to a teammate — the SP owns the host, so only the owner (via
+    # this endpoint) can issue that grant.
+    grant_user = (data.get("grant_user") or get_request_user() or app_owner or "").strip()
+    if not grant_user:
+        return jsonify({"error": "could not resolve a user to grant"}), 400
 
     from omnigents_host import share_and_launch
     result = share_and_launch(server_url, _omnigent_sp_creds, grant_user, launch=launch)
