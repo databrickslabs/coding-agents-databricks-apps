@@ -720,6 +720,51 @@ def _ensure_tmux() -> None:
         logger.warning("tmux install failed (non-fatal): %s", e)
 
 
+def _ensure_jq() -> None:
+    """Install a static jq to ~/.local/bin if missing (best-effort).
+
+    The Omnigent native harnesses (pi / claude / codex) resolve their Databricks
+    gateway bearer with an auth command that ends in
+    ``... --output json | jq -r '.access_token'``
+    (omnigent.inner.codex_executor._databricks_codex_auth_command). Databricks
+    Apps containers ship no jq, so that pipe yields an EMPTY token and the
+    harness fails with "Failed to resolve API key" — exactly the pi-native
+    breakage. Install a static jq here (same fetch-a-binary pattern as
+    ``_ensure_tmux``) so the auth command resolves. Runs BEFORE
+    ``_run_setup_once`` and the harness auth commands. Idempotent; never blocks
+    the host on failure.
+    """
+    home = os.environ.get("HOME", "/app/python/source_code")
+    local_bin = os.path.join(home, ".local", "bin")
+    jq_path = os.path.join(local_bin, "jq")
+    if shutil.which("jq") or os.path.exists(jq_path):
+        logger.info("jq already present at %s", shutil.which("jq") or jq_path)
+        return
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "install_jq.sh")
+    if not os.path.exists(script):
+        logger.warning(
+            "install_jq.sh not found at %s; native harness auth commands need jq", script
+        )
+        return
+    try:
+        result = subprocess.run(
+            ["bash", script], check=False, capture_output=True, text=True, timeout=120
+        )
+        if result.returncode == 0 and os.path.exists(jq_path):
+            logger.info("jq installed: %s", (result.stdout or "").strip().splitlines()[-1:])
+        else:
+            logger.warning(
+                "jq install did NOT land (rc=%s); native harness auth commands "
+                "will resolve an empty token and report 'Failed to resolve API "
+                "key'. stdout=%r stderr=%r",
+                result.returncode,
+                (result.stdout or "").strip()[-500:],
+                (result.stderr or "").strip()[-500:],
+            )
+    except Exception as e:  # never block host launch on jq install
+        logger.warning("jq install failed (non-fatal): %s", e)
+
+
 def _start_runner_log_tailer() -> None:
     """Stream runner log files into the app logger (best-effort).
 
@@ -1004,6 +1049,11 @@ def _supervise(
         _ensure_opencode()
         _ensure_opencode_settings(sp_creds)
     _ensure_tmux()
+    # jq is required by the native harnesses' Databricks auth command
+    # (`... --output json | jq -r .access_token`); without it pi/claude/codex
+    # resolve an empty token. Install BEFORE _run_setup_once and the harness
+    # auth commands run.
+    _ensure_jq()
     _run_setup_once()
     # Pin omnigent's auth to the databricks host profile so the runner's native
     # credential resolver (Pi/Claude/Codex) authenticates via the AI Gateway

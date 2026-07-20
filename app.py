@@ -667,6 +667,12 @@ def run_setup():
     # the agent through a local tmux terminal and refuse to start without it).
     _run_step("tmux", ["bash", "install_tmux.sh"])
 
+    # jq — required by Omnigent's native harness Databricks auth command
+    # (`... --output json | jq -r .access_token`). Without it pi/claude/codex
+    # resolve an empty token → "Failed to resolve API key". No system jq in the
+    # Apps image, so install a static binary (same pattern as tmux).
+    _run_step("jq", ["bash", "install_jq.sh"])
+
     # --- Upgrade Databricks CLI (runtime image ships an older version) ---
     _run_step("dbcli", ["bash", "install_databricks_cli.sh"])
 
