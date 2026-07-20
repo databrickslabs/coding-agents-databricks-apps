@@ -23,6 +23,8 @@ def run_setup_mlflow(tmp_path, env_overrides=None):
         "HOME": str(tmp_path),
         "DATABRICKS_HOST": "https://test.cloud.databricks.com",
         "DATABRICKS_TOKEN": "dapi_test_token",
+        # These tests verify settings generation, not the external MLflow CLI.
+        # Use a successful no-op so tracing-enabled cases stay deterministic.
         "CODA_VENV_PYTHON": "/usr/bin/true",
         "PATH": os.environ.get("PATH", ""),
     }

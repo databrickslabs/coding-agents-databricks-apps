@@ -230,6 +230,7 @@ class TestEOFCleanup:
             app_module.sessions.clear()
 
     def test_exited_session_removed_from_dict(self):
+        import codecs
         import pty
         master_fd, slave_fd = pty.openpty()
         proc = subprocess.Popen(
@@ -246,6 +247,7 @@ class TestEOFCleanup:
                 "master_fd": master_fd,
                 "output_buffer": deque(maxlen=1000),
                 "lock": threading.Lock(),
+                "decoder": codecs.getincrementaldecoder("utf-8")(errors="replace"),
                 "last_poll_time": time.time(),
                 "created_at": time.time(),
             }
