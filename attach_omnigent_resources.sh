@@ -16,9 +16,11 @@
 #      if missing) because app.yaml's valueFrom can only reference secrets, not
 #      arbitrary strings.
 #
-# `apps update --resources` REPLACES the resource list, so this script MERGES
-# its two resources with the app's existing ones (read → merge → write) to
-# avoid clobbering unrelated resources (e.g. workshop challenge-repo-token).
+# Uses `apps create-update <app> resources` (the targeted field-mask patch) so
+# ONLY the resources field is touched — `apps update --json` is a full-body
+# write that clears unset fields (notably git_repository on git-linked apps).
+# Merges the two resources with the app's existing ones (read → merge → write)
+# to avoid clobbering unrelated resources (e.g. workshop challenge-repo-token).
 #
 # Run AFTER grant_omnigent_host.sh (which grants the SP the UC traversal it
 # needs to read the wheel volume). Idempotent: re-running is safe — it updates
@@ -100,19 +102,27 @@ print(json.dumps(d.get('resources') or []))
 echo "    existing resources: $(printf '%s' "$CURRENT" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))")"
 
 # ---- 3. Merge the two omnigent resources and write -------------------------
-# apps update --json '{"resources":[...]}' REPLACES the resource list, so merge
-# with existing resources (indexed by name) to avoid clobbering unrelated ones
-# (e.g. workshop challenge-repo-token). Write the merged JSON to a temp file
-# and pass via --json @file (the body is too large for an inline heredoc).
+# Use the Apps SDK's create_update(app, update_mask='resources', app=App(...))
+# — the targeted field-mask patch — so ONLY the resources field is touched.
+# The `apps update --json` CLI path is a full-body write that CLEARS unset
+# fields (notably git_repository on git-linked apps — learned live). The CLI's
+# `create-update --json` body shape is finicky (field-name mismatches), so do
+# this step in Python with the SDK where the App/AppResource schema is explicit.
+# Merge with existing resources (indexed by name) so we don't clobber unrelated
+# ones (e.g. workshop challenge-repo-token).
 echo "==> Merging + attaching resources..."
-RES_FILE=$(mktemp --suffix=.json 2>/dev/null || mktemp)
-python3 - "$CURRENT" "$WHEEL_VOLUME" "$SECRET_SCOPE" "$SECRET_KEY" "$RES_FILE" <<'PY'
-import json, sys
-current = json.loads(sys.argv[1])
+DATABRICKS_CONFIG_PROFILE="$PROFILE" python3 - "$CODA_APP" "$WHEEL_VOLUME" "$SECRET_SCOPE" "$SECRET_KEY" "$CURRENT" <<'PY'
+import json, os, sys
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.service.apps import App, AppResource, AppResourceUcSecurable, AppResourceUcSecurableUcSecurableType, AppResourceUcSecurableUcSecurablePermission, AppResourceSecret, AppResourceSecretSecretPermission
+
+coda_app = sys.argv[1]
 wheel_volume = sys.argv[2]
 scope, key = sys.argv[3], sys.argv[4]
-out_file = sys.argv[5]
+current = json.loads(sys.argv[5])
 
+w = WorkspaceClient(profile=os.environ['DATABRICKS_CONFIG_PROFILE'])
+# Index existing resources by name so we update in place, not duplicate.
 by_name = {r.get('name'): r for r in current if isinstance(r, dict) and r.get('name')}
 by_name['omnigent-wheels'] = {
     'name': 'omnigent-wheels',
@@ -124,17 +134,29 @@ by_name['omnigent-wheels'] = {
 }
 by_name['omnigent-server-url'] = {
     'name': 'omnigent-server-url',
-    'secret': {
-        'scope': scope,
-        'key': key,
-        'permission': 'READ',
-    },
+    'secret': {'scope': scope, 'key': key, 'permission': 'READ'},
 }
-with open(out_file, 'w') as f:
-    json.dump({'resources': list(by_name.values())}, f)
+
+def to_resource(d):
+    name = d['name']
+    if 'uc_securable' in d:
+        uc = d['uc_securable']
+        return AppResource(name=name, uc_securable=AppResourceUcSecurable(
+            securable_full_name=uc['securable_full_name'],
+            securable_type=AppResourceUcSecurableUcSecurableType[uc['securable_type']],
+            permission=AppResourceUcSecurableUcSecurablePermission[uc['permission']],
+        ))
+    if 'secret' in d:
+        s = d['secret']
+        return AppResource(name=name, secret=AppResourceSecret(
+            scope=s['scope'], key=s['key'],
+            permission=AppResourceSecretSecretPermission[s['permission']],
+        ))
+    raise ValueError(f"unknown resource shape for {name}")
+
+resources = [to_resource(r) for r in by_name.values()]
+w.apps.create_update(coda_app, 'resources', app=App(name=coda_app, resources=resources))
 PY
-"${DBX[@]}" apps update "$CODA_APP" --json "@$RES_FILE" >/dev/null
-rm -f "$RES_FILE"
 echo "    resources attached"
 
 # ---- 4. Verify -------------------------------------------------------------
