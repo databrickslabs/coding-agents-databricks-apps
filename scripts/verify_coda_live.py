@@ -162,16 +162,67 @@ def databricks_identity() -> tuple[dict[str, Any], Any]:
     return evidence, parsed
 
 
+def _profile_host() -> str:
+    host = os.environ.get("DATABRICKS_HOST", "").strip().rstrip("/")
+    if host:
+        return host
+    try:
+        cfg = configparser.ConfigParser(interpolation=None)
+        cfg.read(DATABRICKS_CFG)
+        return (cfg.get("omnigents-host", "host", fallback="") or "").strip().rstrip("/")
+    except Exception:
+        return ""
+
+
+def gateway_model_ids() -> tuple[bool, list[str], str]:
+    """Discover active Unity AI Gateway model services via OpenAI /models."""
+    try:
+        from token_helper import resolve_databricks_token
+        token = resolve_databricks_token()
+    except Exception as exc:  # noqa: BLE001
+        return False, [], f"token resolver: {type(exc).__name__}: {exc}"
+    host = _profile_host()
+    if not host or not token:
+        return False, [], "gateway host or broker token unavailable"
+    req = urllib.request.Request(
+        f"{host}/openai/v1/models",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            body = json.loads(response.read().decode())
+        data = body.get("data") if isinstance(body, dict) else []
+        ids = sorted({str(x.get("id")) for x in data if isinstance(x, dict) and x.get("id")})
+        return True, ids, ""
+    except Exception as exc:  # noqa: BLE001
+        return False, [], f"{type(exc).__name__}: {exc}"
+
+
 def serving_model_evidence() -> tuple[dict[str, Any], list[str]]:
     result = run(["databricks", "serving-endpoints", "list", "--output", "json"], timeout=45)
     parsed = parse_json_output(result)
-    ready = ready_endpoints(parsed)
+    serving_ready = ready_endpoints(parsed)
+    if serving_ready:
+        return {
+            "command_ok": result["ok"],
+            "returncode": result["returncode"],
+            "stderr": result["stderr"],
+            "source": "databricks serving-endpoints list",
+            "ready_endpoint_names": serving_ready,
+            "gateway_catalog_used": False,
+        }, serving_ready
+
+    gateway_ok, gateway_ids, gateway_error = gateway_model_ids()
     return {
-        "command_ok": result["ok"],
+        "command_ok": result["ok"] and gateway_ok,
         "returncode": result["returncode"],
         "stderr": result["stderr"],
-        "ready_endpoint_names": ready,
-    }, ready
+        "source": "Unity AI Gateway /openai/v1/models" if gateway_ok else "unavailable",
+        "ready_endpoint_names": gateway_ids,
+        "gateway_catalog_used": gateway_ok,
+        "gateway_error": gateway_error,
+        "serving_endpoints_ready": serving_ready,
+    }, gateway_ids
 
 
 def pi_models(config: dict[str, Any]) -> list[str]:
@@ -345,7 +396,7 @@ def inference_checks(catalogs: dict[str, Any], *, skip: bool) -> dict[str, Any]:
 
     result: dict[str, Any] = {}
     claude = run(
-        ["claude", "--print", "--no-session", "--model", "sonnet", "Reply with exactly CODA_CLAUDE_OK"],
+        ["claude", "--print", "--model", "sonnet", "Reply with exactly CODA_CLAUDE_OK"],
         timeout=180,
     )
     result["claude"] = {
