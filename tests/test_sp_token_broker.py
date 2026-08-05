@@ -91,6 +91,44 @@ def test_databricks_wrapper_intercepts_only_broker_profile(tmp_path):
         server.server_close()
 
 
+def test_databricks_wrapper_routes_direct_profile_commands_through_broker(tmp_path):
+    """A terminal user types `databricks current-user me`, not `auth token`.
+    The shim must inject the broker token into the delegated real CLI for the
+    secret-free omnigents-host profile, otherwise the real CLI searches for a
+    nonexistent OAuth cache."""
+    server = broker.start_sp_token_broker(lambda: "direct-command-token", port=0)
+    try:
+        real_cli = tmp_path / "real-databricks"
+        real_cli.write_text(
+            "#!/bin/sh\n"
+            "printf 'TOKEN=%s HOST=%s ARGS=%s\\n' \"$DATABRICKS_TOKEN\" \"$DATABRICKS_HOST\" \"$*\"\n"
+        )
+        real_cli.chmod(0o700)
+        cfg = tmp_path / ".databrickscfg"
+        cfg.write_text(
+            "[omnigents-host]\n"
+            "host = https://workspace.example\n"
+            "auth_type = databricks-cli\n"
+        )
+        wrapper = write_databricks_token_wrapper(tmp_path / "bin", str(real_cli))
+        env = dict(
+            os.environ,
+            HOME=str(tmp_path),
+            CODA_SP_TOKEN_BROKER_URL=broker.broker_url(server),
+            DATABRICKS_CONFIG_PROFILE="omnigents-host",
+        )
+        result = subprocess.run(
+            [str(wrapper), "current-user", "me"],
+            env=env, capture_output=True, text=True, check=True,
+        )
+        assert "TOKEN=direct-command-token" in result.stdout
+        assert "HOST=https://workspace.example" in result.stdout
+        assert "ARGS=current-user me" in result.stdout
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 class _Response:
     def __init__(self, body):
         self.body = body
