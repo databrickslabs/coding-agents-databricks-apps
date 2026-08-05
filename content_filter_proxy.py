@@ -135,13 +135,32 @@ if not log.handlers:
     _sh.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
     log.addHandler(_sh)
 
-# JSON Schema keywords that Gemini doesn't support
+# JSON Schema keywords that Gemini doesn't support.
+#
+# Gemini validates tool parameter schemas against an OpenAPI-3.0 subset, not
+# full JSON Schema (draft 2020-12). Keywords that exist only in JSON Schema —
+# or that OpenAPI 3.0 models differently — are rejected outright with
+# "Invalid JSON payload received. Unknown name \"<key>\" ... Cannot find field".
+# The MCP tool schemas CoDA forwards routinely carry numeric-bound keywords
+# (`exclusiveMinimum`/`exclusiveMaximum` are NUMBERS in draft 2020-12 but
+# BOOLEAN modifiers in OpenAPI 3.0) and string/array validators Gemini's
+# subset omits. Stripping them keeps the tool callable — they are advisory
+# constraints, never required by any downstream API; Claude/GPT ignore them.
 GEMINI_UNSUPPORTED_SCHEMA_KEYS = {
     "$schema", "$ref", "$defs", "$id", "$comment", "additionalProperties",
-    # Numeric/array validation keywords Gemini's function-declaration schema
-    # doesn't accept. Sending them yields a 400 on the whole request, so the
-    # tool is unusable rather than merely unvalidated.
-    "exclusiveMinimum", "exclusiveMaximum", "multipleOf", "uniqueItems",
+    # Validation keywords outside Gemini's function-declaration subset. Sending
+    # any of them 400s the whole request, so the tool becomes unusable rather
+    # than merely unvalidated.
+    #
+    # Numeric bounds: draft-2020 models exclusiveMinimum/Maximum as NUMBERS,
+    # but Gemini's OpenAPI-3.0 parser has no such field → the reported 400.
+    "exclusiveMinimum", "exclusiveMaximum", "multipleOf",
+    # String validators.
+    "minLength", "maxLength", "pattern",
+    # Array validators.
+    "minItems", "maxItems", "uniqueItems",
+    # Object validators.
+    "minProperties", "maxProperties", "patternProperties",
 }
 
 # Top-level request fields that Gemini doesn't support

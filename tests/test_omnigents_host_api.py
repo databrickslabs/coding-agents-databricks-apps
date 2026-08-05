@@ -128,3 +128,30 @@ def test_omnigent_host_share_requires_server_url(monkeypatch):
                 )
 
     assert resp.status_code == 400
+
+
+def test_omnigent_host_share_explicit_grant_user(monkeypatch):
+    """An explicit grant_user in the body shares to that user, not the caller."""
+    app_module = _import_app()
+    app_module._omnigent_sp_creds = {"client_id": "c", "client_secret": "s", "host": "https://h"}
+    monkeypatch.setattr("omnigents_host.get_status", lambda: {"server_url": "https://srv"})
+    captured = {}
+
+    def fake_share(server_url, sp_creds, grant_user, launch=True):
+        captured.update(server_url=server_url, grant_user=grant_user, launch=launch)
+        return {"ok": True, "grant_status": 200}
+
+    monkeypatch.setattr("omnigents_host.share_and_launch", fake_share)
+
+    with app_module.app.test_client() as client:
+        with mock.patch.object(app_module, "_is_databricks_apps", return_value=False):
+            with mock.patch.dict("os.environ", {"OMNIGENTS_SERVER_URL": ""}):
+                resp = client.post(
+                    "/api/omnigent-host/share",
+                    json={"grant_user": "teammate@example.com", "launch": False},
+                    headers={"X-Forwarded-Email": "owner@example.com"},
+                )
+
+    assert resp.status_code == 200
+    assert captured["grant_user"] == "teammate@example.com"
+    assert captured["launch"] is False
