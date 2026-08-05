@@ -264,3 +264,29 @@ class TestExperimentPath:
         assert result.returncode == 0
         settings = read_settings(tmp_path)
         assert "jane@company.com" in settings["env"]["MLFLOW_EXPERIMENT_NAME"]
+
+
+class TestStopHookIsBounded:
+    """The legacy Stop hook is retained for mlflow builds older than 3.14, where
+    stop_hook_handler() processes the whole transcript synchronously instead of
+    being a no-op. Claude Code runs Stop hooks in sequence, so an unbounded one
+    stalls everything after it. Cap it: a dropped trace beats a wedged session."""
+
+    def test_stop_hook_declares_a_timeout(self, tmp_path):
+        write_existing_settings(tmp_path, {"env": {}})
+        result = run_setup_mlflow(tmp_path, {"APP_OWNER": "jane@company.com"})
+        assert result.returncode == 0
+
+        stop_hooks = read_settings(tmp_path)["hooks"]["Stop"]
+        mlflow_entries = [
+            h for h in stop_hooks
+            if "stop_hook_handler" in h["hooks"][0].get("command", "")
+        ]
+        assert mlflow_entries, "expected the mlflow Stop hook to be registered"
+        for entry in mlflow_entries:
+            hook = entry["hooks"][0]
+            assert "timeout" in hook, (
+                "the mlflow Stop hook must declare a timeout — without one it can "
+                "block the rest of the Stop chain indefinitely on mlflow < 3.14"
+            )
+            assert 0 < hook["timeout"] <= 60
