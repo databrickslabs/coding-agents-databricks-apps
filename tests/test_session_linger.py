@@ -175,15 +175,16 @@ class TestTimeoutWarning:
 
 
 # ---------------------------------------------------------------------------
-# 5. /api/status reports 86400 to the frontend
+# 5. Session timeout is configured to 24h
 # ---------------------------------------------------------------------------
 
-class TestStatusEndpoint:
+class TestSessionTimeoutConfig:
+    """The session-linger contract is that idle sessions get reaped after 24h.
+    We assert this on the constant directly. /health used to expose this
+    value to unauthenticated callers but no longer does (it leaked the app's
+    timeout posture to anyone who could reach the URL); the value is part of
+    the app's internal lifecycle config, not its public API."""
 
-    def test_health_reports_24h_timeout(self):
+    def test_session_timeout_is_24h(self):
         app_module = _get_app()
-        client = app_module.app.test_client()
-        with mock.patch.object(app_module, "check_authorization", return_value=(True, "test-user")):
-            resp = client.get("/health")
-        body = resp.get_json()
-        assert body["session_timeout_seconds"] == 86400
+        assert app_module.SESSION_TIMEOUT_SECONDS == 86400

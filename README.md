@@ -349,12 +349,12 @@ Open [http://localhost:8000](http://localhost:8000) — type `claude`, `codex`, 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/` | GET | Terminal UI with inline setup progress |
-| `/health` | GET | Health check with session count and setup status |
-| `/api/setup-status` | GET | Setup progress for the UI |
-| `/api/app-state` | GET | Persisted app state (owner, last rotation) |
+| `/health` | GET | Liveness probe. Exempt from the SSO gate so the platform can reach it. Unauthenticated callers get only `{"status": "healthy"\|"degraded"}`; the owner additionally gets version, session count, setup status and PAT-rotator state |
+| `/api/setup-status` | GET | Setup progress for the UI (owner-gated) |
+| `/api/app-state` | GET | Persisted app state (owner, last rotation) (owner-gated) |
 | `/api/version` | GET | App version |
 | `/api/sessions` | GET | List active (non-exited) sessions with metadata |
-| `/api/pat-status` | GET | Whether a valid, usable PAT is currently configured |
+| `/api/pat-status` | GET | Whether a valid, usable PAT is currently configured (owner-gated) |
 | `/api/configure-pat` | POST | Interactive first-session PAT setup (owner-gated via SSO) |
 | `/api/inject-pat` | POST | Programmatic PAT injection for scripted provisioning (shared-secret gated; disabled unless `CODA_BOOTSTRAP_SECRET` is set). Also requires a workspace **OAuth bearer** for the Apps edge — a PAT bearer 401s at the platform edge before reaching the app |
 | `/api/session` | POST | Create new terminal session |
