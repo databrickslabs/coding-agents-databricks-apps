@@ -10,6 +10,22 @@
 
 ---
 
+## 💬 Project Support
+
+Please note that this project is provided for your exploration only and is not
+formally supported by Databricks with Service Level Agreements (SLAs). It is
+provided AS-IS, and we do not make any guarantees. Please do not submit a
+support ticket relating to any issues arising from the use of this project.
+
+Any issues discovered through the use of this project should be filed as GitHub
+[Issues on this repository](https://github.com/databrickslabs/coding-agents-databricks-apps/issues).
+
+See [LICENSE.md](LICENSE.md) for full terms, including the warranty disclaimer
+and limitation of liability. See [NOTICE.md](NOTICE.md) for third-party software
+attribution.
+
+---
+
 <div align="center">
   <video src="https://github.com/user-attachments/assets/40405b46-532a-4f14-82e3-414cb3744684" controls width="900"></video>
 </div>
