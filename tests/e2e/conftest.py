@@ -98,8 +98,17 @@ def pytest_collection_modifyitems(config, items):
         )
     if skips:
         skip_marker = pytest.mark.skip(reason=" | ".join(skips))
+        e2e_dir = Path(__file__).parent
         for item in items:
-            item.add_marker(skip_marker)
+            # Only skip items that live in *this* directory. `items` is the
+            # whole session's collection, so an unguarded loop here skips the
+            # entire unit-test suite whenever e2e prerequisites are missing.
+            try:
+                item_path = Path(str(item.fspath)).resolve()
+            except Exception:
+                continue
+            if item_path.is_relative_to(e2e_dir):
+                item.add_marker(skip_marker)
 
 
 @pytest.fixture(scope="module")
