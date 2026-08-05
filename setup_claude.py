@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 from claude_otel import apply_claude_otel_env
+from token_helper import resolve_databricks_token
 from utils import (
     add_1m_context_suffix,
     discover_serving_endpoints,
@@ -42,8 +43,12 @@ def _write_apikey_helper(claude_dir: Path) -> Path:
 claude_dir = home / ".claude"
 claude_dir.mkdir(exist_ok=True)
 
-# 1. Write settings.json for Databricks model serving (requires DATABRICKS_TOKEN)
-token = os.environ.get("DATABRICKS_TOKEN", "").strip()
+# 1. Write settings.json for Databricks model serving. The SP broker is the
+# primary auth source on the no-PAT baseline; checking only the raw
+# DATABRICKS_TOKEN env var made Claude setup silently skip its config even while
+# brokered SP auth was healthy. Resolve through the same layered source as Pi and
+# OpenCode: SP broker/profile, then user PAT.
+token = resolve_databricks_token() or ""
 if token:
     gateway_host = get_gateway_host()
     databricks_host = ensure_https(os.environ.get("DATABRICKS_HOST", "").rstrip("/"))

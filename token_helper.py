@@ -38,6 +38,18 @@ def resolve_sp_oauth_token() -> str | None:
                 return token
         except Exception:
             pass
+    # Do not let a missing legacy profile trigger the SDK's ambient auth
+    # discovery/network path. On local setup tests (and on a cold PAT-only
+    # container) there is no profile; return immediately so setup scripts can
+    # use DATABRICKS_TOKEN instead of hanging for an unavailable SP login.
+    cfg_path = Path(os.path.expanduser("~/.databrickscfg"))
+    try:
+        config = configparser.ConfigParser()
+        config.read(cfg_path)
+        if SP_PROFILE not in config:
+            return None
+    except Exception:
+        return None
     try:
         from databricks.sdk.core import Config
         headers = Config(profile=SP_PROFILE).authenticate()
