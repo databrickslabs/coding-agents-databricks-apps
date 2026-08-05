@@ -14,6 +14,7 @@ tracked overlay declares the full set.
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -104,3 +105,72 @@ def test_toggles_match_code():
         f"setup scripts read {sorted(unlisted)} but the overlay guard doesn't "
         f"know about it — add it to CLI_TOGGLES and to every app.yaml*."
     )
+
+
+# ---------------------------------------------------------------------------
+# No workspace-specific values committed to a public repo
+# ---------------------------------------------------------------------------
+#
+# docs/agent-instructions.md §5: personal/workspace values must be commented out
+# or defaulted off before landing on main. This repo is public, and these values
+# had accumulated on main — a customer workspace id, a UC catalog, a personal
+# sandbox repo, and a specific app URL — each of which is both an information
+# leak and actively wrong for anyone else deploying the template.
+#
+# The subtle failure they cause: DATABRICKS_GATEWAY_HOST is TRUSTED with no
+# reachability probe (utils.get_gateway_host tier 1), so a stale committed URL
+# means every model call returns "400 Invalid Token" rather than falling back.
+# Leaving it unset lets tier 2 derive and probe the right gateway per workspace.
+
+# Patterns that indicate a value belongs to one specific workspace/person.
+WORKSPACE_SPECIFIC = [
+    (r"adb-\d{10,}", "an Azure workspace id"),
+    (r"\bdbc-[0-9a-f]{4,}-[0-9a-f]{4,}", "an AWS workspace host"),
+    (r"/Volumes/[a-z0-9_]*(sandbox|prod|dev)[a-z0-9_]*/", "a concrete UC Volume path"),
+    (r"edp_aisandbox", "a specific UC catalog"),
+    (r"github\.com/[A-Za-z0-9._-]*(okeeffe|dgokeeffe)", "a personal GitHub repo"),
+]
+
+
+def _uncommented_values(path: Path) -> list[tuple[str, str]]:
+    """(name, value) for every ACTIVE env entry with a literal string value.
+
+    Commented-out examples are fine — they're documentation, and placeholders
+    like `<your-workspace>` live there.
+    """
+    parsed = yaml.safe_load(path.read_text())
+    out = []
+    for entry in parsed.get("env", []):
+        value = entry.get("value")
+        if isinstance(value, str):
+            out.append((entry["name"], value))
+    return out
+
+
+@pytest.mark.parametrize("path", _tracked_app_yamls(), ids=lambda p: p.name)
+def test_no_workspace_specific_values(path: Path):
+    problems = []
+    for name, value in _uncommented_values(path):
+        for pattern, description in WORKSPACE_SPECIFIC:
+            if re.search(pattern, value, re.IGNORECASE):
+                problems.append(f"{name} = {value!r} contains {description}")
+    assert not problems, (
+        f"{path.name} commits workspace-specific values to a public repo:\n  "
+        + "\n  ".join(problems)
+        + "\n\nComment the entry out with a <placeholder>, or resolve it via a "
+          "`valueFrom` resource reference. See docs/agent-instructions.md §5."
+    )
+
+
+@pytest.mark.parametrize("path", _tracked_app_yamls(), ids=lambda p: p.name)
+def test_gateway_host_is_not_pinned_to_a_workspace(path: Path):
+    """DATABRICKS_GATEWAY_HOST set to a URL is trusted without probing, so a
+    committed one breaks every other workspace. Unset (auto-derive) or
+    commented is correct; note "" means DISABLE, which is a third behaviour."""
+    for name, value in _uncommented_values(path):
+        if name == "DATABRICKS_GATEWAY_HOST" and value.strip():
+            pytest.fail(
+                f"{path.name} pins DATABRICKS_GATEWAY_HOST to {value!r}. Leave it "
+                f"unset so utils.get_gateway_host() tier 2 derives and probes the "
+                f"deploying workspace's own gateway."
+            )

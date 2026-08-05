@@ -49,24 +49,32 @@ env:
   # keeps the curl claude.ai path.
   - name: CLAUDE_INSTALL_METHOD
     value: npm
-  # Route all agent model calls through the Databricks AI Gateway. This value is
-  # TRUSTED (no reachability probe - see utils.get_gateway_host tier 1), so it
-  # must be a real, reachable gateway on the workspace this app deploys to.
-  # Coles workspace <workspace-id> (Azure region shard .15). A token minted
-  # here is only valid at THIS workspace's gateway — pointing at a different
-  # workspace's gateway causes "400 Invalid Token" on every model call.
-  # An empty value would fall back to {DATABRICKS_HOST}/serving-endpoints.
-  - name: DATABRICKS_GATEWAY_HOST
-    value: "https://adb-<workspace-id>.15.azuredatabricks.net/ai-gateway"
-  # Set CLAUDE_CODE_OTEL_ENABLED=true to send Claude Code OTEL signals to Unity
-  # Catalog. Off by default; requires CLAUDE_CODE_OTEL_CATALOG_SCHEMA pointing at
-  # a <catalog>.<schema> your app SP can write to.
+  # AI Gateway host. LEFT UNSET DELIBERATELY — do not commit a workspace URL here.
+  #
+  # Unset is the correct default: utils.get_gateway_host() tier 2 derives the
+  # gateway from DATABRICKS_WORKSPACE_ID (or from an Azure DATABRICKS_HOST) and
+  # probes it for reachability, so a fresh deploy resolves its OWN workspace's
+  # gateway with no edit. A committed URL is TRUSTED with no probe (tier 1), and
+  # a token minted at one workspace is invalid at another's gateway — "400
+  # Invalid Token" on every model call — so a stale value is worse than none.
+  #
+  # Note the three states are distinct (see the tier-1 comment in utils.py):
+  #   unset   -> auto-derive + probe          (this file's default)
+  #   set URL -> trust it, no probe
+  #   set ""  -> explicitly DISABLE the gateway; fall back to serving-endpoints
+  # So to pin a gateway, uncomment and set a real URL; do not set it empty.
+  # - name: DATABRICKS_GATEWAY_HOST
+  #   value: https://<your-workspace>.<region>.databricks.com/ai-gateway
+  #
+  # Claude Code OTEL export to Unity Catalog. Both vars are needed: the flag
+  # below plus CLAUDE_CODE_OTEL_CATALOG_SCHEMA pointing at a <catalog>.<schema>
+  # this app's SP can write to (needs USE_SCHEMA + MODIFY + SELECT +
+  # CREATE_TABLE). claude_otel.py no-ops when the schema is absent, so the flag
+  # alone does nothing. Off by default — the target schema is deployment-specific.
   - name: CLAUDE_CODE_OTEL_ENABLED
-    value: "true"
-  # Workshop telemetry schema - coda-01 app SP has USE_SCHEMA + MODIFY +
-  # SELECT + CREATE_TABLE here; OTEL export writes claude_otel_{spans,logs,metrics}.
-  - name: CLAUDE_CODE_OTEL_CATALOG_SCHEMA
-    value: <catalog>.<schema>.ppcs
+    value: "false"
+  # - name: CLAUDE_CODE_OTEL_CATALOG_SCHEMA
+  #   value: <catalog>.<schema>
   # ─── MLflow tracing (workshop Part 3: observability / policy / cost) ───────
   # Master switch. When true, agent sessions are traced into the experiment
   # /Users/{APP_OWNER}/{DATABRICKS_APP_NAME} for later analytics (harness
@@ -86,18 +94,21 @@ env:
   # and the content-filter proxy for OpenCode/Hermes/Pi (spec-D) send traces to
   # MLFLOW_OSS_URL instead of `databricks`, authed with the app SP's M2M OAuth
   # token. Requires the CoDA app SP to have CAN_USE on the OSS app
-  # (grant_mlflow_host.sh). Off by default elsewhere — set true only where needed.
-  # BRAND-NEW-ENV ORDERING: this CoDA deploys FIRST on Coles ...2455, then deploys
-  # the coda-mlflow-oss app itself. On first boot the OSS app does not exist yet
-  # and the CoDA SP has no CAN_USE grant, so trace writes would fail. Sequence:
-  # (1) deploy this CoDA with tracking OFF -> (2) deploy coda-mlflow-oss on ...2455
+  # (grant_mlflow_host.sh). Off by default — set true only where needed.
+  #
+  # BRAND-NEW-ENV ORDERING: on a fresh workspace the OSS app doesn't exist yet and
+  # this app's SP has no CAN_USE grant, so trace writes would fail. Sequence:
+  # (1) deploy CoDA with tracking OFF -> (2) deploy the coda-mlflow-oss app
   # -> (3) ./grant_mlflow_host.sh --coda-app <coda> --mlflow-app coda-mlflow-oss
-  # -> (4) flip the flag to "true" and redeploy. URL is the deterministic mirror
-  # name, safe to set now.
+  # -> (4) uncomment MLFLOW_OSS_URL with that app's URL, flip the flag, redeploy.
+  #
+  # MLFLOW_OSS_URL is left unset: it names a specific app in a specific
+  # workspace, and proxy_tracing._enabled() already requires BOTH the flag and a
+  # non-empty URL, so an absent URL is a safe no-op.
   - name: MLFLOW_OSS_TRACKING_ENABLED
     value: "false"
-  - name: MLFLOW_OSS_URL
-    value: "https://coda-mlflow-oss-<workspace-id>.15.azure.databricksapps.com"
+  # - name: MLFLOW_OSS_URL
+  #   value: https://coda-mlflow-oss-<workspace-id>.<region>.databricksapps.com
   # Capture full prompt/response bodies in proxy trace spans (not just metadata
   # shapes). Default is false (privacy-preserving: n_messages/stop_reason only).
   # Enabled here so the Traces UI shows the actual model conversation. NOTE: this
@@ -177,18 +188,23 @@ env:
   - name: ENABLE_SP_APIKEYHELPER
     value: "true"
 
-  # Workshop challenge repo (A-R7)
+  # Workshop challenge repo (A-R7) — OPT-IN, both vars unset by default.
   # PRIVATE repo cloned from its main branch at container startup into
   # ~/projects/<name>; the attendee terminal opens directly inside it. The read
   # token is a repo-scoped READ-ONLY GitHub token stored in a Databricks secret
   # and attached to the app as a secret resource named "challenge-repo-token".
   # The token is used for the clone only and is stripped from attendee sessions.
-  # STAND-IN URL: swap for the real challenge repo (and the secret value), then
-  # redeploy. install_challenge_repo.sh no-ops if the URL is unset/placeholder.
-  - name: CHALLENGE_REPO_URL
-    value: "https://github.com/david-okeeffe_data/dok-sandbox"
-  - name: CHALLENGE_REPO_READ_TOKEN
-    valueFrom: challenge-repo-token
+  #
+  # Uncomment both for a workshop deploy. Leaving them out is a clean no-op:
+  # app.py only registers the "challenge" setup step when CHALLENGE_REPO_URL is
+  # set, and install_challenge_repo.sh exits 0 when it's unset. Leaving
+  # CHALLENGE_REPO_READ_TOKEN's valueFrom in place without the secret attached is
+  # what produces the "error resolving resource challenge-repo-token" boot
+  # warning, so both stay commented together.
+  # - name: CHALLENGE_REPO_URL
+  #   value: https://github.com/<org>/<challenge-repo>
+  # - name: CHALLENGE_REPO_READ_TOKEN
+  #   valueFrom: challenge-repo-token
 
   # ─── Enterprise security knobs ────────────────────────────────────────────
   # Stable Flask session-cookie key. Without this, the key is regenerated on
