@@ -32,7 +32,7 @@ cffi==2.0.0
     # via cryptography
 charset-normalizer==3.4.9
     # via requests
-claude-agent-sdk==0.1.65
+claude-agent-sdk==0.2.128
     # via coda (pyproject.toml)
 click==8.4.1
     # via
