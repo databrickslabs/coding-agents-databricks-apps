@@ -21,7 +21,10 @@ permissions:
 
 jobs:
   audit:
-    runs-on: databrickslabs-protected-runner-group
+    # See the note in test.yml: this repo was never granted
+    # databrickslabs-protected-runner-group, so every job targeting it produced
+    # zero runs. This audit reads public advisory data and needs no secrets.
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1

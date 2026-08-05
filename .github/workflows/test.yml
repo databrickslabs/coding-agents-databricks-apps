@@ -11,7 +11,13 @@ permissions:
 
 jobs:
   test:
-    runs-on: databrickslabs-protected-runner-group
+    # GitHub-hosted, not databrickslabs-protected-runner-group. That group is
+    # granted per-repo across the org and this repo has never been granted it —
+    # every workflow here that targeted it produced *zero jobs*, silently. This
+    # job needs no secrets (permissions: contents: read) and GitHub-hosted
+    # runners are free for public repos, so hosted is the right fit. If the repo
+    # is granted the protected group later, this can move back.
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -24,5 +30,87 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9  # v9.0.0
 
+      # ---------------------------------------------------------------------
+      # Deploy-blocker checks. These come FIRST because they catch breakage the
+      # test suite structurally cannot see: the app is installed from
+      # requirements.txt at deploy time, and the unit tests never install it.
+      #
+      # This is not hypothetical. #84 bumped pydantic-core to 2.47.0 while
+      # pydantic==2.13.4 pins pydantic-core==2.46.4 exactly, making
+      # requirements.txt unsatisfiable. It was reported MERGEABLE, the unit
+      # suite passed, it merged, and every deploy from main broke until #110
+      # repaired it. #115 and #116 were the same failure and were caught only
+      # because someone resolved them by hand.
+      # ---------------------------------------------------------------------
+      - name: requirements.txt must be installable
+        run: |
+          echo "::group::Resolving requirements.txt"
+          if ! uv pip install --dry-run -r requirements.txt; then
+            echo "::error title=requirements.txt is unsatisfiable::pip install -r requirements.txt cannot resolve, so every Databricks Apps deploy from this commit would fail. requirements.txt is COMPILED — do not hand-edit a pin. Change the floor in pyproject.toml and run: uv pip compile pyproject.toml -o requirements.txt"
+            exit 1
+          fi
+          echo "::endgroup::"
+
+      - name: requirements.lock must match requirements.txt
+        run: |
+          uv pip compile requirements.txt -o /tmp/expected.lock --generate-hashes --quiet
+          # Ignore the generated header comment, which records the command line.
+          grep -v '^#' /tmp/expected.lock > /tmp/expected.stripped
+          grep -v '^#' requirements.lock  > /tmp/actual.stripped
+          if ! diff -u /tmp/actual.stripped /tmp/expected.stripped; then
+            echo "::error title=requirements.lock is stale::requirements.lock does not match requirements.txt. Regenerate it with: uv pip compile requirements.txt -o requirements.lock --generate-hashes"
+            exit 1
+          fi
+
+      - name: App modules must import
+        run: |
+          uv run python - <<'PY'
+          import importlib
+          # A syntax error or bad import in any of these takes the app down at
+          # boot, and most have no direct unit test of their own.
+          modules = [
+              "app", "app_state", "cli_auth", "claude_otel", "content_filter_proxy",
+              "enterprise_config", "omnigents_host", "pat_rotator", "proxy_tracing",
+              "sp_token_broker", "telemetry", "token_helper", "utils",
+          ]
+          for name in modules:
+              importlib.import_module(name)
+              print(f"ok  {name}")
+          PY
+
+      # ---------------------------------------------------------------------
+      # The suite itself.
+      #
+      # tests/e2e self-skips (no recorded SSO session, no databricks CLI) and is
+      # cheap to collect, so it stays in.
+      #
+      # tests/integration is EXCLUDED deliberately. It gates on Docker being
+      # available — and Docker *is* available on ubuntu-latest, so it would
+      # actually run here: it builds an apps-like image and executes the whole
+      # setup pipeline (npm installs, CLI downloads). That's minutes of work and
+      # a network dependency, not a PR gate. Verified locally that leaving it in
+      # produces failures. Run it on demand with:
+      #     uv run pytest tests/integration
+      # or promote it to its own scheduled workflow if it's worth the runtime.
+      #
+      # --timeout guards against a hung test burning the job's whole budget;
+      # -p no:randomly keeps failures reproducible from the log.
+      # ---------------------------------------------------------------------
       - name: Run tests
-        run: uv run pytest tests/ -v
+        run: uv run pytest tests/ --ignore=tests/integration -v --timeout=120 -p no:randomly
+
+      # A suite that reports "N skipped" for everything passes vacuously. That
+      # is exactly what happened here: tests/e2e/conftest.py applied its skip
+      # marker to the whole session, so `pytest tests/` reported 465 skipped
+      # (fixed in #106). Assert a floor on collected-and-run tests so the suite
+      # can never silently empty itself out again.
+      - name: Guard against a vacuous suite
+        run: |
+          uv run pytest tests/ --ignore=tests/integration -q -p no:randomly \
+            --timeout=120 2>&1 | tee /tmp/pytest.out
+          passed=$(grep -oE '[0-9]+ passed' /tmp/pytest.out | tail -1 | grep -oE '[0-9]+' || echo 0)
+          echo "tests passed: ${passed}"
+          if [ "${passed:-0}" -lt 400 ]; then
+            echo "::error title=Suite looks vacuous::Only ${passed} tests ran (expected >=400). Something is skipping or failing to collect the suite — a passing run that executes nothing is worse than a red build."
+            exit 1
+          fi

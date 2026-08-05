@@ -88,14 +88,30 @@ def pytest_collection_modifyitems(config, items):
             f"missing {AUTH_STATE.relative_to(REPO_ROOT)} — "
             f"run `make e2e-auth` first to record SSO session"
         )
-    if subprocess.run(
-        ["databricks", "current-user", "me", "--profile", _databricks_profile()],
-        capture_output=True, timeout=10,
-    ).returncode != 0:
-        skips.append(
-            f"databricks CLI not authed for profile {_databricks_profile()!r} — "
-            f"run `databricks auth login --profile {_databricks_profile()}`"
-        )
+    # A missing CLI must be treated as "prerequisite absent", not allowed to
+    # raise. An uncaught FileNotFoundError here becomes a pytest INTERNALERROR
+    # that kills the entire session — which is what happens on any machine
+    # without the databricks CLI installed, including GitHub-hosted CI runners.
+    try:
+        authed = subprocess.run(
+            ["databricks", "current-user", "me", "--profile", _databricks_profile()],
+            capture_output=True, timeout=10,
+        ).returncode == 0
+        cli_missing = False
+    except FileNotFoundError:
+        authed, cli_missing = False, True
+    except (OSError, subprocess.SubprocessError):
+        # Timeout, permission error, etc. — unusable either way.
+        authed, cli_missing = False, False
+
+    if not authed:
+        if cli_missing:
+            skips.append("databricks CLI not installed")
+        else:
+            skips.append(
+                f"databricks CLI not authed for profile {_databricks_profile()!r} — "
+                f"run `databricks auth login --profile {_databricks_profile()}`"
+            )
     if skips:
         skip_marker = pytest.mark.skip(reason=" | ".join(skips))
         e2e_dir = Path(__file__).parent
