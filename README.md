@@ -415,6 +415,7 @@ Open [http://localhost:8000](http://localhost:8000) — type `claude`, `codex`, 
 | `OMNIGENTS_WHEEL_SPEC` | No | UC Volume path holding the `omnigents host` wheels (app SP needs `READ_VOLUME`). Required when `OMNIGENTS_SERVER_URL` is set |
 | `OMNIGENTS_FORCE_REINSTALL` | No | Set `"1"` to reinstall the host CLI on boot (for rolling out a new wheel); otherwise `uv tool install` no-ops on an existing binary |
 | `ENABLE_SP_APIKEYHELPER` | No | Set `"true"` to broker short-lived app-SP OAuth tokens over loopback without persisting the client secret in terminal-visible configuration |
+| `GH_TOKEN` | No | Optional short-lived/fine-grained GitHub token, normally attached with a Databricks secret `valueFrom: github-token`. `setup_gh_repos.sh` uses it for `gh auth login` and `gh auth setup-git`; unset means `gh` remains installed but unauthenticated |
 | `DEEPWIKI_MCP_URL` | No | Override or disable the DeepWiki MCP server (set to `""` to remove) |
 | `EXA_MCP_URL` | No | Override or disable the Exa MCP server (set to `""` to remove) |
 | `TEAM_MEMORY_MCP_URL` | No | Optional shared-org-memory MCP server URL |

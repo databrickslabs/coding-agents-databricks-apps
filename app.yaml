@@ -188,6 +188,14 @@ env:
   - name: ENABLE_SP_APIKEYHELPER
     value: "true"
 
+  # Optional GitHub CLI auth for gh commands in the terminal. Leave unset for
+  # public-read-only deployments. For a deployment that must use gh API/repo
+  # commands, attach a short-lived/fine-grained token as a Databricks secret
+  # resource and uncomment this valueFrom. setup_gh_repos.sh consumes GH_TOKEN
+  # and runs `gh auth setup-git`; never commit a token here.
+  # - name: GH_TOKEN
+  #   valueFrom: github-token
+
   # Workshop challenge repo (A-R7) — OPT-IN, both vars unset by default.
   # PRIVATE repo cloned from its main branch at container startup into
   # ~/projects/<name>; the attendee terminal opens directly inside it. The read
