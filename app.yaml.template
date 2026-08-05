@@ -16,14 +16,27 @@ env:
     value: databricks-claude-opus-4-8
   - name: HERMES_FALLBACK_MODEL
     value: databricks-claude-opus-4-8
-  # Set ENABLE_HERMES=false to skip Hermes Agent install.
-  # Other CLIs are unaffected.
+  # Per-CLI install toggles. Each ENABLE_* defaults to true when the variable
+  # is absent, so list all of them here explicitly: an Apps overlay *replaces*
+  # app.yaml rather than merging with it, and an omitted toggle silently falls
+  # back to "install it".
+  #
+  # Set any to "false" to skip that CLI's install; the others are unaffected.
   - name: ENABLE_HERMES
     value: "true"
-  # Set ENABLE_PI=false to skip installing the Pi coding agent.
-  # Other CLIs are unaffected.
   - name: ENABLE_PI
     value: "true"
+  - name: ENABLE_OPENCODE
+    value: "true"
+  # Codex and Gemini default to "false" here because most workspaces don't
+  # serve endpoints they can talk to — Codex needs a Responses-API (*-codex)
+  # endpoint and Gemini needs a served Gemini model. Installing them anyway
+  # just costs boot time and produces agents that fail on first request.
+  # Flip to "true" once your gateway serves a compatible endpoint.
+  - name: ENABLE_CODEX
+    value: "false"
+  - name: ENABLE_GEMINI
+    value: "false"
   #OPTIONAL: Use the new Databricks AI Gateway if you have access (recommended), otherwise it will default to the older endpoint
   - name: DATABRICKS_GATEWAY_HOST
     value: https://<your-gateway-id>.ai-gateway.<env>.cloud.databricks.com

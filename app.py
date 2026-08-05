@@ -1218,8 +1218,26 @@ def cleanup_stale_sessions():
 @app.before_request
 def authorize_request():
     """Check authorization before processing any request."""
-    # Skip auth for health check, setup status, and Socket.IO (has own auth via connect event)
-    if request.path in ("/health", "/api/setup-status", "/api/pat-status", "/api/configure-pat", "/api/inject-pat", "/api/app-state") or request.path.startswith("/socket.io"):
+    # Auth-exempt:
+    #   /health            — liveness probe. Stays reachable for the platform,
+    #                        but trims its body for unauthenticated callers;
+    #                        see health() for what each audience sees.
+    #   /api/configure-pat — owner-gates itself in-handler (cannot use the
+    #                        before_request gate; needed during bootstrap before
+    #                        app_owner is resolved). See configure_pat() guard.
+    #   /api/inject-pat    — gated on the CODA_BOOTSTRAP_SECRET shared secret,
+    #                        and 404s when that env var is unset. Provisioning
+    #                        scripts have no SSO session, so it can't use the
+    #                        SSO gate. See inject_pat().
+    #   /socket.io/*       — has own auth gate via the 'connect' WS event
+    #
+    # Previously exempt but now owner-gated (closed unauth info-disclosure
+    # surface): /api/setup-status, /api/pat-status, /api/app-state. All three
+    # are only polled by the frontend, which loads from "/" (auth'd) so already
+    # has SSO cookies — no functional regression.
+    if request.path in (
+        "/health", "/api/configure-pat", "/api/inject-pat",
+    ) or request.path.startswith("/socket.io"):
         return None
 
     authorized, user = check_authorization()
@@ -1319,6 +1337,17 @@ def attach_session():
 
 @app.route("/health")
 def health():
+    # Two audiences, two response shapes:
+    #
+    #   unauthenticated — {"status": "healthy"|"degraded"} and nothing else.
+    #     Version, session counts, setup state and rotator internals all enable
+    #     version-targeted exploit selection or leak the app's auth posture to
+    #     anyone who can reach the URL.
+    #   the owner — the full diagnostic payload below.
+    #
+    # `status` itself stays visible to everyone: a liveness probe that can't
+    # report unhealthiness is useless, and "degraded" is the signal that makes
+    # a zombie app (worker answering, PAT rotation dead) observable at all.
     with sessions_lock:
         session_count = len(sessions)
     with setup_lock:
@@ -1352,8 +1381,14 @@ def health():
         pat_rotator.token is not None and auth.get("rotator_alive") is False
     )
 
+    status = "degraded" if degraded else "healthy"
+
+    authorized, _ = check_authorization()
+    if not authorized:
+        return jsonify({"status": status})
+
     return jsonify({
-        "status": "degraded" if degraded else "healthy",
+        "status": status,
         "version": APP_VERSION,
         "setup_status": current_setup_status,
         "active_sessions": session_count,

@@ -289,3 +289,67 @@ class TestAllCLIsUpdated:
         assert "GEMINI_API_KEY=rotated-token" in (gemini_dir / ".env").read_text()
         hermes_content = (hermes_dir / "config.yaml").read_text()
         assert hermes_content.count("api_key: rotated-token") == 2
+
+
+class TestAtomicWrites:
+    """The rotator rewrites live agent configs every 10 minutes while agents
+    may be reading them, so every write goes through `_atomic_write_text`."""
+
+    def test_no_partial_file_and_no_tmp_left_behind(self, isolated_home):
+        from cli_auth import _atomic_write_text
+
+        path = isolated_home / "config.yaml"
+        path.write_text("api_key: old\n")
+
+        _atomic_write_text(str(path), "api_key: new\n")
+
+        assert path.read_text() == "api_key: new\n"
+        assert not (isolated_home / "config.yaml.tmp").exists()
+
+    def test_preserves_restrictive_mode(self, isolated_home):
+        """os.replace() installs the tmp file's inode — and therefore the tmp
+        file's permissions. Without an explicit chmod, rotating the Hermes
+        token would widen ~/.hermes/config.yaml from 0600 back to the umask
+        default, silently undoing setup_hermes.py's hardening."""
+        import stat
+
+        path = isolated_home / "config.yaml"
+        path.write_text("api_key: old\n")
+        path.chmod(0o600)
+
+        from cli_auth import _atomic_write_text
+
+        _atomic_write_text(str(path), "api_key: new\n")
+
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+    def test_hermes_rotation_keeps_config_private(self, isolated_home):
+        """End-to-end via the public entry point: a 0600 Hermes config stays
+        0600 across a token rotation."""
+        import stat
+        from cli_auth import update_cli_tokens
+
+        hermes_dir = isolated_home / ".hermes"
+        hermes_dir.mkdir()
+        cfg = hermes_dir / "config.yaml"
+        cfg.write_text("model:\n  api_key: old\n")
+        cfg.chmod(0o600)
+
+        update_cli_tokens("rotated-token")
+
+        assert "api_key: rotated-token" in cfg.read_text()
+        assert stat.S_IMODE(cfg.stat().st_mode) == 0o600
+
+
+class TestMissingConfigsAreQuiet:
+    def test_no_warnings_when_nothing_is_installed(self, isolated_home, caplog):
+        """A rotation on a box where an agent never ran must not log warnings —
+        the existence guards return early instead of raising OSError."""
+        import logging
+
+        from cli_auth import update_cli_tokens
+
+        with caplog.at_level(logging.WARNING, logger="cli_auth"):
+            update_cli_tokens("some-token")
+
+        assert [r.message for r in caplog.records if r.levelno >= logging.WARNING] == []
