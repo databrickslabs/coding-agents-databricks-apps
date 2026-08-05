@@ -328,3 +328,154 @@ class TestCaseInsensitiveAuth:
             assert result == "user@example.com", (
                 f"get_request_user() should lowercase, got '{result}'"
             )
+
+
+# ---------------------------------------------------------------------------
+# 3. Info-disclosure endpoints — auth-gated or trimmed
+# ---------------------------------------------------------------------------
+
+class TestInfoDisclosureEndpoints:
+    """These endpoints were previously reachable without auth and leaked
+    info about the app's state. They are now either owner-gated (setup-status,
+    pat-status, app-state) or minimally informative (health).
+    """
+
+    def _post_or_get(self, app_module, method, path, headers):
+        client = _make_client(app_module)
+        with mock.patch.object(app_module, "_is_databricks_apps", return_value=True):
+            if method == "GET":
+                return client.get(path, headers=headers)
+            return client.post(path, headers=headers)
+
+    # -- /api/setup-status now requires auth --
+
+    def test_setup_status_denied_for_non_owner(self):
+        app_module = _get_app_module()
+        original = app_module.app_owner
+        try:
+            app_module.app_owner = "owner@databricks.com"
+            resp = self._post_or_get(app_module, "GET", "/api/setup-status",
+                                     {"X-Forwarded-Email": "intruder@evil.com"})
+            assert resp.status_code == 403, (
+                f"GET /api/setup-status should 403 for non-owner, got {resp.status_code}"
+            )
+        finally:
+            app_module.app_owner = original
+
+    def test_setup_status_allowed_for_owner(self):
+        app_module = _get_app_module()
+        original = app_module.app_owner
+        try:
+            app_module.app_owner = "owner@databricks.com"
+            resp = self._post_or_get(app_module, "GET", "/api/setup-status",
+                                     {"X-Forwarded-Email": "owner@databricks.com"})
+            assert resp.status_code == 200, (
+                f"Owner should see setup-status, got {resp.status_code}"
+            )
+        finally:
+            app_module.app_owner = original
+
+    # -- /api/pat-status now requires auth --
+
+    def test_pat_status_denied_for_non_owner(self):
+        app_module = _get_app_module()
+        original = app_module.app_owner
+        try:
+            app_module.app_owner = "owner@databricks.com"
+            resp = self._post_or_get(app_module, "GET", "/api/pat-status",
+                                     {"X-Forwarded-Email": "intruder@evil.com"})
+            assert resp.status_code == 403, (
+                f"GET /api/pat-status should 403 for non-owner, got {resp.status_code}"
+            )
+        finally:
+            app_module.app_owner = original
+
+    # -- /api/app-state now requires auth --
+
+    def test_app_state_denied_for_non_owner(self):
+        app_module = _get_app_module()
+        original = app_module.app_owner
+        try:
+            app_module.app_owner = "owner@databricks.com"
+            resp = self._post_or_get(app_module, "GET", "/api/app-state",
+                                     {"X-Forwarded-Email": "intruder@evil.com"})
+            assert resp.status_code == 403, (
+                f"GET /api/app-state should 403 for non-owner, got {resp.status_code}"
+            )
+        finally:
+            app_module.app_owner = original
+
+    # -- /health stays reachable unauth, but only the owner sees detail --
+
+    def test_health_minimal_response_for_unauthenticated_caller(self):
+        """/health stays exempt from the SSO gate so the platform can probe it,
+        but an unauthenticated caller must NOT see version, session counts,
+        setup state or rotator internals — those enable version-targeted
+        exploit selection and leak the app's auth posture."""
+        app_module = _get_app_module()
+        client = _make_client(app_module)
+        original = app_module.app_owner
+        try:
+            app_module.app_owner = "owner@databricks.com"
+            # On Apps with no X-Forwarded-Email, check_authorization() fails closed.
+            with mock.patch.object(app_module, "_is_databricks_apps", return_value=True):
+                resp = client.get("/health")
+        finally:
+            app_module.app_owner = original
+
+        # Still 200 — the gate must not turn a liveness probe into a 403.
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert set(body) == {"status"}, (
+            f"unauth /health should return only status, got keys: {sorted(body)}"
+        )
+        assert body["status"] in ("healthy", "degraded")
+        # Explicit anti-leak assertions
+        assert "version" not in body, "/health must not expose version"
+        assert "setup_status" not in body, "/health must not expose setup_status"
+        assert "active_sessions" not in body, "/health must not expose session count"
+        assert "auth" not in body, "/health must not expose rotator internals"
+
+    def test_health_full_payload_for_owner(self):
+        """The owner keeps the diagnostic payload — that's what makes a zombie
+        app (worker answering while PAT rotation is dead) observable."""
+        app_module = _get_app_module()
+        client = _make_client(app_module)
+        original = app_module.app_owner
+        try:
+            app_module.app_owner = "owner@databricks.com"
+            with mock.patch.object(app_module, "_is_databricks_apps", return_value=True):
+                resp = client.get(
+                    "/health", headers={"X-Forwarded-Email": "owner@databricks.com"}
+                )
+        finally:
+            app_module.app_owner = original
+
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["status"] in ("healthy", "degraded")
+        for key in ("version", "setup_status", "active_sessions", "auth"):
+            assert key in body, f"owner /health should include {key}, got {sorted(body)}"
+
+    def test_health_reports_degraded_to_unauthenticated_caller(self):
+        """`status` is the one field everyone sees — a liveness probe that can't
+        report unhealthiness is useless. Verify a dead rotator still surfaces."""
+        app_module = _get_app_module()
+        client = _make_client(app_module)
+        original = app_module.app_owner
+        rotator = app_module.pat_rotator
+        try:
+            app_module.app_owner = "owner@databricks.com"
+            with mock.patch.object(type(rotator), "token", "dapi-fake"), \
+                 mock.patch.object(type(rotator), "is_alive", False), \
+                 mock.patch.object(type(rotator), "is_token_expired", True), \
+                 mock.patch.object(type(rotator), "seconds_since_rotation", 999), \
+                 mock.patch.object(app_module, "_is_databricks_apps", return_value=True):
+                resp = client.get("/health")
+        finally:
+            app_module.app_owner = original
+
+        body = resp.get_json()
+        assert body == {"status": "degraded"}, (
+            f"expected a bare degraded signal, got {body}"
+        )
