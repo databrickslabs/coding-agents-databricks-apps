@@ -156,6 +156,30 @@ def _omnigents_bin() -> str:
     return os.path.join(bindir, "omnigent")  # default for the install check
 
 
+def _list_wheels_recursive(w, root: str, *, max_depth: int = 4) -> list:
+    """Recursively collect ``.whl`` directory entries under a UC Volume path.
+
+    The omnigent build publishes wheels under ``wheels/<version>/`` rather than
+    flat at the volume root, so a top-level-only listing misses them. Walks the
+    tree with a bounded depth so a pathological/looping layout can't spin.
+    """
+    out: list = []
+    stack = [(root, 0)]
+    while stack:
+        path, depth = stack.pop()
+        try:
+            entries = list(w.files.list_directory_contents(path))
+        except Exception:  # noqa: BLE001 — an unreadable subdir must not abort the walk
+            continue
+        for e in entries:
+            if getattr(e, "is_directory", False):
+                if depth < max_depth:
+                    stack.append((e.path, depth + 1))
+            elif (e.path or "").endswith(".whl"):
+                out.append(e)
+    return out
+
+
 def _materialize_spec(spec: str, sp_creds: dict[str, str] | None = None) -> str:
     """Resolve OMNIGENTS_WHEEL_SPEC to a locally-usable install source.
 
@@ -188,8 +212,33 @@ def _materialize_spec(spec: str, sp_creds: dict[str, str] | None = None) -> str:
             ))
         else:
             w = WorkspaceClient()
-        listed = list(w.files.list_directory_contents(spec))
-        wheels = [e for e in listed if (e.path or "").endswith(".whl")]
+        # Wheels may sit flat at the volume root OR nested under
+        # ``wheels/<version>/`` (the omnigent build's versioned layout). List
+        # the root first; if it has no wheels, recurse. When wheels live in
+        # per-version subdirs, pick the directory holding the newest-uploaded
+        # main ``omnigent-`` wheel and install every wheel from THAT dir, so a
+        # stale older version sitting alongside a new one isn't mixed in.
+        top = list(w.files.list_directory_contents(spec))
+        wheels = [e for e in top if (e.path or "").endswith(".whl")]
+        if not wheels:
+            all_wheels = _list_wheels_recursive(w, spec)
+            mains = [
+                e for e in all_wheels
+                if os.path.basename(e.path or "").startswith("omnigent-")
+            ]
+            if not mains:
+                raise FileNotFoundError(
+                    f"no omnigent-*.whl in UC Volume {spec} (searched subdirectories)"
+                )
+            newest = max(mains, key=lambda e: getattr(e, "last_modified", 0) or 0)
+            src_dir = os.path.dirname(newest.path)
+            wheels = [
+                e for e in all_wheels if os.path.dirname(e.path or "") == src_dir
+            ]
+            logger.info(
+                "Resolved nested host wheels dir %s (newest main wheel %s)",
+                src_dir, os.path.basename(newest.path),
+            )
         if not wheels:
             raise FileNotFoundError(f"no .whl in UC Volume {spec}")
         for entry in wheels:
@@ -310,15 +359,43 @@ def capture_sp_credentials() -> dict[str, str] | None:
 
 
 def _write_oauth_profile(creds: dict[str, str]) -> None:
-    """Write the broker-owned workspace pointer without persisting SP creds."""
+    """Write the broker-owned workspace pointer without persisting SP creds.
+
+    The profile holds ``host`` + ``auth_type = databricks-cli`` +
+    ``databricks_cli_path`` pointing at the loopback-broker CLI shim. This is
+    what lets ``Config(profile="omnigents-host").authenticate()`` succeed:
+    omnigent's ``resolve_databricks_workspace`` uses it for the model-catalog
+    fetch, and without an authable profile that fetch fails and pi shows only
+    its single hard-coded default model instead of the workspace's full list.
+
+    Both keys are load-bearing and BOTH are read from the profile (no env var):
+
+    - ``auth_type = databricks-cli`` selects the SDK's CLI token source, which
+      mints by running ``databricks auth token --profile omnigents-host``.
+    - ``databricks_cli_path = <shim>`` pins WHICH binary that token source runs.
+      The SDK resolves ``databricks`` via its OWN lookup (NOT ``$PATH``), so a
+      bare PATH prepend does not route it to the shim — it finds the real CLI in
+      ``~/.local/bin``, which has no OAuth cache and fails ("databricks OAuth is
+      not configured"). ``databricks_cli_path`` is a normal ``Config`` attribute
+      the SDK reads straight from the ``.databrickscfg`` profile, so writing it
+      here reaches the in-runner catalog fetch WITHOUT depending on the runner's
+      env allowlist (omnigent's host→runner env is an allowlist we don't own).
+
+    (The shim emits the full ``access_token``/``token_type``/``expiry`` JSON the
+    SDK's CLI token source requires — including on the no-``--output json`` path
+    the SDK actually invokes — see ``write_databricks_token_wrapper``.)
+    """
     home = os.environ.get("HOME", "/app/python/source_code")
     cfg_path = os.path.join(home, ".databrickscfg")
+    broker_cli = os.path.join(home, ".coda-broker-bin", "databricks")
 
     config = configparser.ConfigParser(interpolation=None)
     if os.path.exists(cfg_path):
         config.read(cfg_path)
     config[_HOST_PROFILE] = {
         "host": creds["host"],
+        "auth_type": "databricks-cli",
+        "databricks_cli_path": broker_cli,
     }
 
     fd, tmp_path = tempfile.mkstemp(dir=home, prefix=".databrickscfg.")
@@ -671,6 +748,51 @@ def _ensure_tmux() -> None:
         logger.warning("tmux install failed (non-fatal): %s", e)
 
 
+def _ensure_jq() -> None:
+    """Install a static jq to ~/.local/bin if missing (best-effort).
+
+    The Omnigent native harnesses (pi / claude / codex) resolve their Databricks
+    gateway bearer with an auth command that ends in
+    ``... --output json | jq -r '.access_token'``
+    (omnigent.inner.codex_executor._databricks_codex_auth_command). Databricks
+    Apps containers ship no jq, so that pipe yields an EMPTY token and the
+    harness fails with "Failed to resolve API key" — exactly the pi-native
+    breakage. Install a static jq here (same fetch-a-binary pattern as
+    ``_ensure_tmux``) so the auth command resolves. Runs BEFORE
+    ``_run_setup_once`` and the harness auth commands. Idempotent; never blocks
+    the host on failure.
+    """
+    home = os.environ.get("HOME", "/app/python/source_code")
+    local_bin = os.path.join(home, ".local", "bin")
+    jq_path = os.path.join(local_bin, "jq")
+    if shutil.which("jq") or os.path.exists(jq_path):
+        logger.info("jq already present at %s", shutil.which("jq") or jq_path)
+        return
+    script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "install_jq.sh")
+    if not os.path.exists(script):
+        logger.warning(
+            "install_jq.sh not found at %s; native harness auth commands need jq", script
+        )
+        return
+    try:
+        result = subprocess.run(
+            ["bash", script], check=False, capture_output=True, text=True, timeout=120
+        )
+        if result.returncode == 0 and os.path.exists(jq_path):
+            logger.info("jq installed: %s", (result.stdout or "").strip().splitlines()[-1:])
+        else:
+            logger.warning(
+                "jq install did NOT land (rc=%s); native harness auth commands "
+                "will resolve an empty token and report 'Failed to resolve API "
+                "key'. stdout=%r stderr=%r",
+                result.returncode,
+                (result.stdout or "").strip()[-500:],
+                (result.stderr or "").strip()[-500:],
+            )
+    except Exception as e:  # never block host launch on jq install
+        logger.warning("jq install failed (non-fatal): %s", e)
+
+
 def _start_runner_log_tailer() -> None:
     """Stream runner log files into the app logger (best-effort).
 
@@ -777,6 +899,11 @@ def _configure_omnigent_databricks_auth() -> None:
     home = os.environ.get("HOME", "/app/python/source_code")
     config_path = os.path.join(home, ".omnigent", "config.yaml")
     desired = {"type": "databricks", "profile": _HOST_PROFILE}
+    desired_provider = {
+        "kind": "databricks",
+        "default": True,
+        "profile": _HOST_PROFILE,
+    }
     try:
         try:
             with open(config_path) as f:
@@ -785,10 +912,15 @@ def _configure_omnigent_databricks_auth() -> None:
             config = {}
         if not isinstance(config, dict):
             config = {}
-        if config.get("auth") == desired:
+        providers = config.get("providers")
+        if not isinstance(providers, dict):
+            providers = {}
+        if config.get("auth") == desired and providers.get("coda-databricks") == desired_provider:
             logger.info("omnigent auth already pinned to '%s' profile", _HOST_PROFILE)
             return
         config["auth"] = desired
+        providers["coda-databricks"] = desired_provider
+        config["providers"] = providers
         os.makedirs(os.path.dirname(config_path), exist_ok=True)
         tmp = f"{config_path}.tmp"
         with open(tmp, "w") as f:
@@ -945,6 +1077,11 @@ def _supervise(
         _ensure_opencode()
         _ensure_opencode_settings(sp_creds)
     _ensure_tmux()
+    # jq is required by the native harnesses' Databricks auth command
+    # (`... --output json | jq -r .access_token`); without it pi/claude/codex
+    # resolve an empty token. Install BEFORE _run_setup_once and the harness
+    # auth commands run.
+    _ensure_jq()
     _run_setup_once()
     # Pin omnigent's auth to the databricks host profile so the runner's native
     # credential resolver (Pi/Claude/Codex) authenticates via the AI Gateway

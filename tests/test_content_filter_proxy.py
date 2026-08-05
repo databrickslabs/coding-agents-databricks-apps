@@ -304,3 +304,58 @@ class TestToollessRequestsAreStillSanitised:
         })
 
         assert "additionalProperties" not in data["tools"][0]["function"]["parameters"]
+
+
+def test_sanitize_tool_schemas_strips_exclusive_minimum_gemini_rejects():
+    """Gemini's OpenAPI parser 400s on `exclusiveMinimum` in a tool param schema.
+
+    Reproduces the live failure: a tool whose numeric param carries the
+    draft-2020 `exclusiveMinimum`/`exclusiveMaximum` (numbers) — Gemini's
+    function-declaration parser has no such field and rejects the whole request
+    with "Unknown name exclusiveMinimum ... Cannot find field". The proxy must
+    strip these (and the other JSON-Schema-only validators) at any depth so the
+    request survives whichever translator the gateway routes to.
+    """
+    from content_filter_proxy import sanitize_tool_schemas
+
+    data = {
+        "tools": [
+            {
+                "function": {
+                    "name": "wait",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "seconds": {
+                                "type": "integer",
+                                "exclusiveMinimum": 0,
+                                "exclusiveMaximum": 60,
+                                "multipleOf": 1,
+                            },
+                            "label": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 80,
+                                "pattern": "^[a-z]+$",
+                            },
+                        },
+                        "additionalProperties": False,
+                    },
+                }
+            }
+        ]
+    }
+
+    out = sanitize_tool_schemas(data)
+    params = out["tools"][0]["function"]["parameters"]
+    seconds = params["properties"]["seconds"]
+    label = params["properties"]["label"]
+
+    for gone in ("exclusiveMinimum", "exclusiveMaximum", "multipleOf"):
+        assert gone not in seconds
+    for gone in ("minLength", "maxLength", "pattern"):
+        assert gone not in label
+    assert "additionalProperties" not in params
+    # Non-deny-set keys survive so the tool stays callable.
+    assert seconds["type"] == "integer"
+    assert label["type"] == "string"

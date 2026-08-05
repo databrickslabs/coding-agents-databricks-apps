@@ -197,6 +197,7 @@ def write_databricks_token_wrapper(target_dir, real_cli: str) -> Path:
     target_dir.mkdir(parents=True, exist_ok=True)
     wrapper_path = target_dir / "databricks"
     source = f'''#!{sys.executable}
+import datetime
 import json
 import os
 import sys
@@ -220,10 +221,37 @@ if args[:2] == ["auth", "token"] and _profile(args) == PROFILE:
     url = os.environ.get("CODA_SP_TOKEN_BROKER_URL", "")
     with urlopen(url, timeout=5) as response:
         token = response.read().decode().strip()
-    if "--output" in args and args[args.index("--output") + 1] == "json":
-        print(json.dumps({{"access_token": token}}))
-    else:
-        print(token)
+    # Emit the FULL OAuth token shape the databricks-sdk CLI token source
+    # (DatabricksCliTokenSource) requires: access_token + token_type + expiry.
+    # ALWAYS emit JSON — NOT gated on `--output json`. The SDK builds the token
+    # command as `databricks auth token --profile <p>` WITHOUT `--output json`
+    # (credentials_provider._build_core_cli_command) yet still json.loads()s the
+    # output, because the real CLI defaults `auth token` to JSON. A shim that
+    # printed a raw token on the no-flag path made the SDK fail with "cannot
+    # unmarshal CLI result: Expecting value: line 1 column 1", so
+    # Config(profile=...).authenticate() — used by omnigent's
+    # resolve_databricks_workspace for the model-catalog fetch — failed and pi
+    # fell back to a single-model picker. Match the real CLI: default to JSON.
+    #
+    # The broker returns only the raw token (no expiry metadata) and always
+    # mints a FRESH token per call. Set a short, conservative expiry (now + 5
+    # min, well inside the ~1h SP-OAuth TTL) so the SDK re-invokes this shim —
+    # re-hitting the broker for a fresh token — rather than caching one whose
+    # real lifetime we can't prove. Format matches CliTokenSource._parse_expiry
+    # ("%Y-%m-%dT%H:%M:%S", trailing Z ok).
+    expiry = (
+        datetime.datetime.now(datetime.timezone.utc)
+        + datetime.timedelta(minutes=5)
+    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    payload = {{
+        "access_token": token,
+        "token_type": "Bearer",
+        "expiry": expiry,
+    }}
+    # A bare `auth token` (no --output) also defaults to JSON on the real CLI,
+    # so emitting JSON unconditionally is faithful. `--output text` is not used
+    # by the SDK, so we don't special-case it.
+    print(json.dumps(payload))
     raise SystemExit(0)
 
 os.execv(REAL_CLI, [REAL_CLI, *args])

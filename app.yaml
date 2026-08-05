@@ -128,13 +128,27 @@ env:
   # Register this app as a persistent Omnigent host on boot:
   # initialize_app() -> start_host() dials the server as the app SP, so the
   # deployed app self-registers as an always-on host on every restart/redeploy.
-  # WHEEL_SPEC is the UC Volume the host CLI is installed from (needs the app
-  # SP's READ_VOLUME grant on the wheel volume below
-  # (<catalog>.<schema>.ai.omnigents on Coles ...2455).
+  #
+  # The host is ON when the two valueFrom resources below are attached to the
+  # app (via `make attach-omnigent-resources` or the UI); it's OFF otherwise —
+  # an unresolved valueFrom yields an empty string and omnigents_host_enabled()
+  # returns False. So the on/off switch is "are the resources attached", not
+  # "did you edit this committed file" — which keeps app.yaml generic and
+  # git-deploy friendly, and satisfies docs/agent-instructions.md §5 (these must
+  # not carry one workspace's values on main).
+  # See attach_omnigent_resources.sh.
+  #
+  # OMNIGENTS_SERVER_URL — the Omnigent server app URL for THIS workspace.
+  #   valueFrom: omnigent-server-url  → a Secret resource holding the URL.
   - name: OMNIGENTS_SERVER_URL
-    value: "https://omnigent-<workspace-id>.15.azure.databricksapps.com"
+    valueFrom: omnigent-server-url
+  # OMNIGENTS_WHEEL_SPEC — the UC Volume holding omnigent-*.whl +
+  # omnigent_client-*.whl + omnigent_ui_sdk-*.whl (flat, top level).
+  #   valueFrom: omnigent-wheels  → a UC Volume resource (resolved to
+  #   /Volumes/<catalog>/<schema>/<volume> at runtime). Needs the app SP's
+  #   READ_VOLUME grant (grant_omnigent_host.sh).
   - name: OMNIGENTS_WHEEL_SPEC
-    value: "/Volumes/<catalog>.<schema>/ai/omnigents/wheels"
+    valueFrom: omnigent-wheels
   # Force-reinstall the host CLI on boot so a new wheel in the UC Volume is
   # actually installed (uv tool install otherwise no-ops when the tool exists).
   # Set only while rolling out a runner build; remove once the wheel is stable.

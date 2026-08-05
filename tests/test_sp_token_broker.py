@@ -1,3 +1,4 @@
+import datetime
 import json
 import os
 import subprocess
@@ -51,7 +52,37 @@ def test_databricks_wrapper_intercepts_only_broker_profile(tmp_path):
             text=True,
             check=True,
         )
-        assert json.loads(result.stdout) == {"access_token": "fresh-token"}
+        # The shim must emit the FULL OAuth shape the databricks-sdk CLI token
+        # source (DatabricksCliTokenSource) requires: access_token + token_type
+        # + expiry. A bare {access_token} raises "cannot unmarshal CLI result",
+        # which breaks Config(profile=...).authenticate() and collapses pi's
+        # model picker to a single default.
+        payload = json.loads(result.stdout)
+        assert payload["access_token"] == "fresh-token"
+        assert payload["token_type"] == "Bearer"
+        # expiry parses in the SDK's format ("%Y-%m-%dT%H:%M:%S", trailing Z ok)
+        # and is in the near future (shim sets now + 5 min).
+        parsed = datetime.datetime.strptime(
+            payload["expiry"].rstrip("Z").split(".")[0], "%Y-%m-%dT%H:%M:%S"
+        )
+        now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+        assert now < parsed <= now + datetime.timedelta(minutes=6)
+
+        # The SDK's DatabricksCliTokenSource builds `auth token --profile <p>`
+        # WITHOUT `--output json` yet still json.loads()s stdout. So the shim
+        # must emit JSON on the no-flag path too — this is the exact regression
+        # that collapsed pi's model picker (SDK: "cannot unmarshal CLI result").
+        no_flag = subprocess.run(
+            [str(wrapper), "auth", "token", "--profile", "omnigents-host"],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        no_flag_payload = json.loads(no_flag.stdout)
+        assert no_flag_payload["access_token"] == "fresh-token"
+        assert no_flag_payload["token_type"] == "Bearer"
+        assert "expiry" in no_flag_payload
 
         delegated = subprocess.run([str(wrapper), "--version"], env=env, check=False)
         assert delegated.returncode == 1

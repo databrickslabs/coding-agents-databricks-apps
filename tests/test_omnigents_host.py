@@ -201,6 +201,13 @@ def test_write_oauth_profile_contains_host_but_no_long_lived_secret(monkeypatch,
     cfg = (tmp_path / ".databrickscfg").read_text()
     assert cfg.count(f"[{oh._HOST_PROFILE}]") == 1
     assert "host = https://h" in cfg
+    # databricks-cli auth type + databricks_cli_path route
+    # Config(profile=...).authenticate() through the broker CLI shim (by its
+    # absolute path, since the SDK ignores $PATH), so omnigent's model-catalog
+    # fetch can mint a token and pi shows the full workspace model list.
+    assert "auth_type = databricks-cli" in cfg
+    assert "databricks_cli_path = " in cfg
+    assert ".coda-broker-bin/databricks" in cfg
     assert "client_id" not in cfg
     assert "client_secret" not in cfg
     assert "token" not in cfg
@@ -332,6 +339,11 @@ def test_configure_omnigent_auth_writes_databricks_profile(monkeypatch, tmp_path
     oh._configure_omnigent_databricks_auth()
     cfg = yaml.safe_load((tmp_path / ".omnigent" / "config.yaml").read_text())
     assert cfg["auth"] == {"type": "databricks", "profile": oh._HOST_PROFILE}
+    assert cfg["providers"]["coda-databricks"] == {
+        "kind": "databricks",
+        "default": True,
+        "profile": oh._HOST_PROFILE,
+    }
 
 
 def test_configure_omnigent_auth_preserves_other_keys(monkeypatch, tmp_path):
@@ -359,3 +371,89 @@ def test_configure_omnigent_auth_is_idempotent(monkeypatch, tmp_path):
     oh._configure_omnigent_databricks_auth()  # second run must not error/churn
     second = (tmp_path / ".omnigent" / "config.yaml").read_text()
     assert first == second
+
+
+# ── _materialize_spec: flat + nested (versioned) UC Volume wheel layouts ──────
+
+class _FakeEntry:
+    def __init__(self, path, is_directory=False, last_modified=0):
+        self.path = path
+        self.name = path.rstrip("/").split("/")[-1]
+        self.is_directory = is_directory
+        self.last_modified = last_modified
+
+
+class _FakeFiles:
+    """Minimal stand-in for w.files with a canned directory tree."""
+
+    def __init__(self, tree, blobs):
+        self._tree = tree      # dir path -> list[_FakeEntry]
+        self._blobs = blobs    # file path -> bytes
+
+    def list_directory_contents(self, path):
+        return list(self._tree.get(path.rstrip("/"), []))
+
+    def download(self, path):
+        import io
+        class _Resp:
+            def __init__(self, data):
+                self.contents = io.BytesIO(data)
+        return _Resp(self._blobs[path])
+
+
+class _FakeWC:
+    def __init__(self, files):
+        self.files = files
+
+
+def _install_fake_wc(monkeypatch, files):
+    import databricks.sdk as sdk
+    monkeypatch.setattr(sdk, "WorkspaceClient", lambda *a, **k: _FakeWC(files))
+
+
+def test_materialize_spec_flat_top_level(monkeypatch, tmp_path):
+    """Wheels sitting flat at the volume root still resolve (back-compat)."""
+    vol = "/Volumes/dais/omnigent/artifacts"
+    tree = {vol: [
+        _FakeEntry(f"{vol}/omnigent-0.6.0-py3-none-any.whl", last_modified=100),
+        _FakeEntry(f"{vol}/omnigent_client-0.6.0-py3-none-any.whl", last_modified=100),
+    ]}
+    blobs = {e.path: b"whl" for e in tree[vol]}
+    _install_fake_wc(monkeypatch, _FakeFiles(tree, blobs))
+    out = oh._materialize_spec(vol, sp_creds=None)
+    got = sorted(__import__("os").listdir(out))
+    assert got == ["omnigent-0.6.0-py3-none-any.whl", "omnigent_client-0.6.0-py3-none-any.whl"]
+
+
+def test_materialize_spec_nested_versioned_picks_newest(monkeypatch, tmp_path):
+    """No wheels at root -> recurse; pick the newest-uploaded version dir."""
+    vol = "/Volumes/dais/omnigent/artifacts"
+    old = f"{vol}/wheels/0.6.0.post1"
+    new = f"{vol}/wheels/0.6.0.post2"
+    tree = {
+        vol: [_FakeEntry(f"{vol}/wheels", is_directory=True)],
+        f"{vol}/wheels": [
+            _FakeEntry(old, is_directory=True),
+            _FakeEntry(new, is_directory=True),
+        ],
+        old: [_FakeEntry(f"{old}/omnigent-0.6.0.post1-py3-none-any.whl", last_modified=100)],
+        new: [_FakeEntry(f"{new}/omnigent-0.6.0.post2-py3-none-any.whl", last_modified=200)],
+    }
+    blobs = {
+        f"{old}/omnigent-0.6.0.post1-py3-none-any.whl": b"old",
+        f"{new}/omnigent-0.6.0.post2-py3-none-any.whl": b"new",
+    }
+    _install_fake_wc(monkeypatch, _FakeFiles(tree, blobs))
+    out = oh._materialize_spec(vol, sp_creds=None)
+    got = __import__("os").listdir(out)
+    # Only the newest version's wheel is materialized.
+    assert got == ["omnigent-0.6.0.post2-py3-none-any.whl"]
+
+
+def test_materialize_spec_no_wheels_raises(monkeypatch):
+    vol = "/Volumes/dais/omnigent/artifacts"
+    tree = {vol: [_FakeEntry(f"{vol}/readme.txt")]}
+    _install_fake_wc(monkeypatch, _FakeFiles(tree, {}))
+    import pytest
+    with pytest.raises(FileNotFoundError):
+        oh._materialize_spec(vol, sp_creds=None)
