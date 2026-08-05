@@ -1,5 +1,6 @@
 # Coding Agents on Databricks Apps
 
+
 [![Use this template](https://img.shields.io/badge/Use%20this%20template-2ea44f?logo=github)](https://github.com/datasciencemonkey/coding-agents-databricks-apps/generate)
 [![Deploy to Databricks](https://img.shields.io/badge/Deploy-Databricks%20Apps-FF3621?logo=databricks&logoColor=white)](docs/deployment.md)
 [![Agents](https://img.shields.io/badge/Agents-5%20included-green)](#whats-inside)
@@ -9,11 +10,41 @@
 
 ---
 
+## 💬 Project Support
+
+Please note that this project is provided for your exploration only and is not
+formally supported by Databricks with Service Level Agreements (SLAs). It is
+provided AS-IS, and we do not make any guarantees. Please do not submit a
+support ticket relating to any issues arising from the use of this project.
+
+Any issues discovered through the use of this project should be filed as GitHub
+[Issues on this repository](https://github.com/databrickslabs/coding-agents-databricks-apps/issues).
+
+See [LICENSE.md](LICENSE.md) for full terms, including the warranty disclaimer
+and limitation of liability. See [NOTICE.md](NOTICE.md) for third-party software
+attribution.
+
+---
+
+<div align="center">
+  <video src="https://github.com/user-attachments/assets/40405b46-532a-4f14-82e3-414cb3744684" controls width="900"></video>
+</div>
+
 ## Screenshots
 
 <div align="center">
   <img src="docs/screenshots/demo.gif" width="900" alt="CODA demo — splash screen, multi-tab terminals, keyboard shortcuts"/>
 </div>
+
+---
+
+## Architecture
+
+<div align="center">
+  <img src="docs/screenshots/coda-architecture.png" width="900" alt="CoDA architecture — always-on coding agents inside the customer's Databricks tenancy, governed by Unity Catalog and audited by MLflow"/>
+</div>
+
+CoDA runs as a hosted Databricks App inside your tenancy, alongside **Genie Code** — Databricks' in-product AI coding agent that lives in notebooks, the SQL editor, and dashboards. Genie Code is the interactive in-product surface; CoDA is the always-on hosted-app surface where Developers brief the agents through the browser and Claude Code, Codex, Gemini CLI, and OpenCode execute alongside the Hermes orchestrator. Both surfaces share the same access plane: every model call routes through Foundation Model APIs (no third-party egress) and every tool call routes through Governed MCP Servers (Unity Catalog ACLs + MLflow trace + named human identity). The result: agentic coding for legacy migration, application development, multi-repo refactor, production monitoring, code modernisation, and CI/CD deployments — all governed like any other workload.
 
 ---
 
@@ -30,6 +61,16 @@
 🟢 **OpenCode** — Open-source agent with multi-provider support
 
 Every agent installs at boot and connects to your **Databricks AI Gateway** — on first terminal session, paste a short-lived PAT and all CLIs are configured automatically. Token auto-rotates every 10 minutes.
+
+### 📺 Setup walkthrough (6 min)
+
+Want to see CoDA installed and running end-to-end? Click the thumbnail to watch the full walkthrough on YouTube.
+
+<div align="center">
+  <a href="https://youtu.be/ofqBQ26_e9o">
+    <img src="docs/screenshots/setup-walkthrough-poster.jpg" width="900" alt="Getting Started with CoDA — 6-minute setup walkthrough (click to watch on YouTube)"/>
+  </a>
+</div>
 
 ---
 
@@ -62,7 +103,7 @@ This isn't just a terminal in the cloud. Running coding agents on Databricks giv
 | 🎤 **Voice Input** | Dictate commands with your mic (Option+V) |
 | 📋 **Image Paste** | Paste or drag-and-drop images into the terminal — saved to `~/uploads/`, path inserted automatically |
 | ⌨️ **Customizable** | Fonts, font sizes, themes — all persisted across sessions |
-| 🔄 **Workspace Sync** | Every `git commit` auto-syncs to `/Workspace/Users/{you}/projects/` |
+| 🔄 **Workspace Sync** | Every `git commit` auto-syncs to `/Workspace/Shared/coda/{app-name}/` |
 | ✏️ **Micro Editor** | Modern terminal editor, pre-installed |
 | ⚙️ **Databricks CLI** | Installed at boot, configured interactively on first session |
 | 📊 **MLflow Tracing** | Every Claude Code session is automatically traced to your Databricks MLflow experiment |
@@ -72,6 +113,8 @@ This isn't just a terminal in the cloud. Running coding agents on Databricks giv
 ## MLflow Tracing
 
 Claude Code and Codex sessions can both be **automatically traced** to a single Databricks MLflow experiment — flip one switch to turn them on.
+
+Claude Code can also export native OpenTelemetry signals to Unity Catalog tables. Set `CLAUDE_CODE_OTEL_ENABLED=true` and `CLAUDE_CODE_OTEL_CATALOG_SCHEMA=<catalog>.<schema>` to send spans, logs, and metrics to `claude_otel_spans`, `claude_otel_logs`, and `claude_otel_metrics` in that schema. Create those three target tables before enabling the flag.
 
 ### Turning it on
 
@@ -128,6 +171,77 @@ Tracing setup is skipped gracefully when `APP_OWNER` is not set (e.g., local dev
 
 ---
 
+## Omnigent Host Integration
+
+CoDA can register itself as a persistent **[Omnigent](https://github.com/omnigent-ai/omnigent) agent host** — an always-on target the Omnigent server can drive coding-agent sessions into. Those sessions run *inside this container* and use the same filesystem as browser terminals. They authenticate to Databricks as the CoDA app service principal, not as the interactive browser user, so their Unity Catalog authority may differ. A deployed CoDA app becomes both an interactive terminal **and** a headless host that survives restarts and redeploys.
+
+**Off by default.** With `OMNIGENTS_SERVER_URL` unset, none of this runs and CoDA behaves exactly as before. This is opt-in, environment-specific wiring — the committed `app.yaml` keeps it commented out.
+
+### Turning it on
+
+Set three variables in your deployed `app.yaml` (see `app.yaml.lakemeter` for a ready-to-copy overlay template):
+
+```yaml
+# app.yaml
+env:
+  # The Omnigent server this app registers against on boot.
+  - name: OMNIGENTS_SERVER_URL
+    value: "https://<your-omnigent-app>.<region>.databricksapps.com"
+  # UC Volume holding the omnigent host wheels (app SP needs READ_VOLUME).
+  - name: OMNIGENTS_WHEEL_SPEC
+    value: "/Volumes/<catalog>/<schema>/artifacts/wheels"
+  # Optional: force-reinstall the host CLI on boot while rolling out a new wheel.
+  - name: OMNIGENTS_FORCE_REINSTALL
+    value: "1"
+```
+
+Before deploying, grant the CoDA app service principal `CAN_USE` on the
+Omnigent server app plus `USE_CATALOG`, `USE_SCHEMA`, `READ_VOLUME`, and
+`WRITE_VOLUME` on the wheel-volume path. The repository's grant target applies
+the complete prerequisite set:
+
+```bash
+make grant-omnigent-host PROFILE=<profile> APP_NAME=<coda-app>
+```
+
+On boot, `initialize_app()` calls `start_host()`, which — only when `OMNIGENTS_SERVER_URL` is set — installs the `omnigents host` CLI from the wheel volume and launches it as a supervised background process that dials the server over an outbound WSS tunnel.
+
+### Two credentials, two jobs
+
+The non-obvious part of this design is that the host uses **two separate credentials** (see `omnigents_host.py`):
+
+```
+┌─────────────────────── CoDA container ───────────────────────┐
+│                                                              │
+│  omnigents host  ──WSS tunnel──►  Omnigent server            │
+│      │              (auth: app-SP OAuth token)               │
+│      │                                                       │
+│      └── spawns runner ──►  AI Gateway                       │
+│                             (auth: CoDA's ANTHROPIC_* creds) │
+└──────────────────────────────────────────────────────────────┘
+```
+
+* **Host tunnel and runners** authenticate to the server through short-lived app-SP OAuth tokens. CoDA captures the SP credentials before stripping them from the environment, keeps the client secret only in Flask process memory, and exposes fresh tokens through a loopback-only broker. The on-disk `[omnigents-host]` profile contains only the workspace host; spawned Omnigent runners receive a refresh command, not a static bearer or client secret.
+* **Harness LLM** — the runner the host spawns authenticates to AI Gateway via CoDA's already-injected `ANTHROPIC_*` env. No new LLM credential is minted.
+
+### Runtime controls
+
+Beyond boot registration, the host can be driven at runtime:
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/omnigents-status` | GET | Host-integration state (FR-9 observability) |
+| `/api/omnigent-host/status` | GET | Current runtime host state |
+| `/api/omnigent-host/connect` | POST | Start a host tunnel for a supplied `server_url` |
+| `/api/omnigent-host/disconnect` | POST | Stop the active host tunnel |
+| `/api/omnigent-host/share` | POST | Share the SP-owned host with a connecting user |
+
+### Related
+
+`ENABLE_SP_APIKEYHELPER=true` enables the same loopback-broker boundary for agent gateway calls: helpers fetch short-lived app-SP OAuth tokens without persisting the SP client secret or a static token in terminal-visible configuration.
+
+---
+
 ## Quick Start
 
 ### Deploy to Databricks Apps
@@ -157,28 +271,18 @@ Open [http://localhost:8000](http://localhost:8000) — type `claude`, `codex`, 
 
 ---
 
-## Why This Exists
-
-On Jan 26, 2026, Andrej Karpathy made [this viral tweet](https://x.com/karpathy/status/2015883857489522876?s=46&t=tEsLJXJnGFIkaWs-Bhs1yA) about the future of coding. Boris Cherny, the creator of Claude Code, responded:
-
-![Boris Cherny's response](image.png)
-
-This template repo opens that vision up for every Databricks user — no IDE setup, no local installs. Click "Use this template", deploy to Databricks Apps, and start coding with AI in your browser.
-
----
-
 <details>
-<summary><strong>🧠 All 39 Skills</strong></summary>
+<summary><strong>🧠 All 41 Skills</strong></summary>
 
-### Databricks Skills (25) — [ai-dev-kit](https://github.com/databricks-solutions/ai-dev-kit)
+### Databricks Skills (27) — [ai-dev-kit](https://github.com/databricks-solutions/ai-dev-kit)
 
 | Category | Skills |
 |----------|--------|
-| AI & Agents | agent-bricks, genie, mlflow-eval, model-serving |
+| AI & Agents | agent-bricks, ai-functions, genie, mlflow-eval, model-serving |
 | Analytics | aibi-dashboards, unity-catalog, metric-views |
-| Data Engineering | declarative-pipelines, jobs, structured-streaming, synthetic-data, zerobus-ingest |
-| Development | asset-bundles, app-apx, app-python, python-sdk, config, spark-python-data-source |
-| Storage | lakebase-autoscale, lakebase-provisioned, vector-search |
+| Data Engineering | declarative-pipelines, jobs, structured-streaming, synthetic-data-gen, zerobus-ingest |
+| Development | bundles, app-apx, apps-python, python-sdk, config, execution-compute, spark-python-data-source |
+| Storage | iceberg, lakebase-autoscale, lakebase-provisioned, vector-search |
 | Reference | docs, dbsql, pdf-generation |
 | Meta | refresh-databricks-skills |
 
@@ -245,10 +349,16 @@ This template repo opens that vision up for every Databricks user — no IDE set
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/` | GET | Terminal UI with inline setup progress |
-| `/health` | GET | Health check with session count and setup status |
-| `/api/setup-status` | GET | Setup progress for the UI |
+| `/health` | GET | Liveness probe. Exempt from the SSO gate so the platform can reach it. Unauthenticated callers get only `{"status": "healthy"\|"degraded"}`; the owner additionally gets version, session count, setup status and PAT-rotator state |
+| `/api/setup-status` | GET | Setup progress for the UI (owner-gated) |
+| `/api/app-state` | GET | Persisted app state (owner, last rotation) (owner-gated) |
 | `/api/version` | GET | App version |
+| `/api/sessions` | GET | List active (non-exited) sessions with metadata |
+| `/api/pat-status` | GET | Whether a valid, usable PAT is currently configured (owner-gated) |
+| `/api/configure-pat` | POST | Interactive first-session PAT setup (owner-gated via SSO) |
+| `/api/inject-pat` | POST | Programmatic PAT injection for scripted provisioning (shared-secret gated; disabled unless `CODA_BOOTSTRAP_SECRET` is set). Also requires a workspace **OAuth bearer** for the Apps edge — a PAT bearer 401s at the platform edge before reaching the app |
 | `/api/session` | POST | Create new terminal session |
+| `/api/session/attach` | POST | Reattach to an existing session (replays buffered output) |
 | `/api/input` | POST | Send input to terminal |
 | `/api/output` | POST | Poll for terminal output (single session) |
 | `/api/output-batch` | POST | Batch poll output for multiple sessions |
@@ -280,17 +390,38 @@ This template repo opens that vision up for every Databricks user — no IDE set
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `DATABRICKS_TOKEN` | No | Optional. If not set, the app prompts for a token on first session. Auto-rotated every 10 minutes |
 | `HOME` | Yes | Set to `/app/python/source_code` in app.yaml |
-| `ANTHROPIC_MODEL` | No | Claude model name (default: `databricks-claude-opus-4-7`) |
+| `DATABRICKS_TOKEN` | No | Optional. If not set, the app prompts for a token on first session (or use `/api/inject-pat`). Auto-rotated every 10 minutes |
+| `CODA_BOOTSTRAP_SECRET` | No | Enables the `/api/inject-pat` endpoint and is the shared secret required to call it. Unset ⇒ endpoint returns 404. Use a distinct secret per CoDA when provisioning many. Run `setup_pat_provisioner.sh` once to create an OAuth service principal (with CAN_USE on the apps, `workspace-access`, and token rights), then `provision_coda_pats.sh` to bulk-inject. `provision_coda_pats.sh` mints PATs restricted to REST **API scopes** (platform-enforced). By default it grants **all safe scopes** (incl. `secrets` for lab config) and excludes the dangerous ones (`access-management`, `authentication`, `identity`, `scim`, `settings`, `global-init-scripts`, `networking`); override with `--scopes a,b,c` or `--all-scopes` |
+| `CODA_INSTANCE_NAME` | No | Names this CoDA so auto-rotated PATs are tagged `coda-auto-rotated:<name>` (attribution when many CoDAs share one identity). Falls back to `DATABRICKS_APP_NAME`/app URL host |
+| `DATABRICKS_GATEWAY_HOST` | No | AI Gateway URL override. Auto-discovered from `DATABRICKS_WORKSPACE_ID` if unset |
+| `ANTHROPIC_MODEL` | No | Claude model name (default: `databricks-claude-opus-4-8`) |
+| `PI_MODEL` | No | Pi model name — same `/anthropic` gateway route as Claude (default: `databricks-claude-opus-4-8`) |
+| `ENABLE_PI` | No | Set `false` to skip installing the Pi coding agent (default: `true`) |
 | `CODEX_MODEL` | No | Codex model name (default: `databricks-gpt-5-5`) |
 | `GEMINI_MODEL` | No | Gemini model name (default: `databricks-gemini-2-5-pro`) |
-| `DATABRICKS_GATEWAY_HOST` | No | AI Gateway URL override. Auto-discovered from `DATABRICKS_WORKSPACE_ID` if unset |
-| `MLFLOW_TRACING_ENABLED` | No | Set to `"true"` to enable MLflow tracing for Claude and Codex in one switch (default `"false"`) |
+| `HERMES_MODEL` | No | Hermes model name (default: `databricks-claude-opus-4-6`) |
+| `HERMES_FALLBACK_MODEL` | No | Fallback model if `HERMES_MODEL` is unavailable in this workspace's geo |
+| `ENABLE_HERMES` | No | Set to `"false"` to skip Hermes Agent install. Other CLIs are unaffected. Default `"true"` |
+| `MAX_CONCURRENT_SESSIONS` | No | Cap on simultaneous PTY sessions per worker (default `5`) |
+| `CLAUDE_CODE_DISABLE_AUTO_MEMORY` | No | Pass-through to Claude Code's auto-memory feature (default `0`) |
+| `MLFLOW_TRACING_ENABLED` | No | Set to `"true"` to enable MLflow tracing for Claude, Codex, and Gemini in one switch (default `"false"`) |
+| `CLAUDE_CODE_OTEL_ENABLED` | No | Set to `"true"` to enable Claude Code OTEL export to Unity Catalog (default `"false"`) |
+| `CLAUDE_CODE_OTEL_CATALOG_SCHEMA` | No | Target `<catalog>.<schema>` for `claude_otel_spans`, `claude_otel_logs`, and `claude_otel_metrics` |
+| `OMNIGENTS_SERVER_URL` | No | Omnigent server to register against on boot. Unset = host integration off (default). See [Omnigent Host Integration](#omnigent-host-integration) |
+| `OMNIGENTS_WHEEL_SPEC` | No | UC Volume path holding the `omnigents host` wheels (app SP needs `READ_VOLUME`). Required when `OMNIGENTS_SERVER_URL` is set |
+| `OMNIGENTS_FORCE_REINSTALL` | No | Set `"1"` to reinstall the host CLI on boot (for rolling out a new wheel); otherwise `uv tool install` no-ops on an existing binary |
+| `ENABLE_SP_APIKEYHELPER` | No | Set `"true"` to broker short-lived app-SP OAuth tokens over loopback without persisting the client secret in terminal-visible configuration |
+| `DEEPWIKI_MCP_URL` | No | Override or disable the DeepWiki MCP server (set to `""` to remove) |
+| `EXA_MCP_URL` | No | Override or disable the Exa MCP server (set to `""` to remove) |
+| `TEAM_MEMORY_MCP_URL` | No | Optional shared-org-memory MCP server URL |
+| `ENTERPRISE_MODE` | No | When `"true"`, logs a banner and warns on missing recommended mirrors. See [enterprise docs](docs/enterprise.md) for the full enterprise contract (JFrog mirrors, custom CA bundle, corporate proxy, etc.) |
 
 ### Security Model
 
 Single-user app — the owner is resolved via the app's service principal and Apps API (`app.creator`), with no PAT required at deploy time. Authorization checks `X-Forwarded-Email` against `app.creator`. On first terminal session, the user pastes a short-lived PAT interactively. Tokens auto-rotate every 10 minutes (15-minute lifetime), with old tokens proactively revoked. On restart, the user re-pastes (no persistence by design).
+
+Each GitHub Release ships a signed CycloneDX SBOM — see [docs/SECURITY.md](./docs/SECURITY.md) for verification steps.
 
 ### Gunicorn
 

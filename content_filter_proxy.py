@@ -26,10 +26,37 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
 import requests
+from token_helper import resolve_databricks_token, resolve_sp_oauth_token
 
 UPSTREAM_BASE = os.environ.get("PROXY_UPSTREAM_BASE", "")
 LISTEN_HOST = os.environ.get("PROXY_HOST", "127.0.0.1")
 LISTEN_PORT = int(os.environ.get("PROXY_PORT", "4000"))
+
+
+def _trace_proxy_request(*, path, req, headers, resp_body, status, t_start):
+    """spec-D: hand the request off to proxy_tracing for a fire-and-forget span.
+
+    Fully guarded — if proxy_tracing / mlflow is unavailable or errors, the proxy
+    is unaffected (D-N4). Never on the request's critical path (called post-send).
+    """
+    try:
+        import time as _time
+
+        import proxy_tracing
+
+        resp_json = None
+        if resp_body:
+            try:
+                resp_json = json.loads(resp_body)
+            except Exception:  # noqa: BLE001
+                resp_json = None
+        proxy_tracing.trace_request(
+            path=path, request_body=req, response_body=resp_json, status=status,
+            headers={k: headers[k] for k in headers}, t_start=t_start,
+            t_end=_time.monotonic(),
+        )
+    except Exception:  # noqa: BLE001 — tracing must never break the proxy
+        pass
 
 # ---------------------------------------------------------------------------
 # Fresh token injection — survives PAT rotation
@@ -38,8 +65,12 @@ LISTEN_PORT = int(os.environ.get("PROXY_PORT", "4000"))
 # OpenCode (and this proxy) are separate processes with frozen env snapshots,
 # so we read the file on-demand instead of trusting os.environ.
 
-_TOKEN_CACHE: dict = {"token": None, "read_at": 0.0}
-_TOKEN_CACHE_TTL = 30  # seconds — short enough to pick up rotations quickly
+_TOKEN_CACHE: dict = {"token": None, "read_at": 0.0, "mtime": 0.0}
+# Hard ceiling on cache age. With mtime invalidation below, the cache normally
+# refreshes the instant the rotator rewrites the file, so this is just a
+# defence against an mtime that stops advancing (e.g. clock skew, watched fs
+# tools that touch the file without updating contents).
+_TOKEN_CACHE_TTL = 30
 
 _HOME = os.environ.get("HOME", "/app/python/source_code")
 if not _HOME or _HOME == "/":
@@ -50,11 +81,29 @@ _DATABRICKSCFG_PATH = os.path.join(_HOME, ".databrickscfg")
 def _get_fresh_token() -> str | None:
     """Read current token from ~/.databrickscfg (updated by PAT rotator).
 
-    Returns cached value if read within the last _TOKEN_CACHE_TTL seconds.
+    Cache invalidates on file mtime change so a rotation produces a near-zero
+    window of stale tokens. The TTL is a backstop; mtime is authoritative.
     """
     now = time.time()
-    if _TOKEN_CACHE["token"] and (now - _TOKEN_CACHE["read_at"]) < _TOKEN_CACHE_TTL:
+    try:
+        mtime = os.stat(_DATABRICKSCFG_PATH).st_mtime
+    except OSError:
+        mtime = 0.0
+
+    cache_hot = (
+        _TOKEN_CACHE["token"]
+        and mtime <= _TOKEN_CACHE["mtime"]
+        and (now - _TOKEN_CACHE["read_at"]) < _TOKEN_CACHE_TTL
+    )
+    if cache_hot:
         return _TOKEN_CACHE["token"]
+
+    token = resolve_sp_oauth_token()
+    if token:
+        _TOKEN_CACHE["token"] = token
+        _TOKEN_CACHE["read_at"] = now
+        _TOKEN_CACHE["mtime"] = mtime
+        return token
 
     try:
         config = configparser.ConfigParser()
@@ -63,9 +112,17 @@ def _get_fresh_token() -> str | None:
         if token:
             _TOKEN_CACHE["token"] = token
             _TOKEN_CACHE["read_at"] = now
+            _TOKEN_CACHE["mtime"] = mtime
             return token
     except Exception as e:
         log.warning(f"Could not read fresh token from {_DATABRICKSCFG_PATH}: {e}")
+
+    token = resolve_databricks_token()
+    if token:
+        _TOKEN_CACHE["token"] = token
+        _TOKEN_CACHE["read_at"] = now
+        _TOKEN_CACHE["mtime"] = mtime
+        return token
 
     return _TOKEN_CACHE.get("token")  # stale is better than nothing
 
@@ -131,6 +188,35 @@ def sanitize_tool_schemas(data):
     # Strip $schema from top level if present
     data.pop("$schema", None)
 
+    return data
+
+
+# Served models that reject sampling params, keyed by a substring of the model id
+# (tolerant of the gateway's `global.` / `databricks-` prefixes), mapped to the
+# request fields to drop. claude-opus-4-8 returns 400 on `temperature` (and, by the
+# same class, other sampling controls) — see strip_unsupported_sampling_params.
+_MODEL_UNSUPPORTED_SAMPLING = {
+    "claude-opus-4-8": ("temperature", "top_p", "top_k"),
+}
+
+
+def strip_unsupported_sampling_params(data):
+    """Drop sampling params a specific served model rejects (400), by model id.
+
+    Only strips for models known to reject the param — most models accept
+    `temperature`, so this must NOT be unconditional. Matches on a substring of
+    the request's `model` so `global.anthropic.claude-opus-4-8`,
+    `databricks-claude-opus-4-8`, etc. all hit. No-op if `model` is absent.
+    """
+    model = (data.get("model") or "").lower()
+    if not model:
+        return data
+    for needle, fields in _MODEL_UNSUPPORTED_SAMPLING.items():
+        if needle in model:
+            for f in fields:
+                if f in data:
+                    log.info(f"  Stripped unsupported sampling param '{f}' for {model}")
+                    del data[f]
     return data
 
 
@@ -506,6 +592,13 @@ class SSEProcessor:
         return result
 
 
+def _decode_sse_line(raw_line: bytes | str) -> str:
+    """Decode SSE bytes as UTF-8 instead of requests' Latin-1 HTTP default."""
+    if isinstance(raw_line, bytes):
+        return raw_line.decode("utf-8")
+    return raw_line
+
+
 # ---------------------------------------------------------------------------
 # HTTP Server
 # ---------------------------------------------------------------------------
@@ -519,6 +612,9 @@ class ProxyHandler(BaseHTTPRequestHandler):
     """Proxy that sanitizes requests and fixes responses."""
 
     def do_POST(self):
+        import time as _time
+        _t_start = _time.monotonic()
+        _req_data = None  # parsed request, reused for tracing (spec-D)
         content_length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(content_length)
 
@@ -527,6 +623,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
         # --- Sanitize request ---
         try:
             data = json.loads(body)
+            _req_data = data  # keep for spec-D tracing
             if "messages" in data:
                 before = len(data["messages"])
                 data["messages"] = sanitize_messages(data["messages"])
@@ -535,13 +632,41 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     log.info(f"Messages: {before} -> {after}")
             # Strip unsupported schema keys from tool definitions (all models)
             data = sanitize_tool_schemas(data)
+            # Strip sampling params that specific served models reject. Some callers
+            # (e.g. an agent's title-generation sub-call) send `temperature`, but the
+            # gateway-served `(global.)anthropic.claude-opus-4-8` returns 400
+            # "does not support the temperature parameter" — surfaced via tracing
+            # 2026-07-12. Model-targeted (like the Gemini key stripping), tolerant of
+            # the gateway's `global.`/`databricks-` name prefixes.
+            data = strip_unsupported_sampling_params(data)
             body = json.dumps(data).encode()
         except (json.JSONDecodeError, KeyError) as e:
             log.warning(f"Could not parse request body: {e}")
             pass  # Forward as-is if not valid JSON
 
-        # Build upstream URL
-        upstream_url = UPSTREAM_BASE + self.path
+        # Build upstream URL, routing by request PROTOCOL.
+        #
+        # The proxy serves multiple agents that speak DIFFERENT model-API dialects
+        # over one port, and the AI Gateway exposes a different route per dialect:
+        #   - OpenCode (@ai-sdk/openai-compatible) + Hermes → OpenAI-style paths
+        #     (`/chat/completions`), which the configured UPSTREAM_BASE (`.../mlflow/v1`)
+        #     accepts. Verified working (traces land).
+        #   - Pi (anthropic-messages) → `/v1/messages`, which the gateway serves ONLY
+        #     at `.../anthropic/v1` (verified live: `.../anthropic/v1/messages` → 200,
+        #     `.../mlflow/v1/messages` → 400 "doesn't match any known API type").
+        # A single UPSTREAM_BASE cannot serve both, so detect the Anthropic Messages
+        # protocol by its path and swap to the `/anthropic` gateway base for it. Derive
+        # that base from UPSTREAM_BASE by replacing the trailing `/mlflow/v1` service
+        # segment, so it tracks whatever gateway host is configured.
+        if self.path.startswith("/v1/messages") or self.path.startswith("/v1/complete"):
+            gw_root = UPSTREAM_BASE.rstrip("/")
+            for suffix in ("/mlflow/v1", "/mlflow", "/serving-endpoints"):
+                if gw_root.endswith(suffix):
+                    gw_root = gw_root[: -len(suffix)]
+                    break
+            upstream_url = gw_root + "/anthropic" + self.path  # → /anthropic/v1/messages
+        else:
+            upstream_url = UPSTREAM_BASE + self.path
 
         # Forward headers (inject fresh token to survive PAT rotation)
         headers = {}
@@ -593,6 +718,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 self.send_header("Content-Length", str(len(resp_body)))
                 self.end_headers()
                 self.wfile.write(resp_body)
+                # spec-D: fire-and-forget span AFTER the response is sent (D-N1).
+                _trace_proxy_request(
+                    path=self.path, req=_req_data, headers=self.headers,
+                    resp_body=resp_body, status=resp.status_code, t_start=_t_start,
+                )
                 return
 
             # --- Streaming response ---
@@ -605,16 +735,84 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
             processor = SSEProcessor()
 
-            for raw_line in resp.iter_lines(decode_unicode=True):
+            # Accumulate the assembled response as SSE chunks stream past, so the
+            # trace can record the model's reply (not just null). We already iterate
+            # every line here; sniffing the text/stop_reason deltas is cheap and stays
+            # OFF the client's critical path (we only build strings). Fully guarded —
+            # any reconstruction error must never break the client stream (D-N4).
+            # Per-content-block text accumulators (keyed by block index) so multiple
+            # Anthropic text blocks stay separated instead of running together, plus
+            # tool_use capture (input_json_delta) so tool-only turns aren't blank.
+            _blocks: dict[int, dict] = {}      # index -> {"type","text"|"name"+"input"}
+            _oai_parts: list[str] = []         # OpenAI content deltas (single stream)
+            _stop_reason = None
+            _usage: dict = {}
+
+            def _sniff_stream_event(line_str):  # noqa: ANN001
+                nonlocal _stop_reason  # must precede any use of the name
+                if not line_str.startswith("data:"):
+                    return
+                payload = line_str[5:].strip()
+                if not payload or payload == "[DONE]":
+                    return
+                try:
+                    evt = json.loads(payload)
+                except Exception:  # noqa: BLE001
+                    return
+
+                # --- Anthropic Messages streaming ---
+                idx = evt.get("index")
+                etype = evt.get("type")
+                if etype == "content_block_start" and idx is not None:
+                    cb = evt.get("content_block") or {}
+                    if cb.get("type") == "tool_use":
+                        _blocks[idx] = {"type": "tool_use", "name": cb.get("name"),
+                                        "input": ""}
+                    else:
+                        _blocks[idx] = {"type": "text", "text": ""}
+                delta = evt.get("delta") or {}
+                if isinstance(delta, dict):
+                    # text_delta (assistant text) / input_json_delta (tool args)
+                    if delta.get("text") and idx is not None:
+                        _blocks.setdefault(idx, {"type": "text", "text": ""})
+                        _blocks[idx]["text"] = _blocks[idx].get("text", "") + delta["text"]
+                    if delta.get("partial_json") is not None and idx is not None:
+                        _blocks.setdefault(idx, {"type": "tool_use", "name": None, "input": ""})
+                        _blocks[idx]["input"] = _blocks[idx].get("input", "") + delta["partial_json"]
+                    # stop_reason arrives on the top-level message_delta.delta
+                    if delta.get("stop_reason"):
+                        _stop_reason = delta["stop_reason"]
+                # usage is SPLIT across message_start (input_tokens) and
+                # message_delta (output_tokens) — MERGE, don't overwrite (review #1).
+                if evt.get("usage"):
+                    _usage.update(evt["usage"])
+                msg = evt.get("message") or {}
+                if isinstance(msg, dict) and msg.get("usage"):
+                    _usage.update(msg["usage"])
+
+                # --- OpenAI Chat Completions streaming ---
+                for ch in evt.get("choices", []) or []:
+                    cd = (ch or {}).get("delta") or {}
+                    if cd.get("content"):
+                        _oai_parts.append(cd["content"])
+                    if ch.get("finish_reason"):
+                        _stop_reason = ch["finish_reason"]
+
+            for raw_line in resp.iter_lines(decode_unicode=False):
                 if raw_line is None:
                     continue
 
-                line = raw_line.strip() if isinstance(raw_line, str) else raw_line.decode().strip()
+                line = _decode_sse_line(raw_line).strip()
 
                 if not line:
                     # Blank line = event boundary, send it
                     self._send_chunk(b"\r\n")
                     continue
+
+                try:
+                    _sniff_stream_event(line)
+                except Exception:  # noqa: BLE001 — tracing sniff must never break the stream
+                    pass
 
                 # Process through SSE fixer
                 output_lines = processor.process_line(line)
@@ -627,6 +825,32 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
             # Send final zero-length chunk to end chunked transfer
             self._send_chunk(b"")
+
+            # spec-D: fire-and-forget span after the stream completes (D-N2).
+            # Reconstruct the streamed response so the trace carries the model's reply.
+            # Build a content[] that preserves block structure + tool_use (review #3):
+            # each Anthropic text block stays a separate {type:text} entry, and tool
+            # calls surface as {type:tool_use} with the accumulated JSON args — so a
+            # tool-only turn is no longer a blank trace. OpenAI deltas collapse to one
+            # text block (that dialect has no block indices).
+            _content = []
+            for _i in sorted(_blocks):
+                b = _blocks[_i]
+                if b.get("type") == "tool_use":
+                    _content.append({"type": "tool_use", "name": b.get("name"),
+                                     "input": b.get("input", "")})
+                elif b.get("text"):
+                    _content.append({"type": "text", "text": b["text"]})
+            if _oai_parts:
+                _content.append({"type": "text", "text": "".join(_oai_parts)})
+            _stream_resp = {"content": _content, "stop_reason": _stop_reason}
+            if _usage:
+                _stream_resp["usage"] = _usage
+            _trace_proxy_request(
+                path=self.path, req=_req_data, headers=self.headers,
+                resp_body=json.dumps(_stream_resp).encode(), status=resp.status_code,
+                t_start=_t_start,
+            )
 
         except requests.exceptions.ConnectionError as e:
             self.send_error(502, f"Upstream connection failed: {e}")

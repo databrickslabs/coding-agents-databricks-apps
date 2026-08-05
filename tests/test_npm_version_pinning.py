@@ -1,5 +1,6 @@
 """Tests for get_npm_version() — dynamic npm version resolution for supply chain hardening."""
 
+import os
 from unittest import mock
 
 import pytest
@@ -324,6 +325,10 @@ class TestNpmVersionLive:
     @pytest.mark.skipif(
         not __import__("shutil").which("npm"),
         reason="npm not installed"
+    )
+    @pytest.mark.skipif(
+        os.environ.get("RUN_LIVE_NPM_TESTS", "").lower() != "true",
+        reason="live npm registry check is opt-in",
     )
     def test_resolves_real_package(self):
         get_npm_version = _get_npm_version()

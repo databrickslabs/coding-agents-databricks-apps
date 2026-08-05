@@ -17,8 +17,13 @@
 
 set -e -u
 
+# Enterprise mode: redirect upstream URLs to internal mirrors when configured.
+# See docs/enterprise.md for the env-var contract.
+GH_API="${GITHUB_API_BASE:-https://api.github.com}"
+GH_RELEASES="${GITHUB_RELEASE_MIRROR:-https://github.com}"
+
 githubLatestTag() {
-  latestJSON="$( eval "$http 'https://api.github.com/repos/$1/releases/latest'" 2>/dev/null )" || true
+  latestJSON="$( eval "$http '${GH_API}/repos/$1/releases/latest'" 2>/dev/null )" || true
 
   versionNumber=''
   if ! echo "$latestJSON" | grep 'API rate limit exceeded' >/dev/null 2>&1 ; then
@@ -30,7 +35,7 @@ githubLatestTag() {
   if [ "${versionNumber:-x}" = "x" ] ; then
     # Try to fallback to previous latest version detection method if curl is available
     if command -v curl >/dev/null 2>&1 ; then
-      if finalUrl="$( curl "https://github.com/$1/releases/latest" -s -L -I -o /dev/null -w '%{url_effective}' 2>/dev/null )" ; then
+      if finalUrl="$( curl "${GH_RELEASES}/$1/releases/latest" -s -L -I -o /dev/null -w '%{url_effective}' 2>/dev/null )" ; then
         trimmedVers="${finalUrl##*v}"
         if [ "${trimmedVers:-x}" != "x" ] ; then
           echo "$trimmedVers"
@@ -201,9 +206,9 @@ else
 fi
 
 echo "Latest Version: $TAG"
-echo "Downloading https://github.com/micro-editor/micro/releases/download/v$TAG/micro-$TAG-$platform.$extension"
+echo "Downloading ${GH_RELEASES}/micro-editor/micro/releases/download/v$TAG/micro-$TAG-$platform.$extension"
 
-eval "$http 'https://github.com/micro-editor/micro/releases/download/v$TAG/micro-$TAG-$platform.$extension'" > "micro.$extension"
+eval "$http '${GH_RELEASES}/micro-editor/micro/releases/download/v$TAG/micro-$TAG-$platform.$extension'" > "micro.$extension"
 
 case "$extension" in
   "zip") unzip -j "micro.$extension" -d "micro-$TAG" ;;

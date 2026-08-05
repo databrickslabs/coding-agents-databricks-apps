@@ -212,6 +212,63 @@ class TestConfigurePatAuth:
         finally:
             app_module.app_owner = original_owner
 
+    # ---- Idempotency: defence-in-depth against XSS/session-hijack ----
+
+    def test_configure_pat_rejected_when_already_configured(self):
+        """When the rotator is alive with a fresh token, re-submission must
+        be refused with 409 — even from the legitimate owner. Defence-in-depth
+        against an attacker driving the owner's browser to swap PATs."""
+        app_module = _get_app_module()
+        original_owner = app_module.app_owner
+        try:
+            app_module.app_owner = "owner@databricks.com"
+            client = _make_client(app_module)
+            with mock.patch.object(app_module, "_is_databricks_apps", return_value=True), \
+                 mock.patch.object(type(app_module.pat_rotator), "token",
+                                    new_callable=mock.PropertyMock, return_value="dapi-active"), \
+                 mock.patch.object(type(app_module.pat_rotator), "is_token_expired",
+                                    new_callable=mock.PropertyMock, return_value=False):
+                resp = client.post(
+                    "/api/configure-pat",
+                    json={"token": "dapi-attempt-swap"},
+                    headers={"X-Forwarded-Email": "owner@databricks.com"},
+                )
+            assert resp.status_code == 409, (
+                f"Re-configure when rotator active should 409, got {resp.status_code}"
+            )
+            body = resp.get_json()
+            assert "already configured" in body.get("error", "").lower(), (
+                f"Error message should mention 'already configured', got: {body}"
+            )
+        finally:
+            app_module.app_owner = original_owner
+
+    def test_configure_pat_allowed_when_token_expired(self):
+        """Expired-token escape hatch: if the rotator timed out (long idle),
+        the owner must be able to re-bootstrap without restarting the app."""
+        app_module = _get_app_module()
+        original_owner = app_module.app_owner
+        try:
+            app_module.app_owner = "owner@databricks.com"
+            client = _make_client(app_module)
+            with mock.patch.object(app_module, "_is_databricks_apps", return_value=True), \
+                 mock.patch.object(type(app_module.pat_rotator), "token",
+                                    new_callable=mock.PropertyMock, return_value="dapi-stale"), \
+                 mock.patch.object(type(app_module.pat_rotator), "is_token_expired",
+                                    new_callable=mock.PropertyMock, return_value=True):
+                # Empty body → should reach "Token required" (400), proving
+                # we passed BOTH the owner gate and the idempotency check.
+                resp = client.post(
+                    "/api/configure-pat",
+                    json={},
+                    headers={"X-Forwarded-Email": "owner@databricks.com"},
+                )
+            assert resp.status_code == 400, (
+                f"Expired-PAT path should reach token-required check (400), got {resp.status_code}"
+            )
+        finally:
+            app_module.app_owner = original_owner
+
 
 # ---------------------------------------------------------------------------
 # 2. Case-insensitive email matching
@@ -348,21 +405,77 @@ class TestInfoDisclosureEndpoints:
         finally:
             app_module.app_owner = original
 
-    # -- /health stays unauth but returns ONLY {"status": "healthy"} --
+    # -- /health stays reachable unauth, but only the owner sees detail --
 
-    def test_health_minimal_response_no_version(self):
-        """Unauthenticated /health must NOT leak version, session counts, or
-        setup state — those enable version-targeted exploit selection."""
+    def test_health_minimal_response_for_unauthenticated_caller(self):
+        """/health stays exempt from the SSO gate so the platform can probe it,
+        but an unauthenticated caller must NOT see version, session counts,
+        setup state or rotator internals — those enable version-targeted
+        exploit selection and leak the app's auth posture."""
         app_module = _get_app_module()
         client = _make_client(app_module)
-        # No SSO header; health stays unauth-exempt
-        resp = client.get("/health")
+        original = app_module.app_owner
+        try:
+            app_module.app_owner = "owner@databricks.com"
+            # On Apps with no X-Forwarded-Email, check_authorization() fails closed.
+            with mock.patch.object(app_module, "_is_databricks_apps", return_value=True):
+                resp = client.get("/health")
+        finally:
+            app_module.app_owner = original
+
+        # Still 200 — the gate must not turn a liveness probe into a 403.
         assert resp.status_code == 200
         body = resp.get_json()
-        assert body == {"status": "healthy"}, (
-            f"/health should return only status, got keys: {list(body.keys())}"
+        assert set(body) == {"status"}, (
+            f"unauth /health should return only status, got keys: {sorted(body)}"
         )
+        assert body["status"] in ("healthy", "degraded")
         # Explicit anti-leak assertions
         assert "version" not in body, "/health must not expose version"
         assert "setup_status" not in body, "/health must not expose setup_status"
         assert "active_sessions" not in body, "/health must not expose session count"
+        assert "auth" not in body, "/health must not expose rotator internals"
+
+    def test_health_full_payload_for_owner(self):
+        """The owner keeps the diagnostic payload — that's what makes a zombie
+        app (worker answering while PAT rotation is dead) observable."""
+        app_module = _get_app_module()
+        client = _make_client(app_module)
+        original = app_module.app_owner
+        try:
+            app_module.app_owner = "owner@databricks.com"
+            with mock.patch.object(app_module, "_is_databricks_apps", return_value=True):
+                resp = client.get(
+                    "/health", headers={"X-Forwarded-Email": "owner@databricks.com"}
+                )
+        finally:
+            app_module.app_owner = original
+
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body["status"] in ("healthy", "degraded")
+        for key in ("version", "setup_status", "active_sessions", "auth"):
+            assert key in body, f"owner /health should include {key}, got {sorted(body)}"
+
+    def test_health_reports_degraded_to_unauthenticated_caller(self):
+        """`status` is the one field everyone sees — a liveness probe that can't
+        report unhealthiness is useless. Verify a dead rotator still surfaces."""
+        app_module = _get_app_module()
+        client = _make_client(app_module)
+        original = app_module.app_owner
+        rotator = app_module.pat_rotator
+        try:
+            app_module.app_owner = "owner@databricks.com"
+            with mock.patch.object(type(rotator), "token", "dapi-fake"), \
+                 mock.patch.object(type(rotator), "is_alive", False), \
+                 mock.patch.object(type(rotator), "is_token_expired", True), \
+                 mock.patch.object(type(rotator), "seconds_since_rotation", 999), \
+                 mock.patch.object(app_module, "_is_databricks_apps", return_value=True):
+                resp = client.get("/health")
+        finally:
+            app_module.app_owner = original
+
+        body = resp.get_json()
+        assert body == {"status": "degraded"}, (
+            f"expected a bare degraded signal, got {body}"
+        )
