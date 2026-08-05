@@ -16,6 +16,7 @@ import re
 import types
 
 import pytest
+import token_helper
 
 
 def _extract_helper_source() -> str:
@@ -33,6 +34,23 @@ def _load_helper_module():
 
 
 class TestSpBranch:
+    def test_runtime_resolver_prefers_loopback_broker(self, monkeypatch):
+        monkeypatch.setenv("CODA_SP_TOKEN_BROKER_URL", "http://127.0.0.1:4010/token")
+        monkeypatch.setattr(
+            token_helper,
+            "urlopen",
+            lambda *_a, **_k: _BrokerResponse(b"broker-token"),
+        )
+
+        assert token_helper.resolve_sp_oauth_token() == "broker-token"
+
+    def test_broker_token_wins_without_persisted_profile(self, monkeypatch):
+        mod = _load_helper_module()
+        monkeypatch.setenv("CODA_SP_TOKEN_BROKER_URL", "http://127.0.0.1:4010/token")
+        monkeypatch.setattr(mod, "urlopen", lambda *_a, **_k: _BrokerResponse(b"broker-tok"))
+
+        assert mod._sp_oauth_token() == "broker-tok"
+
     def test_sdk_mint_strips_bearer_prefix(self, monkeypatch):
         """SP path returns the raw token with 'Bearer ' stripped."""
         mod = _load_helper_module()
@@ -117,3 +135,17 @@ class TestMainOutput:
         with pytest.raises(SystemExit) as e:
             mod.main()
         assert e.value.code == 1
+
+
+class _BrokerResponse:
+    def __init__(self, body):
+        self.body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return None
+
+    def read(self):
+        return self.body

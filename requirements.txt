@@ -34,7 +34,7 @@ charset-normalizer==3.4.7
     # via requests
 claude-agent-sdk==0.1.65
     # via coda (pyproject.toml)
-click==8.3.3
+click==8.4.1
     # via
     #   flask
     #   flask-socketio
@@ -78,7 +78,7 @@ httpx==0.28.1
     # via mcp
 httpx-sse==0.4.3
     # via mcp
-idna==3.16
+idna==3.17
     # via
     #   coda (pyproject.toml)
     #   anyio
@@ -139,7 +139,7 @@ pydantic==2.13.4
     #   mcp
     #   mlflow-skinny
     #   pydantic-settings
-pydantic-core==2.46.4
+pydantic-core==2.47.0
     # via pydantic
 pydantic-settings==2.14.1
     # via mcp

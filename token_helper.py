@@ -8,19 +8,63 @@ the two agents can never drift apart.
 
 The helper prints exactly one line to stdout: the bearer token. Resolution
 order (see the emitted script's docstring for the full rationale):
-  1. SP OAuth token minted from the ``omnigents-host`` M2M profile (host path).
-  2. The PAT from ``$DATABRICKS_TOKEN`` or ``~/.databrickscfg`` [DEFAULT].
-Both are resolved fresh on each invocation, so a long-running agent survives
+  1. SP OAuth token fetched from the loopback broker (host path).
+  2. Legacy ``omnigents-host`` M2M profile, for upgrades from older containers.
+  3. The PAT from ``$DATABRICKS_TOKEN`` or ``~/.databrickscfg`` [DEFAULT].
+All are resolved fresh on each invocation, so a long-running agent survives
 PAT rotation / SP-OAuth expiry without a restart.
 """
 
+import configparser
+import json
 import os
 import sys
 from pathlib import Path
+from urllib.request import urlopen
 
-# The SP OAuth profile the Omnigent host writes (auth_type=oauth-m2m). Kept in
-# sync with omnigents_host._HOST_PROFILE and setup_claude._SP_PROFILE.
+# Legacy SP OAuth profile name. New installs persist only a secret-free host
+# pointer under this name and fetch bearers from the loopback broker.
 SP_PROFILE = "omnigents-host"
+
+
+def resolve_sp_oauth_token() -> str | None:
+    """Resolve a fresh token from the Omnigent host M2M profile."""
+    broker_url = os.environ.get("CODA_SP_TOKEN_BROKER_URL", "").strip()
+    if broker_url:
+        try:
+            with urlopen(broker_url, timeout=5) as response:
+                token = response.read().decode().strip()
+            if token:
+                return token
+        except Exception:
+            pass
+    try:
+        from databricks.sdk.core import Config
+        headers = Config(profile=SP_PROFILE).authenticate()
+        auth = (headers or {}).get("Authorization", "")
+        token = auth[7:].strip() if auth.startswith("Bearer ") else auth.strip()
+        if token:
+            return token
+    except Exception:
+        pass
+    return None
+
+
+def resolve_databricks_token() -> str | None:
+    """Resolve a fresh SP OAuth token, falling back to the current PAT."""
+    token = resolve_sp_oauth_token()
+    if token:
+        return token
+
+    token = os.environ.get("DATABRICKS_TOKEN", "").strip()
+    if token:
+        return token
+    try:
+        config = configparser.ConfigParser()
+        config.read(os.path.expanduser("~/.databrickscfg"))
+        return config.get("DEFAULT", "token", fallback="").strip() or None
+    except Exception:
+        return None
 
 _HELPER_SRC = '''#!/usr/bin/env python3
 """Print a Databricks bearer token for Claude Code / Pi token resolution.
@@ -32,6 +76,7 @@ import os
 import shutil
 import subprocess
 import sys
+from urllib.request import urlopen
 
 SP_PROFILE = "omnigents-host"
 # Set on the uv re-run so the child (which has the SDK) doesn't recurse.
@@ -39,7 +84,19 @@ _REEXEC_GUARD = "OMNIGENTS_APIKEY_HELPER_REEXEC"
 
 
 def _sp_oauth_token():
-    # Mint the SP token via the SDK. The M2M (client_id/secret) profile the
+    broker_url = os.environ.get("CODA_SP_TOKEN_BROKER_URL", "").strip()
+    if broker_url:
+        try:
+            with urlopen(broker_url, timeout=5) as response:
+                token = response.read().decode().strip()
+            if token:
+                return token
+        except Exception:
+            pass
+
+    # Upgrade fallback: mint via an older persisted M2M profile. New installs
+    # never write client_id/client_secret to terminal-visible HOME.
+    # The M2M (client_id/secret) profile the
     # Omnigent host writes is NOT usable via `databricks auth token` (that CLI
     # verb is U2M-only and refuses M2M); Config.authenticate() does the
     # client-credentials flow. Verified accepted by /anthropic (C-O1, HTTP 200).
@@ -99,7 +156,7 @@ def _pat_token():
 def main():
     token = _sp_oauth_token() or _pat_token()
     if not token:
-        print("no token source (no SP OAuth profile, no PAT)", file=sys.stderr)
+        print("no token source (no SP token broker, no PAT)", file=sys.stderr)
         sys.exit(1)
     sys.stdout.write(token)
 
@@ -132,3 +189,45 @@ def helper_command(helper_path) -> str:
     """
     py = os.environ.get("CODA_VENV_PYTHON") or sys.executable or "python3"
     return f"!{py} {helper_path}"
+
+
+def write_databricks_token_wrapper(target_dir, real_cli: str) -> Path:
+    """Write a narrow CLI shim for Omnigent's profile-based auth command."""
+    target_dir = Path(target_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    wrapper_path = target_dir / "databricks"
+    source = f'''#!{sys.executable}
+import json
+import os
+import sys
+from urllib.request import urlopen
+
+REAL_CLI = {json.dumps(real_cli)}
+PROFILE = {json.dumps(SP_PROFILE)}
+
+
+def _profile(args):
+    for index, arg in enumerate(args):
+        if arg == "--profile" and index + 1 < len(args):
+            return args[index + 1]
+        if arg.startswith("--profile="):
+            return arg.split("=", 1)[1]
+    return None
+
+
+args = sys.argv[1:]
+if args[:2] == ["auth", "token"] and _profile(args) == PROFILE:
+    url = os.environ.get("CODA_SP_TOKEN_BROKER_URL", "")
+    with urlopen(url, timeout=5) as response:
+        token = response.read().decode().strip()
+    if "--output" in args and args[args.index("--output") + 1] == "json":
+        print(json.dumps({{"access_token": token}}))
+    else:
+        print(token)
+    raise SystemExit(0)
+
+os.execv(REAL_CLI, [REAL_CLI, *args])
+'''
+    wrapper_path.write_text(source)
+    wrapper_path.chmod(0o700)
+    return wrapper_path

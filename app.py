@@ -1,6 +1,7 @@
 import os
 import sys
 import hmac
+import codecs
 import pty
 import fcntl
 import struct
@@ -27,6 +28,7 @@ import enterprise_config
 from claude_otel import apply_claude_otel_env
 from utils import add_1m_context_suffix, ensure_https, get_gateway_host
 from pat_rotator import PATRotator
+from sp_token_broker import BROKER_URL_ENV, broker_url, mint_sp_token, start_sp_token_broker
 from telemetry import log_telemetry, set_product_info
 
 # Sanitize DATABRICKS_TOKEN early — the platform sometimes injects trailing
@@ -184,6 +186,7 @@ def _get_setup_state_snapshot():
 # Single-user security: only the token owner can access the terminal
 app_owner = None
 _omnigent_sp_creds = None
+_sp_token_broker_server = None
 
 
 def _owner_check_disabled() -> bool:
@@ -270,6 +273,13 @@ def _build_terminal_shell_env(base_env: dict) -> dict:
     """
     shell_env = base_env.copy()
     shell_env["TERM"] = "xterm-256color"
+    lc_all = shell_env.get("LC_ALL")
+    locale_value = lc_all if lc_all else shell_env.get("LANG", "")
+    if not locale_value.replace("-", "").replace("_", "").lower().endswith("utf8"):
+        shell_env["LANG"] = "C.UTF-8"
+        shell_env["LC_ALL"] = "C.UTF-8"
+    if shell_env.get("ENABLE_SP_APIKEYHELPER", "").strip().lower() in ("true", "1", "yes"):
+        shell_env["DATABRICKS_CONFIG_PROFILE"] = "omnigents-host"
 
     # Always-strip fixed names
     for key in (
@@ -946,6 +956,22 @@ def read_pty_output(session_id, fd):
         return
     pid = session["pid"]
     session_lock = session["lock"]
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+
+    def emit_output(decoded):
+        if not decoded:
+            return
+        with session_lock:
+            # Buffer for HTTP polling fallback (AC-15)
+            session["output_buffer"].append(decoded)
+            session["last_poll_time"] = time.time()  # Keep session alive during WS output
+        # Push via WebSocket to the session room (AC-8)
+        try:
+            socketio.emit('terminal_output',
+                          {'session_id': session_id, 'output': decoded},
+                          room=session_id)
+        except Exception:
+            pass  # No WebSocket clients — HTTP polling handles it
 
     while True:
         with sessions_lock:
@@ -957,19 +983,9 @@ def read_pty_output(session_id, fd):
                 output = os.read(fd, 65536)
                 if not output:
                     # EOF — process exited
+                    emit_output(decoder.decode(b"", final=True))
                     break
-                decoded = output.decode(errors="replace")
-                with session_lock:
-                    # Buffer for HTTP polling fallback (AC-15)
-                    session["output_buffer"].append(decoded)
-                    session["last_poll_time"] = time.time()  # Keep session alive during WS output
-                # Push via WebSocket to the session room (AC-8)
-                try:
-                    socketio.emit('terminal_output',
-                                  {'session_id': session_id, 'output': decoded},
-                                  room=session_id)
-                except Exception:
-                    pass  # No WebSocket clients — HTTP polling handles it
+                emit_output(decoder.decode(output))
             else:
                 # select timed out — check if process is still alive
                 try:
@@ -1427,6 +1443,18 @@ def pat_status():
     host = ensure_https(os.environ.get("DATABRICKS_HOST", ""))
     token = os.environ.get("DATABRICKS_TOKEN", "").strip()
 
+    if (
+        _omnigent_sp_creds
+        and os.environ.get("ENABLE_SP_APIKEYHELPER", "").strip().lower()
+        in ("true", "1", "yes")
+    ):
+        return jsonify({
+            "auth_mode": "sp_oauth",
+            "configured": True,
+            "valid": True,
+            "user": app_owner or "app-service-principal",
+        })
+
     if not token or pat_rotator.is_token_expired:
         # No token, or token lifetime exceeded (rotation stopped while no sessions)
         return jsonify({"configured": False, "valid": False,
@@ -1853,7 +1881,7 @@ def close_session():
 
 def initialize_app(local_dev=False):
     """One-time init: detect owner, start cleanup thread."""
-    global app_owner, _omnigent_sp_creds
+    global app_owner, _omnigent_sp_creds, _sp_token_broker_server
 
     # Install SIGTERM handler only for gunicorn (production).
     # For local dev, SIG_DFL is fine — the process just exits cleanly.
@@ -1877,16 +1905,23 @@ def initialize_app(local_dev=False):
     else:
         logger.warning("Could not determine app owner - authorization disabled")
 
-    # SP-auth workshop path: write the omnigents-host OAuth (M2M) profile at
-    # boot from the app's OWN SP creds, so token_helper._sp_oauth_token()
-    # resolves without a pasted PAT. Normally _write_oauth_profile runs only
-    # when OMNIGENTS_SERVER_URL is set (host path); the workshop app omits that
-    # var, so arm it here when ENABLE_SP_APIKEYHELPER=true. Idempotent; no-op
-    # without SP creds (local dev / per-user deploy keeps the PAT path).
-    if _omnigent_sp_creds and os.environ.get("ENABLE_SP_APIKEYHELPER", "").strip().lower() in ("true", "1", "yes"):
+    sp_helper_enabled = os.environ.get("ENABLE_SP_APIKEYHELPER", "").strip().lower() in (
+        "true", "1", "yes",
+    )
+    host_enabled = bool(os.environ.get("OMNIGENTS_SERVER_URL", "").strip())
+    if _omnigent_sp_creds and (sp_helper_enabled or host_enabled):
+        _sp_token_broker_server = start_sp_token_broker(
+            lambda: mint_sp_token(_omnigent_sp_creds)
+        )
+        os.environ[BROKER_URL_ENV] = broker_url(_sp_token_broker_server)
+        logger.info("SP token broker listening on loopback")
+
+    # The profile retains only the workspace host for Omnigent routing. The
+    # long-lived client secret stays in this process; helpers mint via broker.
+    if _omnigent_sp_creds and sp_helper_enabled:
         from omnigents_host import _write_oauth_profile
         _write_oauth_profile(_omnigent_sp_creds)
-        logger.info("SP apikeyhelper: wrote omnigents-host OAuth profile at boot (no PAT paste needed)")
+        logger.info("SP apikeyhelper: wrote secret-free host profile at boot")
 
     # Strip SP credentials — only needed for owner resolution above.
     # Keeping them causes SDK to silently fall back to SP auth when PAT is dead.

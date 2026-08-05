@@ -26,6 +26,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
 import requests
+from token_helper import resolve_databricks_token, resolve_sp_oauth_token
 
 UPSTREAM_BASE = os.environ.get("PROXY_UPSTREAM_BASE", "")
 LISTEN_HOST = os.environ.get("PROXY_HOST", "127.0.0.1")
@@ -97,6 +98,13 @@ def _get_fresh_token() -> str | None:
     if cache_hot:
         return _TOKEN_CACHE["token"]
 
+    token = resolve_sp_oauth_token()
+    if token:
+        _TOKEN_CACHE["token"] = token
+        _TOKEN_CACHE["read_at"] = now
+        _TOKEN_CACHE["mtime"] = mtime
+        return token
+
     try:
         config = configparser.ConfigParser()
         config.read(_DATABRICKSCFG_PATH)
@@ -108,6 +116,13 @@ def _get_fresh_token() -> str | None:
             return token
     except Exception as e:
         log.warning(f"Could not read fresh token from {_DATABRICKSCFG_PATH}: {e}")
+
+    token = resolve_databricks_token()
+    if token:
+        _TOKEN_CACHE["token"] = token
+        _TOKEN_CACHE["read_at"] = now
+        _TOKEN_CACHE["mtime"] = mtime
+        return token
 
     return _TOKEN_CACHE.get("token")  # stale is better than nothing
 
@@ -577,6 +592,13 @@ class SSEProcessor:
         return result
 
 
+def _decode_sse_line(raw_line: bytes | str) -> str:
+    """Decode SSE bytes as UTF-8 instead of requests' Latin-1 HTTP default."""
+    if isinstance(raw_line, bytes):
+        return raw_line.decode("utf-8")
+    return raw_line
+
+
 # ---------------------------------------------------------------------------
 # HTTP Server
 # ---------------------------------------------------------------------------
@@ -776,11 +798,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
                     if ch.get("finish_reason"):
                         _stop_reason = ch["finish_reason"]
 
-            for raw_line in resp.iter_lines(decode_unicode=True):
+            for raw_line in resp.iter_lines(decode_unicode=False):
                 if raw_line is None:
                     continue
 
-                line = raw_line.strip() if isinstance(raw_line, str) else raw_line.decode().strip()
+                line = _decode_sse_line(raw_line).strip()
 
                 if not line:
                     # Blank line = event boundary, send it

@@ -19,6 +19,8 @@ def tmp_cfg(tmp_path, monkeypatch):
     import content_filter_proxy as cfp
     monkeypatch.setattr(cfp, "_DATABRICKSCFG_PATH", str(cfg))
     monkeypatch.setattr(cfp, "_TOKEN_CACHE", {"token": None, "read_at": 0.0, "mtime": 0.0})
+    monkeypatch.setattr(cfp, "resolve_sp_oauth_token", lambda: None)
+    monkeypatch.setattr(cfp, "resolve_databricks_token", lambda: None)
     return cfg
 
 
@@ -27,6 +29,16 @@ def _write_cfg(path, token):
 
 
 class TestFreshTokenCacheInvalidation:
+    def test_rotated_pat_beats_stale_proxy_env_token(self, tmp_cfg, monkeypatch):
+        from content_filter_proxy import _get_fresh_token
+        _write_cfg(tmp_cfg, "dapi-rotated")
+        monkeypatch.setattr(
+            "content_filter_proxy.resolve_databricks_token",
+            lambda: "dapi-startup",
+        )
+
+        assert _get_fresh_token() == "dapi-rotated"
+
     def test_cache_invalidates_on_mtime_change(self, tmp_cfg):
         from content_filter_proxy import _get_fresh_token
         _write_cfg(tmp_cfg, "dapi-old")
@@ -74,4 +86,21 @@ class TestFreshTokenCacheInvalidation:
         missing = tmp_path / "does-not-exist"
         monkeypatch.setattr(cfp, "_DATABRICKSCFG_PATH", str(missing))
         monkeypatch.setattr(cfp, "_TOKEN_CACHE", {"token": None, "read_at": 0.0, "mtime": 0.0})
+        monkeypatch.setattr(cfp, "resolve_databricks_token", lambda: None)
         assert cfp._get_fresh_token() is None
+
+    def test_uses_sp_oauth_when_default_pat_is_missing(self, tmp_path, monkeypatch):
+        import content_filter_proxy as cfp
+        missing = tmp_path / "does-not-exist"
+        monkeypatch.setattr(cfp, "_DATABRICKSCFG_PATH", str(missing))
+        monkeypatch.setattr(cfp, "_TOKEN_CACHE", {"token": None, "read_at": 0.0, "mtime": 0.0})
+        monkeypatch.setattr(cfp, "resolve_databricks_token", lambda: "sp-oauth-token")
+
+        assert cfp._get_fresh_token() == "sp-oauth-token"
+
+
+def test_sse_line_decodes_literal_utf8_without_latin1_mojibake():
+    from content_filter_proxy import _decode_sse_line
+
+    raw = 'data: {"text":"✓ café → │ ─ 😀"}'.encode("utf-8")
+    assert _decode_sse_line(raw) == 'data: {"text":"✓ café → │ ─ 😀"}'

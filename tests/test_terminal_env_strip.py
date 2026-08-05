@@ -82,6 +82,23 @@ class TestTerminalEnvStrip:
         env = build({"HOME": "/app"})
         assert env["TERM"] == "xterm-256color"
 
+    def test_sets_utf8_locale_when_missing(self):
+        build = _build_terminal_shell_env()
+        env = build({"HOME": "/app"})
+        assert env["LANG"] == "C.UTF-8"
+        assert env["LC_ALL"] == "C.UTF-8"
+
+    def test_preserves_existing_utf8_locale(self):
+        build = _build_terminal_shell_env()
+        env = build({"HOME": "/app", "LANG": "en_AU.UTF-8"})
+        assert env["LANG"] == "en_AU.UTF-8"
+        assert "LC_ALL" not in env
+
+    def test_sp_apikeyhelper_selects_oauth_profile(self):
+        build = _build_terminal_shell_env()
+        env = build({"HOME": "/app", "ENABLE_SP_APIKEYHELPER": "true"})
+        assert env["DATABRICKS_CONFIG_PROFILE"] == "omnigents-host"
+
     def test_preserves_unrelated_env(self):
         """Other env vars (PATH, USER, custom workspace vars) pass through."""
         build = _build_terminal_shell_env()
