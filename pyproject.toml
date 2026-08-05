@@ -87,7 +87,7 @@ dev = [
     # Playwright for the e2e suite (tests/e2e/) — drives a real browser
     # against the deployed app to verify SSO + setup pipeline + security
     # fixes end-to-end. Optional: tests skip cleanly when not installed.
-    "playwright>=1.40",
+    "playwright>=1.61.0",
     "pytest-playwright>=0.8.0",
 ]
 
