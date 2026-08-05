@@ -22,12 +22,21 @@ env:
     value: databricks-claude-opus-4-8
   - name: HERMES_FALLBACK_MODEL
     value: databricks-claude-opus-4-8
-  # Set ENABLE_HERMES=false to skip Hermes Agent install. Other CLIs are unaffected.
+  # Per-CLI install toggles. Each ENABLE_* defaults to true when absent, and an
+  # Apps overlay replaces app.yaml wholesale rather than merging — so list all
+  # of them explicitly or an omitted toggle silently means "install it".
   - name: ENABLE_HERMES
     value: "true"
-  # Set ENABLE_PI=false to skip installing the Pi coding agent. Other CLIs are unaffected.
   - name: ENABLE_PI
     value: "true"
+  - name: ENABLE_OPENCODE
+    value: "true"
+  # Codex needs a Responses-API (*-codex) endpoint and Gemini needs a served
+  # Gemini model; neither is available here, so skip their installs.
+  - name: ENABLE_CODEX
+    value: "false"
+  - name: ENABLE_GEMINI
+    value: "false"
   - name: CLAUDE_CODE_DISABLE_AUTO_MEMORY
     value: 0
   - name: MAX_CONCURRENT_SESSIONS
