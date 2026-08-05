@@ -104,7 +104,7 @@ markupsafe==3.0.3
     #   flask
     #   jinja2
     #   werkzeug
-mcp==1.29.0
+mcp==2.0.0
     # via
     #   coda (pyproject.toml)
     #   claude-agent-sdk
