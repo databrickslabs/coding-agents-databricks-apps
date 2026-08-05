@@ -12,3 +12,21 @@ updates:
       interval: "weekly"
     cooldown:
       default-days: 7
+    ignore:
+      # requirements.txt is COMPILED (`uv pip compile pyproject.toml`), not
+      # hand-maintained. Dependabot edits a single pin in it without re-running
+      # the resolver, which can produce a file that no longer installs at all.
+      #
+      # That already happened: #84 bumped pydantic-core to 2.47.0 while
+      # pydantic==2.13.4 requires pydantic-core==2.46.4 exactly, so
+      # `pip install -r requirements.txt` failed outright and every deploy from
+      # main broke until it was recompiled.
+      #
+      # These packages are pinned exactly by their parent and must only ever
+      # change as a side effect of recompiling. Version floors that actually
+      # matter belong in pyproject.toml, where the resolver can honour them.
+      - dependency-name: "pydantic-core"
+      # Same shape of problem, previously hit by #3 and #60 respectively (see
+      # the ceilings and their rationale in pyproject.toml).
+      - dependency-name: "importlib-metadata"
+      - dependency-name: "protobuf"

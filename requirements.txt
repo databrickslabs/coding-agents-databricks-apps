@@ -61,7 +61,7 @@ flask-socketio==5.6.1
     # via coda (pyproject.toml)
 gitdb==4.0.12
     # via gitpython
-gitpython==3.1.50
+gitpython==3.1.57
     # via
     #   coda (pyproject.toml)
     #   mlflow-skinny
@@ -104,8 +104,10 @@ markupsafe==3.0.3
     #   flask
     #   jinja2
     #   werkzeug
-mcp==1.27.1
-    # via claude-agent-sdk
+mcp==1.29.0
+    # via
+    #   coda (pyproject.toml)
+    #   claude-agent-sdk
 mlflow-skinny==3.14.0
     # via coda (pyproject.toml)
 opentelemetry-api==1.41.1
@@ -127,8 +129,10 @@ protobuf==6.33.6
     #   databricks-sdk
     #   mlflow-skinny
     #   opentelemetry-proto
-pyasn1==0.6.3
-    # via pyasn1-modules
+pyasn1==0.6.4
+    # via
+    #   coda (pyproject.toml)
+    #   pyasn1-modules
 pyasn1-modules==0.4.2
     # via google-auth
 pycparser==3.0
@@ -139,10 +143,12 @@ pydantic==2.13.4
     #   mcp
     #   mlflow-skinny
     #   pydantic-settings
-pydantic-core==2.47.0
+pydantic-core==2.46.4
     # via pydantic
-pydantic-settings==2.14.1
-    # via mcp
+pydantic-settings==2.14.2
+    # via
+    #   coda (pyproject.toml)
+    #   mcp
 pyjwt==2.13.0
     # via
     #   coda (pyproject.toml)
