@@ -17,6 +17,10 @@ APP_NAME := $(app_name)
 endif
 PROFILE       ?= DEFAULT
 APP_NAME      ?= coding-agents
+# app.yaml variant to read Omnigent values from (for attach-omnigent-resources
+# derivation). Defaults to app.yaml; overlay targets set GRANT_YAML to their
+# own variant.
+GRANT_YAML ?= app.yaml
 
 # Resolve user email and workspace path from the profile
 USER_EMAIL    = $(shell databricks current-user me --profile $(PROFILE) --output json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('userName',''))")
@@ -47,7 +51,7 @@ GIT_REF_TYPE ?= branch
 .PHONY: help test integration-test e2e-test e2e-auth deploy redeploy create-app create-pat sync deploy-app status open clean enterprise-doctor \
 	deploy-workshop redeploy-workshop guard-workshop-name create-app-workshop workshop-yaml workshop-secret \
 	deploy-lakemeter redeploy-lakemeter lakemeter-yaml grant-omnigent-host \
-	configure-git configure-git-credential deploy-git redeploy-git
+	configure-git configure-git-credential deploy-git redeploy-git attach-omnigent-resources
 
 # ── Help ─────────────────────────────────────────────
 
@@ -248,6 +252,41 @@ deploy-git: ## Deploy the app from the configured Git ref ($(GIT_REF_TYPE)=$(GIT
 redeploy-git: grant-omnigent-host deploy-git ## (Re)grant Omnigent host IAM, then deploy from Git
 	@echo ""
 	@echo "Git redeployment complete!"
+
+# ── Omnigent host resources ─────────────────────────
+# The generic app.yaml resolves workspace-specific Omnigent values at runtime
+# via valueFrom resource references. This target attaches those resources to
+# the app (merging with existing resources, since `apps update --resources`
+# replaces). Run after grant_omnigent_host.sh and the first deploy, once per
+# workspace. Idempotent. See attach_omnigent_resources.sh.
+OMNIGENT_SERVER_URL ?=
+OMNIGENT_SECRET_SCOPE ?= coda-omnigent
+OMNIGENT_SECRET_KEY ?= omnigent-server-url
+
+attach-omnigent-resources: ## Attach the per-app omnigent-wheels (UC Volume) + omnigent-server-url (Secret) resources the generic app.yaml resolves via valueFrom
+	@# The generic app.yaml references two resource keys at runtime:
+	@#   OMNIGENTS_WHEEL_SPEC    valueFrom: omnigent-wheels
+	@#   OMNIGENTS_SERVER_URL    valueFrom: omnigent-server-url
+	@# This target attaches those resources to the app (merging with existing
+	@# resources, since `apps update --resources` replaces). Run after
+	@# grant_omnigent_host.sh. Requires OMNIGENT_SERVER_URL + WHEEL_VOLUME:
+	@#   make attach-omnigent-resources PROFILE=... APP_NAME=coda \
+	@#        OMNIGENT_SERVER_URL=https://omnigent-<wsid>.<cloud>.databricksapps.com \
+	@#        WHEEL_VOLUME=<cat>.<schema>.<volume> \
+	@#        [OMNIGENT_SECRET_SCOPE=coda-omnigent] [OMNIGENT_SECRET_KEY=omnigent-server-url]
+	@if [ -z "$(OMNIGENT_SERVER_URL)" ] || [ -z "$(WHEEL_VOLUME)" ]; then \
+		echo "ERROR: OMNIGENT_SERVER_URL and WHEEL_VOLUME are required for attach-omnigent-resources." >&2; \
+		echo "       The generic app.yaml uses valueFrom, so these can't be derived from it." >&2; \
+		echo "       Pass them on the command line (see the help text above)." >&2; \
+		exit 1; \
+	fi
+	@./attach_omnigent_resources.sh \
+		--profile $(PROFILE) \
+		--coda-app $(APP_NAME) \
+		--server-url $(OMNIGENT_SERVER_URL) \
+		--wheel-volume $(WHEEL_VOLUME) \
+		--secret-scope $(OMNIGENT_SECRET_SCOPE) \
+		--secret-key $(OMNIGENT_SECRET_KEY)
 
 # ── Monitoring ───────────────────────────────────────
 
