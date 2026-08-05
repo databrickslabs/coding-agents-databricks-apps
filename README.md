@@ -403,6 +403,9 @@ Open [http://localhost:8000](http://localhost:8000) — type `claude`, `codex`, 
 | `HERMES_MODEL` | No | Hermes model name (default: `databricks-claude-opus-4-6`) |
 | `HERMES_FALLBACK_MODEL` | No | Fallback model if `HERMES_MODEL` is unavailable in this workspace's geo |
 | `ENABLE_HERMES` | No | Set to `"false"` to skip Hermes Agent install. Other CLIs are unaffected. Default `"true"` |
+| `APP_OWNER_EMAIL` | No | Pin the app owner instead of resolving it from the Apps API. Useful when the app is created *on behalf of* someone (so `app.creator` is the wrong identity), or to remove the boot-time API call from the critical path entirely. Authorization fails closed while the owner is unresolved, so this is the deterministic escape hatch |
+| `FLASK_SECRET_KEY` | No | Signs session cookies. Unset = a fresh random key per worker start, which invalidates existing sessions on every restart. Wire to a Databricks secret in production |
+| `CODA_TELEMETRY_DISABLED` | No | Set to `"true"` to make `log_telemetry()` a no-op — no outbound telemetry to disclose in a third-party-risk review |
 | `MAX_CONCURRENT_SESSIONS` | No | Cap on simultaneous PTY sessions per worker (default `5`) |
 | `CLAUDE_CODE_DISABLE_AUTO_MEMORY` | No | Pass-through to Claude Code's auto-memory feature (default `0`) |
 | `MLFLOW_TRACING_ENABLED` | No | Set to `"true"` to enable MLflow tracing for Claude, Codex, and Gemini in one switch (default `"false"`) |
