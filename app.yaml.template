@@ -37,9 +37,19 @@ env:
     value: "false"
   - name: ENABLE_GEMINI
     value: "false"
-  #OPTIONAL: Use the new Databricks AI Gateway if you have access (recommended), otherwise it will default to the older endpoint
-  - name: DATABRICKS_GATEWAY_HOST
-    value: https://<your-gateway-id>.ai-gateway.<env>.cloud.databricks.com
+  # OPTIONAL: pin the Databricks AI Gateway. Leave commented and the app derives
+  # the gateway from your workspace and probes it for reachability
+  # (utils.get_gateway_host tier 2), falling back to
+  # {DATABRICKS_HOST}/serving-endpoints if there isn't one — which is what you
+  # want in almost all cases.
+  #
+  # Do NOT leave this uncommented with the placeholder still in it: a set value
+  # is TRUSTED with no reachability probe (tier 1), so an unfilled template
+  # deploys `https://<your-gateway-id>...` as the real gateway and every model
+  # call fails. Also note `value: ""` means "disable the gateway", which is a
+  # third behaviour distinct from unset.
+  # - name: DATABRICKS_GATEWAY_HOST
+  #   value: https://<your-gateway-id>.ai-gateway.<env>.cloud.databricks.com
   # NOTE: CLAUDE_CODE_DISABLE_AUTO_MEMORY=0 enables auto memory, allowing Claude Code to
   # persist context and history across sessions. This flag is temporary — once Anthropic
   # completes the rollout and auto memory is on by default, this can be removed entirely.
