@@ -34,7 +34,7 @@ charset-normalizer==3.4.7
     # via requests
 claude-agent-sdk==0.1.65
     # via coda (pyproject.toml)
-click==8.3.3
+click==8.4.1
     # via
     #   flask
     #   flask-socketio
