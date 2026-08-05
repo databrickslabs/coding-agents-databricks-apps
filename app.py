@@ -14,6 +14,7 @@ import signal
 import time
 import copy
 import logging
+import shutil
 from concurrent.futures import ThreadPoolExecutor, wait
 from flask import Flask, send_from_directory, request, jsonify, session
 from flask_socketio import SocketIO, emit, join_room, leave_room, disconnect
@@ -27,6 +28,7 @@ import app_state
 import enterprise_config
 from claude_otel import apply_claude_otel_env
 from utils import add_1m_context_suffix, ensure_https, get_gateway_host
+from token_helper import write_databricks_token_wrapper
 from pat_rotator import PATRotator
 from sp_token_broker import BROKER_URL_ENV, broker_url, mint_sp_token, start_sp_token_broker
 from telemetry import log_telemetry, set_product_info
@@ -264,6 +266,14 @@ def _run_step(step_id, command):
 
         result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=300)
         if result.returncode == 0:
+            # The profile-backed broker shim is also needed by direct terminal
+            # `databricks` commands, not only Omnigent's SDK model-catalog path.
+            # On a no-Omnigent deploy the host setup never calls its installer,
+            # leaving databricks_cli_path pointing at a missing wrapper and every
+            # workspace CLI call failing with `no cached credentials`. Install it
+            # immediately after the real CLI is available.
+            if step_id == "dbcli" and os.environ.get(BROKER_URL_ENV):
+                _ensure_broker_cli_wrapper()
             _update_step(step_id, status="complete", completed_at=time.time())
         else:
             err = result.stderr.strip() or result.stdout.strip() or "Unknown error"
@@ -272,6 +282,31 @@ def _run_step(step_id, command):
         _update_step(step_id, status="error", completed_at=time.time(), error="Timed out after 300s")
     except Exception as e:
         _update_step(step_id, status="error", completed_at=time.time(), error=str(e))
+
+
+def _ensure_broker_cli_wrapper() -> bool:
+    """Install the broker-aware Databricks CLI shim for terminal commands.
+
+    The SDK honours the absolute `databricks_cli_path` in the omnigents-host
+    profile, but a user typing `databricks ...` resolves through PATH. Put the
+    same shim first in the terminal PATH too. This is needed when
+    ENABLE_SP_APIKEYHELPER is on but Omnigent resources are absent: the broker
+    starts, the profile is written, but the Omnigent host setup (which used to
+    install the shim) is intentionally skipped.
+    """
+    if not os.environ.get(BROKER_URL_ENV, "").strip():
+        return False
+    home = os.environ.get("HOME", "/app/python/source_code")
+    if not home or home == "/":
+        home = "/app/python/source_code"
+    expected = os.path.join(home, ".local", "bin", "databricks")
+    real_cli = expected if os.path.isfile(expected) else shutil.which("databricks")
+    if not real_cli:
+        logger.warning("SP broker is running but Databricks CLI is not installed yet; wrapper deferred")
+        return False
+    wrapper = write_databricks_token_wrapper(os.path.join(home, ".coda-broker-bin"), real_cli)
+    logger.info("Installed broker-aware Databricks CLI wrapper at %s", wrapper)
+    return True
 
 
 def _build_terminal_shell_env(base_env: dict) -> dict:
@@ -327,6 +362,15 @@ def _build_terminal_shell_env(base_env: dict) -> dict:
             )
         ):
             shell_env.pop(key, None)
+
+    # Make the broker shim the direct terminal's first Databricks executable too.
+    # The session creator also prepends this path defensively; doing it here
+    # keeps every caller of the environment builder consistent.
+    if shell_env.get(BROKER_URL_ENV, "").strip():
+        home = shell_env.get("HOME", "/app/python/source_code")
+        broker_bin = os.path.join(home, ".coda-broker-bin")
+        if os.path.isdir(broker_bin):
+            shell_env["PATH"] = f"{broker_bin}:{shell_env.get('PATH', '')}"
 
     return shell_env
 
@@ -1933,9 +1977,16 @@ def create_session():
         # Ensure HOME is set correctly
         if not shell_env.get("HOME") or shell_env["HOME"] == "/":
             shell_env["HOME"] = "/app/python/source_code"
-        # Add ~/.local/bin to PATH for claude command
+        # Add the broker shim before ~/.local/bin when SP helper auth is active,
+        # then the normal CLI/tools. Without this, direct `databricks ...` calls
+        # use the real binary, which has no OAuth cache in the container.
         local_bin = f"{shell_env['HOME']}/.local/bin"
-        shell_env["PATH"] = f"{local_bin}:{shell_env.get('PATH', '')}"
+        broker_bin = f"{shell_env['HOME']}/.coda-broker-bin"
+        path_parts = []
+        if shell_env.get(BROKER_URL_ENV, "").strip() and os.path.isdir(broker_bin):
+            path_parts.append(broker_bin)
+        path_parts.extend([local_bin, shell_env.get("PATH", "")])
+        shell_env["PATH"] = ":".join(part for part in path_parts if part)
 
         # Start shell in ~/projects/ directory
         projects_dir = os.path.join(shell_env["HOME"], "projects")
@@ -2220,6 +2271,9 @@ def initialize_app(local_dev=False):
             lambda: mint_sp_token(_omnigent_sp_creds)
         )
         os.environ[BROKER_URL_ENV] = broker_url(_sp_token_broker_server)
+        # Install immediately when the CLI is already cached; _run_step("dbcli")
+        # retries this after a cold-boot install completes.
+        _ensure_broker_cli_wrapper()
         logger.info("SP token broker listening on loopback")
 
     # The profile retains only the workspace host for Omnigent routing. The
