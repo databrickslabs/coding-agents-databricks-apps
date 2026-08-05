@@ -186,19 +186,28 @@ def gateway_model_ids() -> tuple[bool, list[str], str]:
         token = resolve_databricks_token()
     except Exception as exc:  # noqa: BLE001
         return False, [], f"token resolver: {type(exc).__name__}: {exc}"
-    host = _profile_host()
-    if not host or not token:
-        return False, [], "gateway host or broker token unavailable"
+    # Prefer the exact Gateway base that setup_opencode wrote. The profile host
+    # is the workspace host, not the AI Gateway host; appending /openai/v1/models
+    # there returns an HTML/404 response even while inference works.
+    oc_cfg = load_json(OPENCODE_CONFIG)
+    base = str((((oc_cfg.get("provider") or {}).get("databricks-openai") or {}).get("options") or {}).get("baseURL") or "").rstrip("/")
+    if not base:
+        host = _profile_host()
+        base = f"{host}/openai/v1" if host else ""
+    if not base or not token:
+        return False, [], "Gateway base URL or broker token unavailable"
     req = urllib.request.Request(
-        f"{host}/openai/v1/models",
+        f"{base}/models",
         headers={"Authorization": f"Bearer {token}"},
     )
     try:
         with urllib.request.urlopen(req, timeout=30) as response:
-            body = json.loads(response.read().decode())
+            status = response.status
+            raw = response.read().decode()
+        body = json.loads(raw)
         data = body.get("data") if isinstance(body, dict) else []
         ids = sorted({str(x.get("id")) for x in data if isinstance(x, dict) and x.get("id")})
-        return True, ids, ""
+        return True, ids, f"HTTP {status}"
     except Exception as exc:  # noqa: BLE001
         return False, [], f"{type(exc).__name__}: {exc}"
 
