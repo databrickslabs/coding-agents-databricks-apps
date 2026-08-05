@@ -33,6 +33,7 @@ from utils import (
     get_npm_version,
     pick_in_geo_model,
 )
+from token_helper import resolve_databricks_token
 
 # Opt-out: allow operators to disable Pi bundling without removing the file.
 if os.environ.get("ENABLE_PI", "true").strip().lower() in ("false", "0", "no"):
@@ -46,7 +47,13 @@ if not os.environ.get("HOME") or os.environ["HOME"] == "/":
 home = Path(os.environ["HOME"])
 
 host = os.environ.get("DATABRICKS_HOST", "")
-token = os.environ.get("DATABRICKS_TOKEN", "").strip()
+# The SP broker is the primary auth source on the no-PAT baseline. Checking only
+# DATABRICKS_TOKEN made setup exit 0 before writing models.json even though the
+# broker was healthy — setup-status said `pi: complete`, but Pi was unusable.
+# Resolve through the same layered source as OpenCode/Claude: SP broker/profile,
+# then user PAT. This token is only used during setup; Pi writes a helper command
+# for per-request freshness below.
+token = resolve_databricks_token() or ""
 pi_model = os.environ.get("PI_MODEL", "databricks-claude-opus-4-8")
 
 PI_PACKAGE = "@earendil-works/pi-coding-agent"
@@ -102,7 +109,7 @@ if not host or not token:
 host = ensure_https(host.rstrip("/"))
 
 gateway_host = get_gateway_host()
-gateway_token = os.environ.get("DATABRICKS_TOKEN", "") if gateway_host else ""
+gateway_token = token if gateway_host else ""
 if gateway_host and not gateway_token:
     print("Warning: AI Gateway resolved but DATABRICKS_TOKEN missing, falling back to DATABRICKS_HOST")
     gateway_host = ""

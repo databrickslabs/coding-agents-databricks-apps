@@ -35,8 +35,14 @@ from typing import Any
 
 HOME = Path(os.environ.get("HOME") or "/app/python/source_code")
 APP_ROOT = Path(__file__).resolve().parent.parent
+# When invoked as `/app/python/source_code/scripts/verify_coda_live.py`, Python's
+# import root is `scripts/`, not the repo root. Add the root explicitly so the
+# verifier can import token_helper and use the broker for Gateway discovery.
+if str(APP_ROOT) not in sys.path:
+    sys.path.insert(0, str(APP_ROOT))
 PI_CONFIG = HOME / ".pi" / "agent" / "models.json"
 OPENCODE_CONFIG = HOME / ".config" / "opencode" / "opencode.json"
+CLAUDE_CONFIG = HOME / ".claude" / "settings.json"
 DATABRICKS_CFG = HOME / ".databrickscfg"
 REPO = "databrickslabs/coding-agents-databricks-apps"
 
@@ -118,7 +124,13 @@ def ready_endpoints(raw: Any) -> list[str]:
         if not isinstance(endpoint, dict):
             continue
         state = endpoint.get("state") or {}
-        ready = str(state.get("ready") or "").upper()
+        if isinstance(state, dict):
+            ready = str(state.get("ready") or "").upper()
+        else:
+            # Databricks CLI versions have emitted both {state: {ready: READY}}
+            # and {state: READY}; accept the canonical values, not an assumed
+            # one-version shape.
+            ready = str(state).upper()
         name = endpoint.get("name")
         if name and ready == "READY":
             names.append(str(name))
@@ -155,22 +167,94 @@ def databricks_identity() -> tuple[dict[str, Any], Any]:
     return evidence, parsed
 
 
+def _profile_host() -> str:
+    host = os.environ.get("DATABRICKS_HOST", "").strip().rstrip("/")
+    if host:
+        return host
+    try:
+        cfg = configparser.ConfigParser(interpolation=None)
+        cfg.read(DATABRICKS_CFG)
+        return (cfg.get("omnigents-host", "host", fallback="") or "").strip().rstrip("/")
+    except Exception:
+        return ""
+
+
+def gateway_model_ids() -> tuple[bool, list[str], str]:
+    """Discover active Unity AI Gateway model services via OpenAI /models."""
+    try:
+        from token_helper import resolve_databricks_token
+        token = resolve_databricks_token()
+    except Exception as exc:  # noqa: BLE001
+        return False, [], f"token resolver: {type(exc).__name__}: {exc}"
+    # Prefer the exact Gateway base that setup_opencode wrote. The profile host
+    # is the workspace host, not the AI Gateway host; appending /openai/v1/models
+    # there returns an HTML/404 response even while inference works.
+    oc_cfg = load_json(OPENCODE_CONFIG)
+    base = str((((oc_cfg.get("provider") or {}).get("databricks-openai") or {}).get("options") or {}).get("baseURL") or "").rstrip("/")
+    if not base:
+        host = _profile_host()
+        base = f"{host}/openai/v1" if host else ""
+    if not base or not token:
+        return False, [], "Gateway base URL or broker token unavailable"
+    req = urllib.request.Request(
+        f"{base}/models",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            status = response.status
+            raw = response.read().decode()
+        body = json.loads(raw)
+        data = body.get("data") if isinstance(body, dict) else []
+        ids = sorted({str(x.get("id")) for x in data if isinstance(x, dict) and x.get("id")})
+        return True, ids, f"HTTP {status}"
+    except Exception as exc:  # noqa: BLE001
+        return False, [], f"{type(exc).__name__}: {exc}"
+
+
 def serving_model_evidence() -> tuple[dict[str, Any], list[str]]:
     result = run(["databricks", "serving-endpoints", "list", "--output", "json"], timeout=45)
     parsed = parse_json_output(result)
-    ready = ready_endpoints(parsed)
+    serving_ready = ready_endpoints(parsed)
+    if serving_ready:
+        return {
+            "command_ok": result["ok"],
+            "returncode": result["returncode"],
+            "stderr": result["stderr"],
+            "source": "databricks serving-endpoints list",
+            "ready_endpoint_names": serving_ready,
+            "gateway_catalog_used": False,
+        }, serving_ready
+
+    gateway_ok, gateway_ids, gateway_error = gateway_model_ids()
     return {
-        "command_ok": result["ok"],
+        "command_ok": result["ok"] and gateway_ok,
         "returncode": result["returncode"],
         "stderr": result["stderr"],
-        "ready_endpoint_names": ready,
-    }, ready
+        "source": "Unity AI Gateway /openai/v1/models" if gateway_ok else "unavailable",
+        "ready_endpoint_names": gateway_ids,
+        "gateway_catalog_used": gateway_ok,
+        "gateway_error": gateway_error,
+        "serving_endpoints_ready": serving_ready,
+    }, gateway_ids
 
 
 def pi_models(config: dict[str, Any]) -> list[str]:
     provider = ((config.get("providers") or {}).get("databricks-claude") or {})
     models = provider.get("models") or []
     return sorted({str(m.get("id")) for m in models if isinstance(m, dict) and m.get("id")})
+
+
+def claude_active_models(config: dict[str, Any]) -> list[str]:
+    env = config.get("env") or {}
+    names = []
+    for key in ("ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL"):
+        value = str(env.get(key) or "")
+        # Claude's 1M routing suffix is metadata, not a serving endpoint id.
+        value = re.sub(r"\[1m\]$", "", value)
+        if value:
+            names.append(value)
+    return sorted(set(names))
 
 
 def opencode_models(config: dict[str, Any]) -> list[str]:
@@ -206,11 +290,14 @@ def opencode_displayed_models() -> dict[str, Any]:
 def catalog_comparison(ready: list[str]) -> dict[str, Any]:
     pi_cfg = load_json(PI_CONFIG)
     oc_cfg = load_json(OPENCODE_CONFIG)
+    claude_cfg = load_json(CLAUDE_CONFIG)
     pi_configured = pi_models(pi_cfg)
     oc_configured = opencode_models(oc_cfg)
     oc_display = opencode_displayed_models()
+    claude_configured = claude_active_models(claude_cfg)
     pi_expected = sorted(n for n in ready if n.startswith(PI_PREFIXES))
     oc_expected = sorted(n for n in ready if n.startswith(OPENCODE_PREFIXES))
+    claude_expected = sorted(n for n in ready if n.startswith(PI_PREFIXES))
 
     pi_provider = ((pi_cfg.get("providers") or {}).get("databricks-claude") or {})
     oc_providers = oc_cfg.get("provider") or {}
@@ -230,6 +317,11 @@ def catalog_comparison(ready: list[str]) -> dict[str, Any]:
         }
 
     return {
+        "claude": {
+            **compare(claude_configured, claude_expected),
+            "config_exists": CLAUDE_CONFIG.exists(),
+            "api_key_helper_present": bool(claude_cfg.get("apiKeyHelper")),
+        },
         "pi": {
             **compare(pi_configured, pi_expected),
             "config_exists": PI_CONFIG.exists(),
@@ -275,7 +367,18 @@ def token_identity_from_pi_helper() -> dict[str, Any]:
 
     host = os.environ.get("DATABRICKS_HOST", "").rstrip("/")
     if not host:
-        return {"ok": False, "reason": "DATABRICKS_HOST absent"}
+        # CoDA deliberately strips DATABRICKS_HOST from terminal env. The
+        # broker-owned profile still carries the workspace host; use that for
+        # this verifier's safe /Me request rather than treating correct secret
+        # stripping as an auth failure.
+        try:
+            cfg = configparser.ConfigParser(interpolation=None)
+            cfg.read(DATABRICKS_CFG)
+            host = (cfg.get("omnigents-host", "host", fallback="") or "").rstrip("/")
+        except Exception:
+            host = ""
+    if not host:
+        return {"ok": False, "reason": "DATABRICKS_HOST absent and profile host unavailable"}
     req = urllib.request.Request(
         f"{host}/api/2.0/preview/scim/v2/Me",
         headers={"Authorization": f"Bearer {token}"},
@@ -306,6 +409,18 @@ def inference_checks(catalogs: dict[str, Any], *, skip: bool) -> dict[str, Any]:
         return {"skipped": True, "reason": "--skip-inference"}
 
     result: dict[str, Any] = {}
+    claude = run(
+        ["claude", "--print", "--model", "sonnet", "Reply with exactly CODA_CLAUDE_OK"],
+        timeout=180,
+    )
+    result["claude"] = {
+        "ok": claude["ok"] and "CODA_CLAUDE_OK" in claude["stdout"],
+        "marker_seen": "CODA_CLAUDE_OK" in claude["stdout"],
+        "returncode": claude["returncode"],
+        "stdout": claude["stdout"],
+        "stderr": claude["stderr"],
+    }
+
     pi_models_list = catalogs["pi"]["configured"]
     if pi_models_list:
         model = pi_models_list[0]
@@ -386,7 +501,7 @@ def workspace_round_trip(*, skip: bool) -> dict[str, Any]:
                 timeout=30,
             )
             steps["export"] = run(
-                ["databricks", "workspace", "export", f"{unique}/probe.txt", "--format", "RAW", "--file", str(dst)],
+                ["databricks", "workspace", "export", f"{unique}/probe.txt", "--format", "AUTO", "--file", str(dst)],
                 timeout=30,
             )
             round_trip_equal = dst.exists() and dst.read_text() == content
@@ -424,7 +539,7 @@ def required_failures(report: dict[str, Any], expected_auth: str) -> list[str]:
 
     if not report["databricks_cli"]["command_ok"]:
         failures.append("databricks current-user me failed")
-    for agent in ("pi", "opencode"):
+    for agent in ("claude", "pi", "opencode"):
         catalog = report["model_catalogs"][agent]
         if not catalog["exact_match"]:
             failures.append(f"{agent} model catalog does not exactly match READY compatible endpoints")
@@ -434,7 +549,7 @@ def required_failures(report: dict[str, Any], expected_auth: str) -> list[str]:
         failures.append("OpenCode displayed model list does not exactly match READY compatible endpoints")
     inference = report["inference"]
     if not inference.get("skipped"):
-        for agent in ("pi", "opencode"):
+        for agent in ("claude", "pi", "opencode"):
             if not inference.get(agent, {}).get("ok"):
                 failures.append(f"{agent} inference smoke failed")
     if not report["github"]["ok"]:

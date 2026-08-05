@@ -38,6 +38,18 @@ def resolve_sp_oauth_token() -> str | None:
                 return token
         except Exception:
             pass
+    # Do not let a missing legacy profile trigger the SDK's ambient auth
+    # discovery/network path. On local setup tests (and on a cold PAT-only
+    # container) there is no profile; return immediately so setup scripts can
+    # use DATABRICKS_TOKEN instead of hanging for an unavailable SP login.
+    cfg_path = Path(os.path.expanduser("~/.databrickscfg"))
+    try:
+        config = configparser.ConfigParser()
+        config.read(cfg_path)
+        if SP_PROFILE not in config:
+            return None
+    except Exception:
+        return None
     try:
         from databricks.sdk.core import Config
         headers = Config(profile=SP_PROFILE).authenticate()
@@ -197,6 +209,7 @@ def write_databricks_token_wrapper(target_dir, real_cli: str) -> Path:
     target_dir.mkdir(parents=True, exist_ok=True)
     wrapper_path = target_dir / "databricks"
     source = f'''#!{sys.executable}
+import configparser
 import datetime
 import json
 import os
@@ -216,11 +229,34 @@ def _profile(args):
     return None
 
 
-args = sys.argv[1:]
-if args[:2] == ["auth", "token"] and _profile(args) == PROFILE:
+def _broker_token():
     url = os.environ.get("CODA_SP_TOKEN_BROKER_URL", "")
-    with urlopen(url, timeout=5) as response:
-        token = response.read().decode().strip()
+    if not url:
+        return None
+    try:
+        with urlopen(url, timeout=5) as response:
+            token = response.read().decode().strip()
+        return token or None
+    except Exception:
+        return None
+
+
+def _profile_host():
+    path = os.path.expanduser("~/.databrickscfg")
+    try:
+        cfg = configparser.ConfigParser(interpolation=None)
+        cfg.read(path)
+        return (cfg.get(PROFILE, "host", fallback="") or "").strip()
+    except Exception:
+        return ""
+
+
+args = sys.argv[1:]
+profile = _profile(args) or os.environ.get("DATABRICKS_CONFIG_PROFILE")
+if args[:2] == ["auth", "token"] and _profile(args) == PROFILE:
+    token = _broker_token()
+    if not token:
+        os.execv(REAL_CLI, [REAL_CLI, *args])
     # Emit the FULL OAuth token shape the databricks-sdk CLI token source
     # (DatabricksCliTokenSource) requires: access_token + token_type + expiry.
     # ALWAYS emit JSON — NOT gated on `--output json`. The SDK builds the token
@@ -253,6 +289,23 @@ if args[:2] == ["auth", "token"] and _profile(args) == PROFILE:
     # by the SDK, so we don't special-case it.
     print(json.dumps(payload))
     raise SystemExit(0)
+
+# Direct terminal commands (e.g. `databricks current-user me`) do not invoke
+# the SDK's `auth token` subcommand, so they would otherwise reach the real CLI
+# with the secret-free omnigents-host profile and fail looking for an OAuth
+# cache. For that one profile, mint a broker token and hand it to the real CLI
+# through process-local env vars. The token never enters the shell's exported
+# environment or a file, and other profiles/commands are delegated untouched.
+if profile == PROFILE:
+    token = _broker_token()
+    if token:
+        env = dict(os.environ)
+        env["DATABRICKS_TOKEN"] = token
+        host = _profile_host()
+        if host:
+            env["DATABRICKS_HOST"] = host
+        env.pop("DATABRICKS_CONFIG_PROFILE", None)
+        os.execve(REAL_CLI, [REAL_CLI, *args], env)
 
 os.execv(REAL_CLI, [REAL_CLI, *args])
 '''

@@ -45,6 +45,9 @@ class TestReadyEndpointParsing:
         raw = [{"name": "b", "state": {"ready": "READY"}}, {"name": "a", "state": {"ready": "READY"}}]
         assert verifier.ready_endpoints(raw) == ["a", "b"]
 
+    def test_accepts_flat_state_shape(self, verifier):
+        assert verifier.ready_endpoints({"endpoints": [{"name": "a", "state": "READY"}]}) == ["a"]
+
     @pytest.mark.parametrize("raw", [None, {}, [], "garbage"])
     def test_malformed_or_empty_is_empty(self, verifier, raw):
         assert verifier.ready_endpoints(raw) == []
@@ -70,6 +73,13 @@ class TestCatalogExtraction:
             }
         }
         assert verifier.opencode_models(cfg) == ["claude", "gpt"]
+
+    def test_claude_models_strips_1m_suffix(self, verifier, tmp_path):
+        cfg = {"env": {
+            "ANTHROPIC_MODEL": "databricks-claude-opus-4-8",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": "databricks-claude-opus-4-8[1m]",
+        }}
+        assert verifier.claude_active_models(cfg) == ["databricks-claude-opus-4-8"]
 
 
 class TestCatalogParity:
@@ -138,6 +148,7 @@ class TestFailureAggregation:
             "model_token_identity": {"ok": True, "classified_as": "service_principal"},
             "databricks_cli": {"command_ok": True},
             "model_catalogs": {
+                "claude": {"exact_match": True, "config_exists": True},
                 "pi": {"exact_match": True, "config_exists": True},
                 "opencode": {
                     "exact_match": True,
@@ -145,7 +156,7 @@ class TestFailureAggregation:
                     "cli_display_exact_match": True,
                 },
             },
-            "inference": {"pi": {"ok": True}, "opencode": {"ok": True}},
+            "inference": {"claude": {"ok": True}, "pi": {"ok": True}, "opencode": {"ok": True}},
             "github": {"ok": True},
             "workspace_round_trip": {"ok": True},
         }
@@ -159,6 +170,7 @@ class TestFailureAggregation:
             (lambda r: r["auth_material"].update(broker_url_present=False), "SP broker URL absent"),
             (lambda r: r["auth_material"].update(default_pat_present=True), "PAT present while testing SP-only baseline"),
             (lambda r: r["model_token_identity"].update(classified_as="user"), "Pi helper token did not identify as a service principal"),
+            (lambda r: r["model_catalogs"]["claude"].update(exact_match=False), "claude model catalog does not exactly match READY compatible endpoints"),
             (lambda r: r["model_catalogs"]["pi"].update(exact_match=False), "pi model catalog does not exactly match READY compatible endpoints"),
             (lambda r: r["model_catalogs"]["opencode"].update(cli_display_exact_match=False), "OpenCode displayed model list does not exactly match READY compatible endpoints"),
             (lambda r: r["inference"]["opencode"].update(ok=False), "opencode inference smoke failed"),

@@ -12,6 +12,8 @@ import os
 import stat
 import subprocess
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 import pytest
@@ -104,9 +106,42 @@ class TestSetupPiConfig:
         assert result.returncode == 0
         assert not (tmp_path / ".pi" / "agent" / "models.json").exists()
 
-    def test_no_token_installs_but_skips_config(self, tmp_path):
+    def test_no_token_and_no_broker_installs_but_skips_config(self, tmp_path):
         _seed_fake_pi_binary(tmp_path)
-        result = run_setup_pi(tmp_path, {"DATABRICKS_TOKEN": ""})
+        result = run_setup_pi(tmp_path, {"DATABRICKS_TOKEN": "", "CODA_SP_TOKEN_BROKER_URL": ""})
         assert result.returncode == 0
-        # Config write is gated on a token; without one, no models.json.
+        # No auth source at all still skips config; this is distinct from the
+        # SP-broker case below.
         assert not (tmp_path / ".pi" / "agent" / "models.json").exists()
+
+    def test_sp_broker_token_allows_config_without_pat(self, tmp_path):
+        """SP baseline: Pi setup must not gate models.json on raw
+        DATABRICKS_TOKEN. The broker is the auth source when no PAT exists."""
+        _seed_fake_pi_binary(tmp_path)
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802
+                body = b"sp-token-for-setup"
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args):
+                pass
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            result = run_setup_pi(tmp_path, {
+                "DATABRICKS_TOKEN": "",
+                "CODA_SP_TOKEN_BROKER_URL": f"http://127.0.0.1:{server.server_port}/token",
+            })
+        finally:
+            server.shutdown()
+            thread.join(timeout=2)
+
+        assert result.returncode == 0, result.stderr
+        config = read_models(tmp_path)
+        assert config["providers"]["databricks-claude"]["apiKey"].startswith("!")

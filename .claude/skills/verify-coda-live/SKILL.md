@@ -1,6 +1,6 @@
 ---
 name: verify-coda-live
-description: Use after merging CoDA PRs, before a release, or when asked whether coda-main still works. Drives coda-main through an authenticated Chrome session and CoDA's JSON terminal API, runs the structured scripts/verify_coda_live.py smoke test, and returns evidence for SP-authenticated Pi/OpenCode inference, live workspace model-catalog parity, GitHub CLI access, and Databricks CLI workspace read/write access. Can switch coda-main's git-linked deployment branch and always restores it.
+description: Use after merging CoDA PRs, before a release, or when asked whether coda-main still works. Drives coda-main through an authenticated Chrome session and CoDA's JSON terminal API, runs the structured scripts/verify_coda_live.py smoke test, and returns evidence for SP-authenticated Claude Code/Pi/OpenCode inference, live workspace model-catalog parity, GitHub CLI access, and Databricks CLI workspace read/write access. Can switch coda-main's git-linked deployment branch and always restores it.
 ---
 
 # Verify CoDA live on `coda-main`
@@ -15,12 +15,15 @@ starts one terminal session through JSON APIs, and reports the resulting JSON.
 A run passes only when all three hold:
 
 1. **Agent inference / model discovery**
-   - Pi and OpenCode both make a real model call through Unity AI Gateway.
+   - Claude Code, Pi and OpenCode all make a real model call through Unity AI
+     Gateway.
    - The token used by Pi's helper identifies as the **app service principal**
      when `--expect-model-auth sp` is selected.
    - No user PAT is present for the SP-only baseline.
    - Each agent's configured model catalog exactly matches the compatible READY
      serving endpoints in the active workspace:
+       - Claude: active `ANTHROPIC_*_MODEL` settings are READY
+         `databricks-claude-*` endpoints.
        - Pi: READY `databricks-claude-*` endpoints.
        - OpenCode: READY `databricks-claude-*`, `databricks-gemini-*`, and
          `databricks-gpt-*` endpoints.
@@ -39,8 +42,9 @@ A run passes only when all three hold:
      byte-for-byte, and deleted. The verifier cleans it in `finally` even when
      an intermediate step fails.
 
-The two inference prompts request one fixed marker each (`CODA_PI_OK`,
-`CODA_OPENCODE_OK`) and enable no tools, so token/cost usage is minimal.
+The three inference prompts request one fixed marker each (`CODA_CLAUDE_OK`,
+`CODA_PI_OK`, `CODA_OPENCODE_OK`) and enable no tools, so token/cost usage is
+minimal.
 
 ---
 
@@ -268,6 +272,8 @@ auth_material.default_pat_present == false
 auth_material.broker_url_present == true
 model_token_identity.classified_as == "service_principal"
 model_token_identity.ok == true
+inference.claude.ok == true
+inference.claude.marker_seen == true
 inference.pi.ok == true
 inference.pi.marker_seen == true
 inference.opencode.ok == true
@@ -429,13 +435,14 @@ Return one concise report with:
 1. App, deployed branch, resolved commit, deployment status.
 2. Setup steps not complete.
 3. SP-auth evidence (no PAT, broker present, `/Me` classified SP).
-4. Pi inference result + selected model.
-5. OpenCode inference result + selected model.
-6. Pi and OpenCode catalog parity — list extras and missing models explicitly.
-7. GitHub login, viewer permission, and git ls-remote result.
-8. Databricks CLI identity and workspace round-trip result.
-9. Cleanup and branch-restore result.
-10. Overall PASS/FAIL, copying the verifier's `failures` array verbatim.
+4. Claude Code inference result + selected model.
+5. Pi inference result + selected model.
+6. OpenCode inference result + selected model.
+7. Claude/Pi/OpenCode catalog parity — list extras and missing models explicitly.
+8. GitHub login, viewer permission, and git ls-remote result.
+9. Databricks CLI identity and workspace round-trip result.
+10. Cleanup and branch-restore result.
+11. Overall PASS/FAIL, copying the verifier's `failures` array verbatim.
 
 Never collapse a failed subcheck into "mostly works." The purpose is to find the
 regression surface created by the merge batch.
