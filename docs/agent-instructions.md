@@ -207,9 +207,27 @@ databricks apps start <app-name> --profile <profile>
 databricks apps logs <app-name> --profile <profile>
 ```
 
-**Known noisy boot warning (safe to ignore until wired):**
-`error resolving resource challenge-repo-token ... not found` — the secret key is
-`challenge-repo-read-token`.
+**Known noisy boot errors (safe to ignore until wired):**
+
+```
+[BUILD] [ERROR] error resolving resource omnigent-server-url for env OMNIGENTS_SERVER_URL: resource omnigent-server-url not found
+[BUILD] [ERROR] error resolving resource omnigent-wheels for env OMNIGENTS_WHEEL_SPEC: resource omnigent-wheels not found
+```
+
+`app.yaml` resolves both Omnigent vars via `valueFrom` so the committed file
+carries no workspace-specific values (§5). When the resources aren't attached,
+the platform logs an ERROR per var and passes an empty string —
+`omnigents_host_enabled()` then returns False and host attach is simply off.
+**Deployment still succeeds** — verified on `coda-main`. Attach them with
+`make attach-omnigent-resources` to silence these and turn the host on.
+
+The log level is the platform's, not ours; there is no way to reference an
+optional resource without it. The alternative (commenting the vars out) trades
+these two lines for "you must edit a committed file to enable the feature",
+which is what the `valueFrom` indirection exists to avoid.
+
+Also expected, same shape: `error resolving resource challenge-repo-token ...
+not found` — note the secret key is `challenge-repo-read-token`.
 
 **`grant-omnigent-host` silently fails** when no Omnigent server app exists on
 the workspace (`databricks apps get-permissions omnigent` → "App does not
