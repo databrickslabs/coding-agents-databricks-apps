@@ -23,6 +23,7 @@ def run_setup_mlflow(tmp_path, env_overrides=None):
         "HOME": str(tmp_path),
         "DATABRICKS_HOST": "https://test.cloud.databricks.com",
         "DATABRICKS_TOKEN": "dapi_test_token",
+        "CODA_VENV_PYTHON": "/usr/bin/true",
         "PATH": os.environ.get("PATH", ""),
     }
     if env_overrides:

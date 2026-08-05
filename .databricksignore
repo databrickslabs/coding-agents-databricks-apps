@@ -1,0 +1,33 @@
+# databricks sync uploads UNTRACKED files too — .gitignore does NOT apply here.
+# This file is the security boundary for what reaches the workspace.
+
+# Version control internals — never sync (history + credentials leak risk)
+.git/
+
+# Local virtualenv / vendored deps — huge, machine-specific, not needed at runtime
+.venv/
+vendor/
+
+# Playwright e2e SSO session state — LIVE workspace cookies. Leaked once
+# (2026-07-07); must never reach the workspace.
+tests/e2e/auth.json
+tests/e2e/.cache/
+tests/e2e/test-results/
+tests/e2e/playwright-report/
+
+# Editor / agent-scaffold artifacts (machine-local)
+.cursor/
+AGENTS.md
+.codex/
+
+# Python / test caches
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.pyc
+
+# Node
+node_modules/
+
+# Local app.yaml overrides (real workspace wiring — never sync)
+app.yaml.*.local

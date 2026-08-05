@@ -7,16 +7,22 @@ env:
   - name: DATABRICKS_TOKEN
     valueFrom: DATABRICKS_TOKEN
   - name: ANTHROPIC_MODEL
-    value: databricks-claude-opus-4-6
+    value: databricks-claude-opus-4-8
+  - name: PI_MODEL
+    value: databricks-claude-opus-4-8
   - name: GEMINI_MODEL
     value: databricks-gemini-2-5-pro
   - name: HERMES_MODEL
-    value: databricks-claude-opus-4-7
+    value: databricks-claude-opus-4-8
   - name: HERMES_FALLBACK_MODEL
-    value: databricks-claude-opus-4-6
+    value: databricks-claude-opus-4-8
   # Set ENABLE_HERMES=false to skip Hermes Agent install.
   # Other CLIs are unaffected.
   - name: ENABLE_HERMES
+    value: "true"
+  # Set ENABLE_PI=false to skip installing the Pi coding agent.
+  # Other CLIs are unaffected.
+  - name: ENABLE_PI
     value: "true"
   #OPTIONAL: Use the new Databricks AI Gateway if you have access (recommended), otherwise it will default to the older endpoint
   - name: DATABRICKS_GATEWAY_HOST
@@ -26,8 +32,9 @@ env:
   # completes the rollout and auto memory is on by default, this can be removed entirely.
   - name: CLAUDE_CODE_DISABLE_AUTO_MEMORY
     value: 0
-  # Set MLFLOW_TRACING_ENABLED=true to auto-trace Claude, Codex, and Gemini
-  # sessions into /Users/{app_owner}/{app_name}. Default off to keep installs
-  # lightweight — opt in when you want observability across all three agents.
+  # Set MLFLOW_TRACING_ENABLED=true to auto-trace Claude Code + Codex sessions
+  # into /Users/{app_owner}/{app_name}. (Gemini/Hermes/Pi/OpenCode have no
+  # first-party MLflow hook — see docs/observability.md §1.) Default off to keep
+  # installs lightweight — opt in when you want per-agent trajectory traces.
   - name: MLFLOW_TRACING_ENABLED
     value: "false"

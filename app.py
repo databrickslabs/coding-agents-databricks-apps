@@ -1,4 +1,7 @@
 import os
+import sys
+import hmac
+import codecs
 import pty
 import fcntl
 import struct
@@ -21,8 +24,11 @@ import tomllib
 import requests
 
 import app_state
-from utils import ensure_https, get_gateway_host
+import enterprise_config
+from claude_otel import apply_claude_otel_env
+from utils import add_1m_context_suffix, ensure_https, get_gateway_host
 from pat_rotator import PATRotator
+from sp_token_broker import BROKER_URL_ENV, broker_url, mint_sp_token, start_sp_token_broker
 from telemetry import log_telemetry, set_product_info
 
 # Sanitize DATABRICKS_TOKEN early — the platform sometimes injects trailing
@@ -50,6 +56,32 @@ MAX_CONCURRENT_SESSIONS = int(os.environ.get("MAX_CONCURRENT_SESSIONS", "5"))
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
+# ── Crash breadcrumbs ─────────────────────────────────────────────────
+# The app runs a single gunicorn worker, so an unhandled exception in ANY
+# background thread (PTY readers, cleanup, setup pool, telemetry) that isn't
+# already wrapped can silently take down the process with no traceback. These
+# hooks guarantee a full traceback lands in the log first. Registered at import
+# so they cover threads spawned before initialize_app().
+def _log_uncaught_main(exc_type, exc_value, exc_tb):
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+        return
+    logger.critical("UNCAUGHT EXCEPTION in main thread — process may exit",
+                    exc_info=(exc_type, exc_value, exc_tb))
+
+
+def _log_uncaught_thread(args):
+    if issubclass(args.exc_type, SystemExit):
+        return
+    logger.critical("UNCAUGHT EXCEPTION in thread %r — that thread has died",
+                    getattr(args.thread, "name", "?"),
+                    exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
+
+
+sys.excepthook = _log_uncaught_main
+threading.excepthook = _log_uncaught_thread
+
 # PAT auto-rotation — initialized after sessions dict is defined (see below)
 
 app = Flask(__name__, static_folder='static', static_url_path='/static')
@@ -65,7 +97,10 @@ sessions = {}
 sessions_lock = threading.Lock()
 
 # PAT auto-rotation (short-lived tokens, background refresh)
-# Only rotates while active sessions exist — stops when all sessions are reaped
+# Only rotates while active sessions exist — stops when all sessions are reaped.
+# Interval/lifetime are env-overridable (PAT_ROTATION_INTERVAL / PAT_TOKEN_LIFETIME)
+# via the module-level defaults in pat_rotator.py; the workshop overlay sets them
+# for the shared box, while secure boxes keep 10-minute rotation / 15-minute lifetime.
 pat_rotator = PATRotator(
     session_count_fn=lambda: len(sessions),
 )
@@ -83,7 +118,15 @@ def handle_sigterm(signum, frame):
         logger.info("SIGTERM received during startup — ignoring (likely stale signal)")
         return
     shutting_down = True
-    logger.info("SIGTERM received — setting shutting_down flag for clients")
+    # Record uptime + active session count with the signal so the log shows
+    # whether the platform reaped us mid-load vs. a clean redeploy.
+    try:
+        _sess = len(sessions)
+    except Exception:
+        _sess = "?"
+    logger.warning("SIGTERM received after %.0fs uptime (%s active sessions) "
+                   "— platform is stopping this worker",
+                   time.time() - _start_time, _sess)
     # Notify WS clients immediately (HTTP poll clients will see shutting_down on next poll)
     try:
         socketio.emit('shutting_down', {})
@@ -108,6 +151,7 @@ setup_state = {
         {"id": "dbcli",     "label": "Upgrading Databricks CLI",     "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "proxy",   "label": "Starting content-filter proxy", "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "claude",     "label": "Configuring Claude CLI",       "status": "pending", "started_at": None, "completed_at": None, "error": None},
+        {"id": "pi",         "label": "Configuring Pi CLI",           "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "codex",      "label": "Configuring Codex CLI",        "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "opencode",   "label": "Configuring OpenCode CLI",     "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "gemini",     "label": "Configuring Gemini CLI",       "status": "pending", "started_at": None, "completed_at": None, "error": None},
@@ -116,6 +160,14 @@ setup_state = {
         {"id": "mlflow",     "label": "Enabling MLflow tracing",       "status": "pending", "started_at": None, "completed_at": None, "error": None},
     ]
 }
+
+# Workshop deploys (app.yaml.workshop) preload the private challenge repo at
+# container startup (spec A-R7). Register the step in the setup UI only when
+# configured so normal deploys are unaffected.
+if os.environ.get("CHALLENGE_REPO_URL"):
+    setup_state["steps"].append(
+        {"id": "challenge", "label": "Preloading challenge repo", "status": "pending", "started_at": None, "completed_at": None, "error": None}
+    )
 
 
 def _update_step(step_id, **kwargs):
@@ -133,6 +185,36 @@ def _get_setup_state_snapshot():
 
 # Single-user security: only the token owner can access the terminal
 app_owner = None
+_omnigent_sp_creds = None
+_sp_token_broker_server = None
+
+
+def _owner_check_disabled() -> bool:
+    """True when the operator has opted OUT of the single-user owner binding.
+
+    Set CODA_DISABLE_OWNER_CHECK=true for a shared, trusted, time-boxed
+    deployment (e.g. a workshop) where every attendee drives the terminal as
+    the single injected PAT identity. This ONLY opens the terminal + WebSocket
+    auth — the owner-gated write endpoints (configure-pat, omnigent-host/share)
+    stay owner-only so an attendee can't overwrite the shared PAT or mis-grant
+    the Omnigent host. app_owner is still resolved normally, so the Omnigent
+    integration is unaffected. Off by default; fail-closed remains the norm.
+    """
+    return os.environ.get("CODA_DISABLE_OWNER_CHECK", "").strip().lower() in (
+        "true", "1", "yes"
+    )
+
+
+def _venv_python():
+    """Return the interpreter that runs the app.
+
+    On the Databricks Apps runtime gunicorn runs inside the uv-managed venv,
+    so ``sys.executable`` already has every declared dependency (including
+    databricks-sdk) importable. Invoking setup scripts with this interpreter
+    directly removes the need for ``uv run python`` (which re-resolves the
+    environment on every call and depends on ``uv`` being on PATH).
+    """
+    return sys.executable
 
 
 def _run_step(step_id, command):
@@ -142,10 +224,15 @@ def _run_step(step_id, command):
         if not env.get("HOME") or env["HOME"] == "/":
             env["HOME"] = "/app/python/source_code"
         home = env.get("HOME", "/app/python/source_code")
-        # Ensure uv and other tools in ~/.local/bin are on PATH
+        # Ensure uv and other tools in ~/.local/bin are on PATH. Still needed
+        # for `uv tool install` (Hermes) and any script that shells out to uv.
         local_bin = os.path.join(home, ".local", "bin")
         if local_bin not in env.get("PATH", ""):
             env["PATH"] = f"{local_bin}:{env.get('PATH', '')}"
+        # Expose the venv interpreter so child scripts that need to re-exec a
+        # dependency-complete Python (e.g. Claude's apiKeyHelper) can use it
+        # instead of shelling out to `uv run`.
+        env.setdefault("CODA_VENV_PYTHON", _venv_python())
         env.pop("DATABRICKS_CLIENT_ID", None)
         env.pop("DATABRICKS_CLIENT_SECRET", None)
 
@@ -161,11 +248,202 @@ def _run_step(step_id, command):
         _update_step(step_id, status="error", completed_at=time.time(), error=str(e))
 
 
+def _build_terminal_shell_env(base_env: dict) -> dict:
+    """Build the env dict for a user terminal PTY.
+
+    Starts from ``base_env`` (typically ``os.environ``) and strips the
+    credentials and CLI-state vars that should never reach a user shell:
+
+    - ``CLAUDECODE`` / ``CLAUDE_CODE_SESSION`` — would mark the terminal as
+      a nested-Claude session.
+    - ``DATABRICKS_TOKEN`` / ``DATABRICKS_HOST`` — forces CLIs to read
+      ``~/.databrickscfg`` per-request so they pick up rotated PATs without
+      an env-snapshot rewrite.
+    - ``GEMINI_API_KEY`` — same pattern, read from config file instead.
+    - ``NPM_TOKEN`` / ``UV_DEFAULT_INDEX`` / ``UV_INDEX_*_PASSWORD`` /
+      ``UV_INDEX_*_USERNAME`` / ``npm_config_//host/:_authToken`` —
+      deployer-level credentials from app.yaml that must not be readable
+      via ``env`` inside the user terminal. The user's npm/uv operations
+      still work because ``~/.npmrc`` (written by
+      ``enterprise_config.bootstrap``) holds the registry config — they
+      just can't see the bearer token in plaintext. (F-01)
+    - ``CHALLENGE_REPO_READ_TOKEN`` — workshop-only read token for the
+      startup challenge-repo clone; must never be exposed in attendee
+      terminals.
+    """
+    shell_env = base_env.copy()
+    shell_env["TERM"] = "xterm-256color"
+    lc_all = shell_env.get("LC_ALL")
+    locale_value = lc_all if lc_all else shell_env.get("LANG", "")
+    if not locale_value.replace("-", "").replace("_", "").lower().endswith("utf8"):
+        shell_env["LANG"] = "C.UTF-8"
+        shell_env["LC_ALL"] = "C.UTF-8"
+    if shell_env.get("ENABLE_SP_APIKEYHELPER", "").strip().lower() in ("true", "1", "yes"):
+        shell_env["DATABRICKS_CONFIG_PROFILE"] = "omnigents-host"
+
+    # Always-strip fixed names
+    for key in (
+        "CLAUDECODE", "CLAUDE_CODE_SESSION",
+        "DATABRICKS_TOKEN", "DATABRICKS_HOST",
+        "GEMINI_API_KEY",
+        "NPM_TOKEN", "UV_DEFAULT_INDEX",
+        "CHALLENGE_REPO_READ_TOKEN",
+    ):
+        shell_env.pop(key, None)
+
+    # Pattern-strip operator-named registry credentials
+    for key in list(shell_env.keys()):
+        if (
+            key.startswith("npm_config_//")  # derived registry-auth tokens
+            or (
+                key.startswith("UV_INDEX_")
+                and (key.endswith("_PASSWORD") or key.endswith("_USERNAME"))
+            )
+        ):
+            shell_env.pop(key, None)
+
+    return shell_env
+
+
+# Home-level agent context, fanned out to GEMINI.md / PI.md by the setup_*.py
+# scripts (they read this exact path). Regenerated at every boot so the
+# ephemeral-container operating rules survive a disk recycle — a hand-edited
+# ~/CLAUDE.md would not (home is not a git repo, so it is never synced).
+_HOME_CLAUDE_MD = '''# Coding Agents on Databricks (CoDA)
+
+Global operating context for every AI coding agent in this environment — Claude
+Code, Codex, Gemini CLI, Hermes Agent, OpenCode. (This file is fanned out to
+`GEMINI.md` / `PI.md` at boot, so all agents inherit what's here.)
+
+---
+
+## \u26a0\ufe0f 0. This is an EPHEMERAL container — a git commit is your only backup
+
+CoDA runs inside a Databricks App container whose disk can be recycled at any
+time (redeploy, restart, timeout, platform recycle). Local disk is scratch.
+
+A `post-commit` hook auto-syncs every repo under `~/projects/` to Databricks
+Workspace at `/Workspace/Shared/coda/{app-name}/{repo}/`. **Nothing that isn't
+committed survives a recycle.** So:
+
+> ⚠ **Shared CoDA:** this container's filesystem (`~/projects/`, git config, and
+> the Workspace sync-back) is **shared with everyone else on this app**. Two
+> people committing the same repo trample each other. Work in your **own git
+> worktree or branch** (`git worktree add ../<you>-<branch> -b <branch>`) — don't
+> commit on top of someone else's tree.
+
+1. **Commit small and commit often.** After every self-contained change — a
+   working function, a passing test, a fixed bug — commit. Never batch a whole
+   session into one commit; a recycle mid-session loses all of it.
+2. **A commit == a backup.** The commit triggers the sync. "I'll commit at the
+   end" is how work gets lost here.
+3. **Verify the sync happened.** After committing, check `tail ~/.sync.log` for
+   a `\u2713 Synced to /Workspace/...` line. If you see `\u26a0 Sync failed`, fix it
+   before continuing — an unsynced commit is not a backup.
+4. **After a recycle, restore before new work.** If a project dir is missing or
+   stale, rehydrate it from Workspace with
+   `python /app/python/source_code/restore_from_workspace.py <repo-name>`
+   *before* rebuilding from memory.
+5. **NEVER move or import `.git` into the Workspace.** If you run
+   `databricks workspace import`, exclude `.git` — moving it corrupts the repo
+   and breaks the sync/restore round-trip. This rule has bitten people
+   repeatedly.
+
+Recovery cheat-sheet:
+```bash
+tail -n 20 ~/.sync.log                                   # did my commits sync?
+python /app/python/source_code/restore_from_workspace.py <repo-name>   # rehydrate
+python /app/python/source_code/sync_to_workspace.py "$(git rev-parse --show-toplevel)"  # manual re-sync
+```
+
+---
+
+## 1. Start every project in git
+
+Before creating any new project or docs, initialize git first — that's what
+makes the workspace backup work:
+```bash
+mkdir ~/projects/my-project && cd ~/projects/my-project && git init
+# or: git clone https://github.com/user/repo.git   (into ~/projects/)
+```
+Only repos inside `~/projects/` are synced.
+
+---
+
+## 2. Working conventions (shared)
+
+- One logical change per commit; imperative commit messages; work on a branch.
+- Make the smallest change that satisfies the task — no unrequested refactors.
+- Understand every line you submit; code review is the bottleneck.
+- Never commit secrets, `.env` files, or credentials.
+- A repo may have its own `AGENTS.md` / `CLAUDE.md` — those take precedence for
+  project-specific setup, conventions, and gotchas.
+
+---
+
+## 3. Databricks CLI
+
+Pre-configured with your credentials. Test: `databricks current-user me`.
+Authenticate with a PAT **or** a `CLIENT_ID`/`CLIENT_SECRET` pair — not both. If
+login misbehaves, unset `DATABRICKS_CLIENT_ID` + `DATABRICKS_CLIENT_SECRET` and
+retry so access is based only on the owner's credentials.
+```bash
+databricks workspace list /Workspace/Users/
+databricks jobs list
+databricks clusters list
+```
+
+---
+
+## 4. What's installed
+
+- **5 agents**: Claude Code, Codex, Gemini CLI, Hermes Agent (`hermes chat`),
+  OpenCode.
+- **Skills**: Databricks skills (ai-dev-kit) + Superpowers dev-workflow skills.
+- **MCP servers**: DeepWiki (ask any GitHub repo), Exa (web search).
+- **Micro editor**, GitHub CLI, tmux.
+
+---
+
+## 5. Architecture (one-liner)
+
+Real-time terminal I/O over WebSocket (Flask-SocketIO) with HTTP-polling
+fallback. Single gunicorn worker (PTY fds are process-local), 16 gthread
+threads. Parallel agent setup at startup via ThreadPoolExecutor.
+
+---
+
+## Credits
+- Databricks skills: [databricks-solutions/ai-dev-kit](https://github.com/databricks-solutions/ai-dev-kit)
+- Dev-workflow skills: [obra/superpowers](https://github.com/obra/superpowers)
+'''
+
+
+def _write_home_claude_md():
+    """Write the home-level CLAUDE.md that all agents inherit.
+
+    Regenerated at boot because home is not a git repo (never synced), so a
+    hand-edited copy would evaporate on the next container recycle. The
+    setup_*.py fan-out reads this exact path to derive GEMINI.md / PI.md.
+    """
+    target = "/app/python/source_code/CLAUDE.md"
+    try:
+        with open(target, "w") as f:
+            f.write(_HOME_CLAUDE_MD)
+        logger.info(f"Home-level agent context written to {target}")
+    except Exception as e:
+        logger.warning(f"Could not write home-level CLAUDE.md: {e}")
+
+
 def _setup_git_config():
     """Configure git identity and hooks by writing files directly (no subprocess)."""
     home = os.environ.get("HOME", "/app/python/source_code")
     if not home or home == "/":
         home = "/app/python/source_code"
+
+    # Regenerate the home-level agent context (all agents inherit it; fanned out
+    # to GEMINI.md / PI.md). Done here so it's refreshed on every boot/recycle.
+    _write_home_claude_md()
 
     # Get user identity from Databricks token
     user_email = None
@@ -228,12 +506,18 @@ def _setup_git_config():
         f.write('\n')
         f.write('echo "[post-commit] $(date +%H:%M:%S) syncing $REPO_ROOT" >> "$SYNC_LOG"\n')
         f.write('\n')
-        f.write('# Use uv run so sync script gets the correct Python + deps\n')
+        # Use the app's own venv interpreter (dependency-complete) so the sync
+        # script runs with the right Python + deps without shelling out to uv.
         f.write('APP_DIR="/app/python/source_code"\n')
         f.write('SYNC_SCRIPT="$APP_DIR/sync_to_workspace.py"\n')
+        f.write(f'APP_PYTHON="{_venv_python()}"\n')
+        f.write('# Fall back to uv if the recorded interpreter is missing.\n')
+        f.write('if [ ! -x "$APP_PYTHON" ]; then\n')
+        f.write('    APP_PYTHON="uv run --project $APP_DIR python"\n')
+        f.write('fi\n')
         f.write('\n')
         f.write('if [ -f "$SYNC_SCRIPT" ]; then\n')
-        f.write('    nohup uv run --project "$APP_DIR" python "$SYNC_SCRIPT" "$REPO_ROOT" >> "$SYNC_LOG" 2>&1 & disown\n')
+        f.write('    nohup $APP_PYTHON "$SYNC_SCRIPT" "$REPO_ROOT" >> "$SYNC_LOG" 2>&1 & disown\n')
         f.write('else\n')
         f.write('    echo "[post-commit] $(date +%H:%M:%S) SKIP: sync script not found" >> "$SYNC_LOG"\n')
         f.write('fi\n')
@@ -302,14 +586,24 @@ def _configure_all_cli_auth(token):
         settings = {}
 
     settings.setdefault("env", {})
-    settings["env"]["ANTHROPIC_MODEL"] = os.environ.get("ANTHROPIC_MODEL", "databricks-claude-opus-4-7")
+    settings["env"]["ANTHROPIC_MODEL"] = os.environ.get("ANTHROPIC_MODEL", "databricks-claude-opus-4-8")
     settings["env"]["ANTHROPIC_BASE_URL"] = anthropic_base_url
-    settings["env"]["ANTHROPIC_AUTH_TOKEN"] = token
-    settings["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = "databricks-claude-opus-4-7"
-    settings["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = "databricks-claude-sonnet-4-6"
+    # Respect the spec-C apiKeyHelper: when it owns model auth (setup_claude.py
+    # installed the "apiKeyHelper" key), don't re-pin a static token here — the
+    # helper fetches its own per-TTL. Otherwise write the PAT as before.
+    if settings.get("apiKeyHelper"):
+        settings["env"].pop("ANTHROPIC_AUTH_TOKEN", None)
+    else:
+        settings["env"]["ANTHROPIC_AUTH_TOKEN"] = token
+    # [1m] suffix requests the 1M context window via the gateway (opus/sonnet
+    # only; see utils.add_1m_context_suffix). Keep in sync with setup_claude.py.
+    settings["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = add_1m_context_suffix("databricks-claude-opus-4-8")
+    settings["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = add_1m_context_suffix("databricks-claude-sonnet-4-6")
     settings["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = "databricks-claude-haiku-4-5"
     settings["env"]["ANTHROPIC_CUSTOM_HEADERS"] = "x-databricks-use-coding-agent-mode: true"
     settings["env"]["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] = "1"
+    if apply_claude_otel_env(settings, token, databricks_host):
+        logger.info("Claude Code OTEL export configured")
 
     with open(settings_path, "w") as f:
         json.dump(settings, f, indent=2)
@@ -323,11 +617,12 @@ def _configure_all_cli_auth(token):
 
     # 3. Re-run Codex, OpenCode, Gemini setup scripts with token in env
     #    They are idempotent: detect CLI already installed, just write config files
-    env = {**os.environ, "DATABRICKS_TOKEN": token}
-    for script in ["setup_codex.py", "setup_opencode.py", "setup_gemini.py", "setup_hermes.py"]:
+    env = {**os.environ, "DATABRICKS_TOKEN": token,
+           "CODA_VENV_PYTHON": _venv_python()}
+    for script in ["setup_pi.py", "setup_codex.py", "setup_opencode.py", "setup_gemini.py", "setup_hermes.py"]:
         try:
             result = subprocess.run(
-                ["uv", "run", "python", script],
+                [_venv_python(), script],
                 env=env, capture_output=True, text=True, timeout=60
             )
             if result.returncode == 0:
@@ -342,6 +637,12 @@ def run_setup():
     with setup_lock:
         setup_state["status"] = "running"
         setup_state["started_at"] = time.time()
+
+    # Apply enterprise (proxy/registry) config before any subprocess runs:
+    # writes ~/.npmrc, pushes derived env vars (npm_config_registry, CURL_CA_BUNDLE,
+    # etc.) into os.environ so every child process inherits them, and logs a
+    # banner of the effective config. No-op when no enterprise env vars are set.
+    enterprise_config.bootstrap()
 
     # Probe AI Gateway once; result is cached in _GATEWAY_RESOLVED for subprocesses
     from utils import resolve_and_cache_gateway
@@ -361,22 +662,29 @@ def run_setup():
 
     _run_step("gh", ["bash", "install_gh.sh"])
 
+
+    # tmux — required by Omnigent's native claude/codex harnesses (they launch
+    # the agent through a local tmux terminal and refuse to start without it).
+    _run_step("tmux", ["bash", "install_tmux.sh"])
+
     # --- Upgrade Databricks CLI (runtime image ships an older version) ---
     _run_step("dbcli", ["bash", "install_databricks_cli.sh"])
 
     # --- Content-filter proxy (must be running before OpenCode starts) ---
     # Sanitizes requests/responses between OpenCode and Databricks
     # (see OpenCode #5028, docs/plans/2026-03-11-litellm-empty-content-blocks-design.md)
-    _run_step("proxy", ["uv", "run", "python", "setup_proxy.py"])
+    _py = _venv_python()
+    _run_step("proxy", [_py, "setup_proxy.py"])
 
     # --- Parallel agent setup (all independent of each other) ---
     parallel_steps = [
-        ("claude",     ["uv", "run", "python", "setup_claude.py"]),
-        ("codex",      ["uv", "run", "python", "setup_codex.py"]),
-        ("opencode",   ["uv", "run", "python", "setup_opencode.py"]),
-        ("gemini",     ["uv", "run", "python", "setup_gemini.py"]),
-        ("hermes",     ["uv", "run", "python", "setup_hermes.py"]),
-        ("databricks", ["uv", "run", "python", "setup_databricks.py"]),
+        ("claude",     [_py, "setup_claude.py"]),
+        ("pi",         [_py, "setup_pi.py"]),
+        ("codex",      [_py, "setup_codex.py"]),
+        ("opencode",   [_py, "setup_opencode.py"]),
+        ("gemini",     [_py, "setup_gemini.py"]),
+        ("hermes",     [_py, "setup_hermes.py"]),
+        ("databricks", [_py, "setup_databricks.py"]),
     ]
 
     with ThreadPoolExecutor(max_workers=len(parallel_steps)) as executor:
@@ -389,7 +697,7 @@ def run_setup():
     # --- MLflow setup runs AFTER claude setup to avoid settings.json race ---
     # setup_mlflow.py merges env vars into ~/.claude/settings.json which
     # setup_claude.py also writes; running sequentially prevents clobbering.
-    _run_step("mlflow", ["uv", "run", "python", "setup_mlflow.py"])
+    _run_step("mlflow", [_py, "setup_mlflow.py"])
 
     # Sync latest token into all CLI configs — covers the race where PAT
     # rotation happened while a setup script was still installing (the
@@ -471,6 +779,10 @@ def check_authorization():
     Fails open only for local development.
     Fixes: https://github.com/datasciencemonkey/coding-agents-databricks-apps/issues/57
     """
+    # Shared-app opt-out (workshops): allow any authenticated proxy user.
+    if _owner_check_disabled():
+        return True, None
+
     # Fail closed on Databricks Apps if owner couldn't be resolved
     if not app_owner:
         if _is_databricks_apps():
@@ -501,6 +813,10 @@ def _check_ws_authorization():
     Fails CLOSED on Databricks Apps: if app_owner is unresolved or no user identity
     in headers, deny WebSocket access. Matches the HTTP handler's behavior exactly.
     """
+    # Shared-app opt-out (workshops): mirror check_authorization().
+    if _owner_check_disabled():
+        return True
+
     if not app_owner:
         if _is_databricks_apps():
             logger.error("SECURITY: app_owner not resolved — denying WebSocket (fail-closed)")
@@ -640,6 +956,22 @@ def read_pty_output(session_id, fd):
         return
     pid = session["pid"]
     session_lock = session["lock"]
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+
+    def emit_output(decoded):
+        if not decoded:
+            return
+        with session_lock:
+            # Buffer for HTTP polling fallback (AC-15)
+            session["output_buffer"].append(decoded)
+            session["last_poll_time"] = time.time()  # Keep session alive during WS output
+        # Push via WebSocket to the session room (AC-8)
+        try:
+            socketio.emit('terminal_output',
+                          {'session_id': session_id, 'output': decoded},
+                          room=session_id)
+        except Exception:
+            pass  # No WebSocket clients — HTTP polling handles it
 
     while True:
         with sessions_lock:
@@ -651,19 +983,9 @@ def read_pty_output(session_id, fd):
                 output = os.read(fd, 65536)
                 if not output:
                     # EOF — process exited
+                    emit_output(decoder.decode(b"", final=True))
                     break
-                decoded = output.decode(errors="replace")
-                with session_lock:
-                    # Buffer for HTTP polling fallback (AC-15)
-                    session["output_buffer"].append(decoded)
-                    session["last_poll_time"] = time.time()  # Keep session alive during WS output
-                # Push via WebSocket to the session room (AC-8)
-                try:
-                    socketio.emit('terminal_output',
-                                  {'session_id': session_id, 'output': decoded},
-                                  room=session_id)
-                except Exception:
-                    pass  # No WebSocket clients — HTTP polling handles it
+                emit_output(decoder.decode(output))
             else:
                 # select timed out — check if process is still alive
                 try:
@@ -773,6 +1095,98 @@ def _get_session_process(pid):
         return "unknown"
 
 
+RESOURCE_MONITOR_INTERVAL_SECONDS = int(
+    os.environ.get("RESOURCE_MONITOR_INTERVAL", "60")
+)
+
+
+def _process_tree_rss_mb():
+    """Total RSS (MB) of this process + its descendants (the agent children).
+
+    Best-effort via /proc; returns None if unavailable (non-Linux/local dev).
+    Walks the process tree from our own PID so it captures the memory the
+    spawned agents (Claude/Pi/OpenCode) actually consume, not just the worker.
+    """
+    try:
+        import glob
+        # Build pid -> (ppid, rss_pages) from /proc/*/stat
+        pgsize = os.sysconf("SC_PAGE_SIZE")
+        procs = {}
+        for stat_path in glob.glob("/proc/[0-9]*/stat"):
+            try:
+                with open(stat_path) as f:
+                    fields = f.read().split()
+                # Fields after comm can shift if comm has spaces; use rsplit on ')'.
+                pid = int(fields[0])
+                after = stat_path  # unused
+                rest = fields
+                ppid = int(rest[3])
+                rss_pages = int(rest[23])
+                procs[pid] = (ppid, rss_pages)
+            except (OSError, ValueError, IndexError):
+                continue
+        me = os.getpid()
+        # BFS over descendants
+        total_pages = procs.get(me, (0, 0))[1]
+        frontier = {me}
+        seen = {me}
+        children_by_ppid = {}
+        for pid, (ppid, _) in procs.items():
+            children_by_ppid.setdefault(ppid, []).append(pid)
+        while frontier:
+            nxt = set()
+            for p in frontier:
+                for c in children_by_ppid.get(p, []):
+                    if c not in seen:
+                        seen.add(c)
+                        nxt.add(c)
+                        total_pages += procs.get(c, (0, 0))[1]
+            frontier = nxt
+        return round(total_pages * pgsize / (1024 * 1024))
+    except Exception:
+        return None
+
+
+def resource_pressure_monitor():
+    """Periodically log memory / thread / session pressure.
+
+    Read-only observability: gives a crash a runway of telemetry instead of a
+    single silent moment, and surfaces per-session memory so the operator can
+    tune MAX_CONCURRENT_SESSIONS from data. Never raises — monitoring must not
+    be able to take down the process it's watching.
+    """
+    while True:
+        time.sleep(RESOURCE_MONITOR_INTERVAL_SECONDS)
+        try:
+            with sessions_lock:
+                n_sessions = len(sessions)
+            n_threads = threading.active_count()
+            tree_rss = _process_tree_rss_mb()
+            try:
+                import resource as _res
+                # ru_maxrss is KB on Linux — peak RSS of THIS process only.
+                peak_self_mb = round(
+                    _res.getrusage(_res.RUSAGE_SELF).ru_maxrss / 1024
+                )
+            except Exception:
+                peak_self_mb = None
+            try:
+                open_fds = len(os.listdir(f"/proc/{os.getpid()}/fd"))
+            except Exception:
+                open_fds = None
+            per_session = (
+                round(tree_rss / n_sessions) if tree_rss and n_sessions else None
+            )
+            logger.info(
+                "RESOURCE: sessions=%s/%s threads=%s tree_rss=%sMB "
+                "per_session=%sMB peak_self=%sMB open_fds=%s",
+                n_sessions, MAX_CONCURRENT_SESSIONS, n_threads,
+                tree_rss, per_session, peak_self_mb, open_fds,
+            )
+        except Exception as e:
+            logger.warning("RESOURCE monitor iteration failed: %s", e)
+
+
 def cleanup_stale_sessions():
     """Background thread that removes sessions with no recent polling."""
     while True:
@@ -805,7 +1219,7 @@ def cleanup_stale_sessions():
 def authorize_request():
     """Check authorization before processing any request."""
     # Skip auth for health check, setup status, and Socket.IO (has own auth via connect event)
-    if request.path in ("/health", "/api/setup-status", "/api/pat-status", "/api/configure-pat", "/api/app-state") or request.path.startswith("/socket.io"):
+    if request.path in ("/health", "/api/setup-status", "/api/pat-status", "/api/configure-pat", "/api/inject-pat", "/api/app-state") or request.path.startswith("/socket.io"):
         return None
 
     authorized, user = check_authorization()
@@ -909,12 +1323,42 @@ def health():
         session_count = len(sessions)
     with setup_lock:
         current_setup_status = setup_state["status"]
+
+    # Meaningful liveness signal. Previously this returned "healthy"
+    # unconditionally as long as the worker could answer — so an app whose PAT
+    # rotation had silently died (auth expiring, the suspected coda-02 window)
+    # still reported healthy until every call started 401-ing. Report the auth
+    # sub-state so a zombie is observable. Best-effort: never let the health
+    # endpoint itself raise.
+    auth = {}
+    try:
+        # Only meaningful once a token has been configured (post PAT paste /
+        # SP-auth boot). Before that, setup_status carries the real state.
+        if pat_rotator.token:
+            auth = {
+                "rotator_alive": pat_rotator.is_alive,
+                "token_expired": pat_rotator.is_token_expired,
+                "seconds_since_rotation": (
+                    round(pat_rotator.seconds_since_rotation)
+                    if pat_rotator.seconds_since_rotation is not None else None
+                ),
+            }
+    except Exception:
+        auth = {"error": "unavailable"}
+
+    # "degraded" when auth machinery has failed while the app claims to be up:
+    # rotator thread died, or the token has aged past its lifetime.
+    degraded = bool(auth.get("token_expired")) or (
+        pat_rotator.token is not None and auth.get("rotator_alive") is False
+    )
+
     return jsonify({
-        "status": "healthy",
+        "status": "degraded" if degraded else "healthy",
         "version": APP_VERSION,
         "setup_status": current_setup_status,
         "active_sessions": session_count,
-        "session_timeout_seconds": SESSION_TIMEOUT_SECONDS
+        "session_timeout_seconds": SESSION_TIMEOUT_SECONDS,
+        "auth": auth,
     })
 
 
@@ -923,11 +1367,93 @@ def get_version():
     return jsonify({"version": APP_VERSION})
 
 
+@app.route("/api/omnigents-status")
+def omnigents_status():
+    """Report Omnigents host-integration state (FR-9 observability)."""
+    from omnigents_host import get_status
+    return jsonify(get_status())
+
+
+@app.route("/api/omnigent-host/status")
+def omnigent_host_status():
+    """Report runtime Omnigent host state."""
+    from omnigents_host import get_status
+    return jsonify(get_status())
+
+
+@app.route("/api/omnigent-host/connect", methods=["POST"])
+def omnigent_host_connect():
+    """Start a runtime Omnigent host tunnel for a supplied server URL."""
+    data = request.get_json(silent=True) or {}
+    server_url = (data.get("server_url") or "").strip()
+    if not server_url:
+        return jsonify({"error": "server_url required"}), 400
+
+    from omnigents_host import connect_host
+    ok, status = connect_host(server_url, _omnigent_sp_creds)
+    if not ok:
+        code = 409 if status.get("last_error") == "host already running" else 400
+        return jsonify(status), code
+    return jsonify(status)
+
+
+@app.route("/api/omnigent-host/disconnect", methods=["POST"])
+def omnigent_host_disconnect():
+    """Stop the active runtime Omnigent host tunnel, if any."""
+    from omnigents_host import disconnect_host
+    return jsonify(disconnect_host())
+
+
+@app.route("/api/omnigent-host/share", methods=["POST"])
+def omnigent_host_share():
+    """Share this SP-owned host with the app owner so it shows in their picker.
+
+    The host is owned by the app SP, so the operator's personal Omnigent UI
+    can't see it until the owner (SP) grants them ``use``. This issues that
+    grant — and optionally launches a runner — using the captured SP creds.
+    Owner-gated identically to configure-pat: only the resolved app owner may
+    invoke it, since it acts with the SP's authority.
+    """
+    if _is_databricks_apps() and app_owner:
+        if get_request_user() != app_owner:
+            return jsonify({"error": "Forbidden"}), 403
+
+    from omnigents_host import get_status
+    server_url = os.environ.get("OMNIGENTS_SERVER_URL", "").strip() or str(
+        get_status().get("server_url") or ""
+    ).strip()
+    if not server_url:
+        return jsonify({"error": "no server_url; connect the host first"}), 400
+
+    grant_user = get_request_user() or app_owner
+    if not grant_user:
+        return jsonify({"error": "could not resolve a user to grant"}), 400
+
+    data = request.get_json(silent=True) or {}
+    launch = bool(data.get("launch", True))
+
+    from omnigents_host import share_and_launch
+    result = share_and_launch(server_url, _omnigent_sp_creds, grant_user, launch=launch)
+    return jsonify(result), (200 if result.get("ok") else 502)
+
+
 @app.route("/api/pat-status")
 def pat_status():
     """Check if a valid, usable PAT is configured."""
     host = ensure_https(os.environ.get("DATABRICKS_HOST", ""))
     token = os.environ.get("DATABRICKS_TOKEN", "").strip()
+
+    if (
+        _omnigent_sp_creds
+        and os.environ.get("ENABLE_SP_APIKEYHELPER", "").strip().lower()
+        in ("true", "1", "yes")
+    ):
+        return jsonify({
+            "auth_mode": "sp_oauth",
+            "configured": True,
+            "valid": True,
+            "user": app_owner or "app-service-principal",
+        })
 
     if not token or pat_rotator.is_token_expired:
         # No token, or token lifetime exceeded (rotation stopped while no sessions)
@@ -948,26 +1474,31 @@ def pat_status():
                        "workspace_host": host})
 
 
-@app.route("/api/configure-pat", methods=["POST"])
-def configure_pat():
-    """Accept a user-provided PAT, validate it, and start rotation."""
-    data = request.json
-    token = data.get("token", "").strip()
+def _bootstrap_pat(token):
+    """Validate a PAT, adopt it, mint a controlled short-lived token, start
+    rotation, configure all CLIs, and trigger setup.
+
+    Shared by the interactive owner endpoint (/api/configure-pat) and the
+    programmatic endpoint (/api/inject-pat). Returns (ok, payload, status_code)
+    where payload is a JSON-serializable dict. Does NOT enforce authorization —
+    callers own that (SSO owner-gate vs. shared-secret gate).
+    """
+    token = (token or "").strip()
     if not token:
-        return jsonify({"error": "Token required"}), 400
+        return False, {"error": "Token required"}, 400
 
     # Validate the token — direct HTTP, no SDK fallback
     host = ensure_https(os.environ.get("DATABRICKS_HOST", ""))
     try:
         resp = requests.get(f"{host}/api/2.0/preview/scim/v2/Me",
-                           headers={"Authorization": f"Bearer {token}"}, timeout=10)
+                            headers={"Authorization": f"Bearer {token}"}, timeout=10)
         if resp.status_code != 200:
-            return jsonify({"error": "Invalid token"}), 400
+            return False, {"error": "Invalid token"}, 400
         user = resp.json().get("userName", "unknown")
     except Exception as e:
-        return jsonify({"error": f"Token validation failed: {e}"}), 400
+        return False, {"error": f"Token validation failed: {e}"}, 400
 
-    # Immediately mint a controlled short-lived token from the user-pasted PAT.
+    # Immediately mint a controlled short-lived token from the supplied PAT.
     # This gives us a token ID we own — all future rotations can revoke the old one.
     os.environ["DATABRICKS_TOKEN"] = token
     pat_rotator._current_token = token
@@ -978,7 +1509,7 @@ def configure_pat():
         # Revoke only the bootstrap PAT — leave other user PATs intact (#98)
         pat_rotator.revoke_bootstrap_token()
     else:
-        # Rotation failed — fall back to user-pasted token (still valid)
+        # Rotation failed — fall back to supplied token (still valid)
         pat_rotator._write_databrickscfg(token)
     pat_rotator.start()
 
@@ -986,15 +1517,102 @@ def configure_pat():
     _configure_all_cli_auth(pat_rotator.token or token)
 
     # Run setup now that we have a valid token (installs CLIs, configures agents)
-    # Only run if setup hasn't completed yet
     with setup_lock:
         if setup_state["status"] != "complete":
-            setup_thread = threading.Thread(target=run_setup, daemon=True, name="setup-thread")
-            setup_thread.start()
+            threading.Thread(target=run_setup, daemon=True, name="setup-thread").start()
             logger.info("Setup triggered after PAT configuration")
 
-    logger.info(f"PAT configured interactively by {user} — rotation started")
-    return jsonify({"status": "ok", "user": user, "message": "Token configured. Auto-rotation started."})
+    return True, {
+        "status": "ok",
+        "user": user,
+        "instance": pat_rotator.instance_name,
+        "message": "Token configured. Auto-rotation started.",
+    }, 200
+
+
+@app.route("/api/inject-pat", methods=["POST"])
+def inject_pat():
+    """Programmatically inject a PAT for THIS CoDA (no SSO required).
+
+    Designed for provisioning many CoDAs in a workspace from a script: each
+    CoDA gets its own distinct PAT, and auto-rotated tokens are tagged with
+    this instance's name (see pat_rotator.rotation_comment).
+
+    Auth: requires a shared bootstrap secret. Set CODA_BOOTSTRAP_SECRET in the
+    app config, then send it as the ``X-Coda-Bootstrap-Secret`` header (or
+    ``Authorization: Bearer <secret>``). If the env var is unset, this endpoint
+    is DISABLED (returns 404) so it can't be abused on boxes that don't opt in.
+
+    Body: {"token": "dapiXXXX"}
+    """
+    expected = os.environ.get("CODA_BOOTSTRAP_SECRET", "").strip()
+    if not expected:
+        # Not opted in — behave as if the route doesn't exist.
+        return jsonify({"error": "Not found"}), 404
+
+    provided = (
+        request.headers.get("X-Coda-Bootstrap-Secret", "")
+        or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    )
+    # Constant-time compare to avoid leaking the secret via timing.
+    if not provided or not hmac.compare_digest(provided, expected):
+        logger.warning(f"Rejected inject-pat: bad/absent bootstrap secret (source={request.remote_addr})")
+        return jsonify({"error": "Forbidden"}), 403
+
+    # Single-shot, same as configure-pat: refuse if a live PAT is already set,
+    # unless it has expired (idle-timeout re-bootstrap path).
+    if pat_rotator.token and not pat_rotator.is_token_expired:
+        return jsonify({
+            "error": "PAT already configured. Restart the app to reconfigure."
+        }), 409
+
+    data = request.get_json(silent=True) or {}
+    ok, payload, status = _bootstrap_pat(data.get("token", ""))
+    if ok:
+        logger.info(
+            f"PAT injected programmatically for instance "
+            f"'{pat_rotator.instance_name or '<unnamed>'}' "
+            f"(user={payload.get('user')}) — rotation started"
+        )
+    return jsonify(payload), status
+
+
+@app.route("/api/configure-pat", methods=["POST"])
+def configure_pat():
+    """Accept a user-provided PAT, validate it, and start rotation."""
+    # Hotfix: only the resolved owner may (re-)configure the PAT. Without this,
+    # any workspace-SSO'd user who reaches the app can submit their own valid
+    # PAT and persistently impersonate the owner — every CLI call would then
+    # run under the submitter's identity. app_owner is set in initialize_app()
+    # before gunicorn binds, so it's reliably populated by request time on
+    # Databricks Apps; this guard short-circuits to "allow" only when owner
+    # resolution failed (matches the rest of the auth surface's behaviour).
+    if _is_databricks_apps() and app_owner:
+        if get_request_user() != app_owner:
+            logger.warning(f"Rejected configure-pat from non-owner {get_request_user()} (owner: {app_owner})")
+            return jsonify({"error": "Forbidden"}), 403
+
+    # Idempotency / defence-in-depth: bootstrap is single-shot. Once a PAT
+    # is configured and the rotator is alive, refuse re-submission. Without
+    # this, an XSS or session-hijack vector inside the owner's browser could
+    # drive a swap to an attacker-controlled PAT — the owner-gate above
+    # would let it through because the request truly does come from the
+    # owner's session. The expired-token escape hatch preserves the legitimate
+    # re-bootstrap path (rotator timed out while idle, owner needs to refresh).
+    if pat_rotator.token and not pat_rotator.is_token_expired:
+        logger.warning(
+            f"Rejected configure-pat: PAT already active "
+            f"(user={get_request_user()}, source={request.remote_addr})"
+        )
+        return jsonify({
+            "error": "PAT already configured. Restart the app to reconfigure."
+        }), 409
+
+    data = request.json or {}
+    ok, payload, status = _bootstrap_pat(data.get("token", ""))
+    if ok:
+        logger.info(f"PAT configured interactively by {payload.get('user')} — rotation started")
+    return jsonify(payload), status
 
 
 @app.route("/api/session", methods=["POST"])
@@ -1009,21 +1627,11 @@ def create_session():
     label = data.get("label", "")
     try:
         master_fd, slave_fd = pty.openpty()
-        # Set up environment for the shell
-        shell_env = os.environ.copy()
-        shell_env["TERM"] = "xterm-256color"
-        # Remove Claude Code env vars so the browser terminal isn't seen as nested
-        shell_env.pop("CLAUDECODE", None)
-        shell_env.pop("CLAUDE_CODE_SESSION", None)
-        # Remove DATABRICKS_TOKEN and DATABRICKS_HOST so CLI/SDK reads from
-        # ~/.databrickscfg (always current after rotation) instead of inheriting
-        # a stale env var snapshot. The SDK skips config file loading when
-        # DATABRICKS_HOST is set in env (even without credentials).
-        shell_env.pop("DATABRICKS_TOKEN", None)
-        shell_env.pop("DATABRICKS_HOST", None)
-        # Also strip CLI-specific API keys so they read from config files
-        # (always current after rotation) instead of stale env snapshots.
-        shell_env.pop("GEMINI_API_KEY", None)
+        # Set up environment for the shell — strips PAT, SP creds, registry
+        # tokens, the workshop challenge-repo token, and other secrets that
+        # must not be readable from the user's terminal. See
+        # _build_terminal_shell_env docstring for the full list.
+        shell_env = _build_terminal_shell_env(os.environ)
         # Ensure HOME is set correctly
         if not shell_env.get("HOME") or shell_env["HOME"] == "/":
             shell_env["HOME"] = "/app/python/source_code"
@@ -1034,6 +1642,15 @@ def create_session():
         # Start shell in ~/projects/ directory
         projects_dir = os.path.join(shell_env["HOME"], "projects")
         os.makedirs(projects_dir, exist_ok=True)
+
+        # Workshop: open the terminal directly inside the preloaded challenge
+        # repo when it exists (A-R7 — attendees start in the repo, no cd/clone).
+        challenge_url = os.environ.get("CHALLENGE_REPO_URL", "")
+        if challenge_url:
+            repo_name = os.path.basename(challenge_url.rstrip("/")).removesuffix(".git")
+            challenge_dir = os.path.join(projects_dir, repo_name)
+            if os.path.isdir(challenge_dir):
+                projects_dir = challenge_dir
 
         pid = subprocess.Popen(
             ["/bin/bash"],
@@ -1264,7 +1881,7 @@ def close_session():
 
 def initialize_app(local_dev=False):
     """One-time init: detect owner, start cleanup thread."""
-    global app_owner
+    global app_owner, _omnigent_sp_creds, _sp_token_broker_server
 
     # Install SIGTERM handler only for gunicorn (production).
     # For local dev, SIG_DFL is fine — the process just exits cleanly.
@@ -1272,6 +1889,12 @@ def initialize_app(local_dev=False):
         signal.signal(signal.SIGTERM, handle_sigterm)
 
     # SP credentials preserved — needed for Apps API (owner resolution) and secret persistence
+
+    # Capture the app SP's M2M OAuth creds BEFORE the strip below — the
+    # Omnigents host tunnel needs an OAuth token (the Apps proxy rejects PATs).
+    # No-op / returns None when disabled or creds absent. See omnigents_host.py.
+    from omnigents_host import capture_sp_credentials, start_host
+    _omnigent_sp_creds = capture_sp_credentials()
 
     # Resolve owner: Apps API (app.creator via SP) > PAT (current_user.me)
     app_owner = get_token_owner()
@@ -1282,11 +1905,55 @@ def initialize_app(local_dev=False):
     else:
         logger.warning("Could not determine app owner - authorization disabled")
 
+    sp_helper_enabled = os.environ.get("ENABLE_SP_APIKEYHELPER", "").strip().lower() in (
+        "true", "1", "yes",
+    )
+    host_enabled = bool(os.environ.get("OMNIGENTS_SERVER_URL", "").strip())
+    if _omnigent_sp_creds and (sp_helper_enabled or host_enabled):
+        _sp_token_broker_server = start_sp_token_broker(
+            lambda: mint_sp_token(_omnigent_sp_creds)
+        )
+        os.environ[BROKER_URL_ENV] = broker_url(_sp_token_broker_server)
+        logger.info("SP token broker listening on loopback")
+
+    # The profile retains only the workspace host for Omnigent routing. The
+    # long-lived client secret stays in this process; helpers mint via broker.
+    if _omnigent_sp_creds and sp_helper_enabled:
+        from omnigents_host import _write_oauth_profile
+        _write_oauth_profile(_omnigent_sp_creds)
+        logger.info("SP apikeyhelper: wrote secret-free host profile at boot")
+
     # Strip SP credentials — only needed for owner resolution above.
     # Keeping them causes SDK to silently fall back to SP auth when PAT is dead.
     os.environ.pop("DATABRICKS_CLIENT_ID", None)
     os.environ.pop("DATABRICKS_CLIENT_SECRET", None)
     logger.info("SP credentials stripped — PAT-only auth from this point")
+
+    # Register as an Omnigents host (no-op unless OMNIGENTS_SERVER_URL is set).
+    # Uses the SP creds captured above to mint OAuth for the host tunnel; the
+    # spawned runner uses CoDA's PAT + AI-Gateway creds for the actual coding.
+    start_host(_omnigent_sp_creds)
+
+    # Workshop: preload the private challenge repo at container startup (A-R7).
+    # The read token comes from app.yaml env (secret valueFrom), so this does
+    # not wait for PAT setup. Background thread — never blocks app boot.
+    if os.environ.get("CHALLENGE_REPO_URL"):
+        threading.Thread(
+            target=_run_step, args=("challenge", ["bash", "install_challenge_repo.sh"]),
+            daemon=True, name="challenge-preload",
+        ).start()
+
+    # SP-auth workshop path: when the app self-auths as its own SP (profile
+    # written above), no PAT paste will ever come — so trigger setup at boot
+    # instead of waiting for /api/configure-pat. Installs the agent CLIs and
+    # configures them against the SP OAuth token via the apiKeyHelper. Guarded
+    # on the same flag + captured creds; background thread, never blocks boot.
+    if _omnigent_sp_creds and os.environ.get("ENABLE_SP_APIKEYHELPER", "").strip().lower() in ("true", "1", "yes"):
+        with setup_lock:
+            already = setup_state["status"] in ("running", "complete")
+        if not already:
+            threading.Thread(target=run_setup, daemon=True, name="setup-thread-sp").start()
+            logger.info("SP apikeyhelper: setup triggered at boot (no PAT paste needed)")
 
     # Telemetry: app startup ping (fire-and-forget in background thread)
     log_telemetry("event", "app_startup")
@@ -1295,6 +1962,14 @@ def initialize_app(local_dev=False):
     cleanup_thread = threading.Thread(target=cleanup_stale_sessions, daemon=True)
     cleanup_thread.start()
     logger.info(f"Started session cleanup thread (timeout={SESSION_TIMEOUT_SECONDS}s, interval={CLEANUP_INTERVAL_SECONDS}s)")
+
+    # Start resource-pressure monitor. On a 4 vCPU / 12 GB box a couple of heavy
+    # agent sessions can approach the memory cliff; this logs a runway of
+    # telemetry so a crash isn't a single silent moment, and lets us measure
+    # real per-session RSS to tune MAX_CONCURRENT_SESSIONS with data.
+    monitor_thread = threading.Thread(target=resource_pressure_monitor, daemon=True,
+                                      name="resource-monitor")
+    monitor_thread.start()
 
 
 if __name__ == "__main__":

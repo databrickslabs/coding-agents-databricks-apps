@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 """Sync a project directory to Databricks Workspace."""
 import configparser
-import os
 import sys
 import subprocess
 from pathlib import Path
@@ -54,15 +53,13 @@ def sync_project(project_path: Path):
         return
 
     try:
-        user_email = get_user_email()
-        workspace_dest = f"/Workspace/Users/{user_email}/projects/{project_path.name}"
+        get_user_email()  # validates ~/.databrickscfg auth + inits telemetry
+        from utils import databrickscfg_only_env, workspace_sync_dest
 
-        # Strip OAuth vars so CLI falls through to ~/.databrickscfg
-        sync_env = os.environ.copy()
-        sync_env.pop("DATABRICKS_CLIENT_ID", None)
-        sync_env.pop("DATABRICKS_CLIENT_SECRET", None)
-        sync_env.pop("DATABRICKS_HOST", None)
-        sync_env.pop("DATABRICKS_TOKEN", None)
+        workspace_dest = workspace_sync_dest(project_path.name)
+
+        # Strip ambient creds so the CLI falls through to ~/.databrickscfg
+        sync_env = databrickscfg_only_env()
 
         result = subprocess.run(
             ["databricks", "sync", str(project_path), workspace_dest, "--watch=false"],
