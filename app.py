@@ -85,7 +85,30 @@ threading.excepthook = _log_uncaught_thread
 # PAT auto-rotation — initialized after sessions dict is defined (see below)
 
 app = Flask(__name__, static_folder='static', static_url_path='/static')
-app.secret_key = os.urandom(24)
+
+
+def _resolve_secret_key():
+    """Return the Flask secret_key, which signs session cookies.
+
+    Prefers FLASK_SECRET_KEY (typically wired to a Databricks secret in
+    app.yaml) so cookies survive worker restarts and stay valid across workers
+    if we ever scale beyond one. Falls back to a fresh random key, which is fine
+    for local dev — sessions there are short-lived and single-process — but logs
+    a warning because in production it silently invalidates every session on
+    each restart.
+    """
+    configured = os.environ.get("FLASK_SECRET_KEY", "").strip()
+    if configured:
+        return configured.encode()
+    logger.warning(
+        "FLASK_SECRET_KEY not set — generated an ephemeral key. "
+        "Existing sessions will be invalidated on every worker restart. "
+        "For production, wire FLASK_SECRET_KEY to a Databricks secret in app.yaml."
+    )
+    return os.urandom(24)
+
+
+app.secret_key = _resolve_secret_key()
 app.config['MAX_CONTENT_LENGTH'] = 32 * 1024 * 1024  # 32 MB — aligned with Claude Code's 30 MB file limit
 
 # WebSocket support via Flask-SocketIO (simple-websocket transport, threading mode)

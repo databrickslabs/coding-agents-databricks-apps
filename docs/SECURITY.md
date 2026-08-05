@@ -1,5 +1,9 @@
 # Security
 
+This page covers **release provenance verification**. To *report* a
+vulnerability, see [.github/SECURITY.md](../.github/SECURITY.md) — the
+disclosure policy, response timelines, and supply-chain controls live there.
+
 ## Verifying release provenance
 
 Each GitHub Release ships with:

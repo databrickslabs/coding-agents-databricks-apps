@@ -49,6 +49,23 @@ def set_product_info(ws):
         setattr(ws.config, "_product_info", ("coda", _get_version()))
 
 
+def _telemetry_disabled() -> bool:
+    """True when the operator has opted out of CoDA telemetry.
+
+    Enterprise security teams (banks, regulated retail, etc.) require an
+    inventory of every data flow that leaves their workspace boundary.
+    `CODA_TELEMETRY_DISABLED=true` in app.yaml makes log_telemetry() a
+    no-op so deployments can pass third-party-risk review with no outbound
+    telemetry to disclose.
+
+    Telemetry is on by default for backward compatibility; opt-out is
+    operator-controlled per-deployment.
+    """
+    return os.environ.get("CODA_TELEMETRY_DISABLED", "").strip().lower() in (
+        "true", "1", "yes", "on"
+    )
+
+
 def log_telemetry(key, value):
     """Send a telemetry key-value pair via the Databricks SDK User-Agent header.
 
@@ -56,7 +73,12 @@ def log_telemetry(key, value):
     key-value to the User-Agent, and fires clusters.select_spark_version()
     to transmit. Runs in a background daemon thread. Errors are caught and
     logged, never raised.
+
+    No-op if `CODA_TELEMETRY_DISABLED` is set to a truthy value — the
+    enterprise opt-out path.
     """
+    if _telemetry_disabled():
+        return
 
     def _send():
         try:

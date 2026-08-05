@@ -113,6 +113,16 @@ class TestSessionEndpointAuth:
     def test_resize_allowed_for_owner(self):
         self._assert_not_denied("POST", "/api/resize", {"session_id": "fake", "cols": 80, "rows": 24})
 
+    # -- GET /api/app-state --
+    # Historically auth-exempt; removed because it leaks app_owner email +
+    # PAT rotation timing to unauthenticated callers (review finding E-4).
+
+    def test_app_state_denied_for_non_owner(self):
+        self._assert_denied("GET", "/api/app-state")
+
+    def test_app_state_allowed_for_owner(self):
+        self._assert_not_denied("GET", "/api/app-state")
+
 
 # ---------------------------------------------------------------------------
 # 1b. /api/configure-pat MUST enforce owner check (hotfix)
