@@ -8,7 +8,11 @@ on:
 
 jobs:
   update-lockfile:
-    runs-on: databrickslabs-protected-runner-group
+    # See the note in test.yml: this repo was never granted
+    # databrickslabs-protected-runner-group, so this job never ran — which is
+    # why requirements.lock had drifted from requirements.txt. Uses only the
+    # repo-scoped GITHUB_TOKEN, no org secrets.
+    runs-on: ubuntu-latest
     permissions:
       contents: write
 
