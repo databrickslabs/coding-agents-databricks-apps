@@ -59,7 +59,7 @@ dev = [
     # against the deployed app to verify SSO + setup pipeline + security
     # fixes end-to-end. Optional: tests skip cleanly when not installed.
     "playwright>=1.40",
-    "pytest-playwright>=0.5",
+    "pytest-playwright>=0.8.0",
 ]
 
 [tool.uv]
