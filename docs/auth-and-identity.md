@@ -10,8 +10,33 @@ A CoDA container carries **two separate Databricks identities**:
 
 | Identity | What it is | What it's used for |
 |---|---|---|
-| **The user** (e.g. `user@example.com`) via the PAT in `~/.databrickscfg [DEFAULT]` | A **user** personal access token (`dapi…`), kept fresh by the PAT rotator | **Everything the terminal / CLI does**: `databricks` commands, `git`, `gh`, workspace/UC ops, and file writes. |
-| **The app service principal** (e.g. `app-4n8qml coda-02`, an OAuth client_id) | The Databricks App's own SP, no PAT | **Agent model inference**, Omnigent host registration, and spawned-runner callbacks via short-lived OAuth tokens from the loopback broker. |
+| **The user** (e.g. `user@example.com`) via the PAT in `~/.databrickscfg [DEFAULT]` | A **user** personal access token (`dapi…`), kept fresh by the PAT rotator | **Everything the terminal / CLI does**: `databricks` commands, `git`, `gh`, workspace/UC ops, and file writes — **and, by default, agent model inference** (see below). |
+| **The app service principal** (e.g. `app-4n8qml coda-02`, an OAuth client_id) | The Databricks App's own SP, no PAT | Omnigent host registration and spawned-runner callbacks via short-lived OAuth tokens from the loopback broker. The Apps proxy rejects PATs for the host tunnel, so this cannot be a PAT. Also the *fallback* for model inference when no PAT is present. |
+
+### Which identity signs model calls: `CODA_MODEL_AUTH`
+
+Model inference used to be signed with the **app SP**, which collapsed all AI
+Gateway usage, cost attribution and per-user governance onto a single identity —
+every agent on every box looked like the same principal.
+
+The default is now `CODA_MODEL_AUTH=pat`: model calls are signed with the user's
+PAT, so inference is attributed to the real user and matches the identity the
+shell/CLI already uses. Set `CODA_MODEL_AUTH=sp` to go back to the service
+principal, which buys zero-PAT onboarding (agents install with no paste) at the
+cost of that attribution.
+
+Whichever is preferred, the other is the fallback, so a missing PAT degrades
+rather than breaks. Three paths honour the flag and are kept in agreement by
+`tests/test_model_auth_priority.py`: `token_helper.resolve_databricks_token()`,
+the emitted per-request helper script (Claude Code's `apiKeyHelper` and pi's
+`!command`), and `content_filter_proxy._get_fresh_token()` (OpenCode / Hermes /
+Codex). If they disagreed, agents on the same box would run as different
+identities depending on which one you launched.
+
+> **Caveat for shared deployments.** With `CODA_DISABLE_OWNER_CHECK=true` every
+> user drives the terminal as the one injected PAT identity, so "a real user
+> identity" means *the host owner's*, not each person's. Per-user attribution
+> only holds for single-user deploys — which is why that flag is off by default.
 
 ### So: when Claude runs a command on this box, who is it?
 

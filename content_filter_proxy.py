@@ -26,7 +26,11 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
 import requests
-from token_helper import resolve_databricks_token, resolve_sp_oauth_token
+from token_helper import (
+    prefer_pat_for_model_auth,
+    resolve_databricks_token,
+    resolve_sp_oauth_token,
+)
 
 UPSTREAM_BASE = os.environ.get("PROXY_UPSTREAM_BASE", "")
 LISTEN_HOST = os.environ.get("PROXY_HOST", "127.0.0.1")
@@ -98,31 +102,37 @@ def _get_fresh_token() -> str | None:
     if cache_hot:
         return _TOKEN_CACHE["token"]
 
-    token = resolve_sp_oauth_token()
-    if token:
+    def _cache(token):
         _TOKEN_CACHE["token"] = token
         _TOKEN_CACHE["read_at"] = now
         _TOKEN_CACHE["mtime"] = mtime
         return token
 
-    try:
-        config = configparser.ConfigParser()
-        config.read(_DATABRICKSCFG_PATH)
-        token = config.get("DEFAULT", "token", fallback=None)
-        if token:
-            _TOKEN_CACHE["token"] = token
-            _TOKEN_CACHE["read_at"] = now
-            _TOKEN_CACHE["mtime"] = mtime
-            return token
-    except Exception as e:
-        log.warning(f"Could not read fresh token from {_DATABRICKSCFG_PATH}: {e}")
+    def _pat_from_cfg():
+        try:
+            config = configparser.ConfigParser()
+            config.read(_DATABRICKSCFG_PATH)
+            return config.get("DEFAULT", "token", fallback=None) or None
+        except Exception as e:
+            log.warning(f"Could not read fresh token from {_DATABRICKSCFG_PATH}: {e}")
+            return None
 
+    # Preferred identity first (CODA_MODEL_AUTH; PAT by default) so proxied
+    # agents sign model calls as the same identity as the browser-terminal ones.
+    # If these disagreed, OpenCode/Hermes/Codex would be attributed to the app SP
+    # while Claude/pi were attributed to the user.
+    if prefer_pat_for_model_auth():
+        token = _pat_from_cfg() or resolve_sp_oauth_token()
+    else:
+        token = resolve_sp_oauth_token() or _pat_from_cfg()
+    if token:
+        return _cache(token)
+
+    # Last resort: the shared resolver (also honours CODA_MODEL_AUTH) picks up
+    # $DATABRICKS_TOKEN, which the cfg read above doesn't see.
     token = resolve_databricks_token()
     if token:
-        _TOKEN_CACHE["token"] = token
-        _TOKEN_CACHE["read_at"] = now
-        _TOKEN_CACHE["mtime"] = mtime
-        return token
+        return _cache(token)
 
     return _TOKEN_CACHE.get("token")  # stale is better than nothing
 

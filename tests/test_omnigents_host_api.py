@@ -155,3 +155,80 @@ def test_omnigent_host_share_explicit_grant_user(monkeypatch):
     assert resp.status_code == 200
     assert captured["grant_user"] == "teammate@example.com"
     assert captured["launch"] is False
+
+
+# ---------------------------------------------------------------------------
+# Owner gating on the host-share endpoint
+# ---------------------------------------------------------------------------
+#
+# This endpoint acts with the app SP's authority: it grants another identity
+# `use` on an SP-owned Omnigent host. It is NOT covered by _owner_check_disabled
+# (the shared-app opt-out only opens the terminal + WebSocket), and app.yaml has
+# always promised "configure-pat and omnigent-host/share stay owner-only".
+#
+# It previously gated itself with `if _is_databricks_apps() and app_owner:`,
+# which short-circuits to *allow* when app_owner is None — so a transient
+# Apps-API failure at boot left it ungated. Unlike configure-pat there is no
+# bootstrap justification here, so it must fail CLOSED.
+
+
+def _share_request(app_module, *, owner, caller):
+    original = app_module.app_owner
+    try:
+        app_module.app_owner = owner
+        with app_module.app.test_client() as client:
+            with mock.patch.object(app_module, "_is_databricks_apps", return_value=True):
+                return client.post(
+                    "/api/omnigent-host/share",
+                    json={},
+                    headers={"X-Forwarded-Email": caller} if caller else {},
+                )
+    finally:
+        app_module.app_owner = original
+
+
+def test_host_share_denied_when_owner_unresolved():
+    """Must fail closed, not fall through to acting with SP authority."""
+    app_module = _import_app()
+
+    resp = _share_request(app_module, owner=None, caller="anyone@example.com")
+
+    assert resp.status_code == 403, (
+        f"host-share must deny when app_owner is unresolved, got {resp.status_code}"
+    )
+
+
+def test_host_share_denied_for_non_owner():
+    app_module = _import_app()
+
+    resp = _share_request(
+        app_module, owner="owner@example.com", caller="intruder@example.com"
+    )
+
+    assert resp.status_code == 403
+
+
+def test_host_share_denied_when_owner_unresolved_even_in_shared_mode(monkeypatch):
+    """The shared-app opt-out must not widen this endpoint."""
+    monkeypatch.setenv("CODA_DISABLE_OWNER_CHECK", "true")
+    app_module = _import_app()
+
+    resp = _share_request(app_module, owner=None, caller="anyone@example.com")
+
+    assert resp.status_code == 403, (
+        "CODA_DISABLE_OWNER_CHECK only opens the terminal + WebSocket; owner-only "
+        f"write endpoints must stay gated, got {resp.status_code}"
+    )
+
+
+def test_host_share_allowed_for_owner_reaches_handler():
+    """Sanity check that the gate isn't simply denying everything."""
+    app_module = _import_app()
+
+    resp = _share_request(
+        app_module, owner="owner@example.com", caller="owner@example.com"
+    )
+
+    # No server URL configured, so the handler itself rejects with 400 — the
+    # point is that it got past the owner gate rather than 403-ing.
+    assert resp.status_code != 403

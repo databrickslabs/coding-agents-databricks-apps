@@ -215,6 +215,64 @@ _omnigent_sp_creds = None
 _sp_token_broker_server = None
 
 
+def _require_owner(*, allow_unresolved_during_bootstrap: bool = False):
+    """Gate an owner-only write endpoint. Returns a Flask response to abort with,
+    or None to proceed.
+
+    Fails CLOSED on an unresolved owner by default, matching
+    check_authorization(). Both call sites previously used
+    ``if _is_databricks_apps() and app_owner:``, which short-circuits to *allow*
+    when app_owner is None — so a transient Apps-API failure at boot left them
+    ungated indefinitely.
+
+    ``allow_unresolved_during_bootstrap`` exists for exactly one case:
+    configure-pat. Owner resolution can itself depend on a PAT
+    (get_token_owner() tier 2 calls current_user.me()), so if the Apps API is
+    unavailable AND no PAT is set, requiring a resolved owner here would
+    deadlock — the owner could never finish bootstrap. That window is bounded to
+    "no live PAT configured yet": once one is set the endpoint is owner-gated
+    like everything else, and the single-shot guard further down refuses
+    re-submission anyway. Set APP_OWNER_EMAIL to remove the window entirely.
+
+    Deliberately does NOT consult _owner_check_disabled(): the shared-app opt-out
+    only opens the terminal + WebSocket. These endpoints act with the app SP's
+    authority (or rewrite the shared credential), so they stay owner-only even in
+    shared mode — which is what app.yaml's comment has always promised.
+    """
+    if not _is_databricks_apps():
+        return None  # local dev
+
+    if not app_owner:
+        bootstrapping = not pat_rotator.token
+        if allow_unresolved_during_bootstrap and bootstrapping:
+            logger.warning(
+                "SECURITY: allowing unauthenticated %s — app_owner unresolved and "
+                "no PAT configured yet, so this is the bootstrap window. Whoever "
+                "reaches the app first can claim it. Set APP_OWNER_EMAIL to close "
+                "this window.",
+                request.path,
+            )
+            return None
+        logger.error(
+            "SECURITY: refusing owner-only request to %s — app_owner unresolved "
+            "(fail-closed). Set APP_OWNER_EMAIL to resolve it without an API call.",
+            request.path,
+        )
+        return jsonify({
+            "error": "Forbidden",
+            "message": "App owner could not be resolved; owner-only endpoints are "
+                       "disabled. Set APP_OWNER_EMAIL or restart the app.",
+        }), 403
+
+    if get_request_user() != app_owner:
+        logger.warning(
+            "Rejected owner-only request to %s from non-owner %s (owner: %s)",
+            request.path, get_request_user(), app_owner,
+        )
+        return jsonify({"error": "Forbidden"}), 403
+    return None
+
+
 def _owner_check_disabled() -> bool:
     """True when the operator has opted OUT of the single-user owner binding.
 
@@ -1710,9 +1768,9 @@ def omnigent_host_share():
                   a teammate who needs to run sessions on this host.
       launch:     also launch a runner after granting (default true).
     """
-    if _is_databricks_apps() and app_owner:
-        if get_request_user() != app_owner:
-            return jsonify({"error": "Forbidden"}), 403
+    denied = _require_owner()
+    if denied:
+        return denied
 
     from omnigents_host import get_status
     server_url = os.environ.get("OMNIGENTS_SERVER_URL", "").strip() or str(
@@ -1878,17 +1936,18 @@ def inject_pat():
 @app.route("/api/configure-pat", methods=["POST"])
 def configure_pat():
     """Accept a user-provided PAT, validate it, and start rotation."""
-    # Hotfix: only the resolved owner may (re-)configure the PAT. Without this,
-    # any workspace-SSO'd user who reaches the app can submit their own valid
-    # PAT and persistently impersonate the owner — every CLI call would then
-    # run under the submitter's identity. app_owner is set in initialize_app()
-    # before gunicorn binds, so it's reliably populated by request time on
-    # Databricks Apps; this guard short-circuits to "allow" only when owner
-    # resolution failed (matches the rest of the auth surface's behaviour).
-    if _is_databricks_apps() and app_owner:
-        if get_request_user() != app_owner:
-            logger.warning(f"Rejected configure-pat from non-owner {get_request_user()} (owner: {app_owner})")
-            return jsonify({"error": "Forbidden"}), 403
+    # Only the resolved owner may (re-)configure the PAT. Without this, any
+    # workspace-SSO'd user who reaches the app can submit their own valid PAT and
+    # persistently impersonate the owner — every CLI call would then run under
+    # the submitter's identity. This endpoint is exempt from the before_request
+    # gate, so it is the only thing standing here.
+    #
+    # The bootstrap allowance is narrow and deliberate: an unresolved owner is
+    # tolerated ONLY while no PAT is configured, because owner resolution can
+    # itself require a PAT and would otherwise deadlock. See _require_owner.
+    denied = _require_owner(allow_unresolved_during_bootstrap=True)
+    if denied:
+        return denied
 
     # Idempotency / defence-in-depth: bootstrap is single-shot. Once a PAT
     # is configured and the rotator is alive, refuse re-submission. Without

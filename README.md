@@ -238,7 +238,7 @@ Beyond boot registration, the host can be driven at runtime:
 
 ### Related
 
-`ENABLE_SP_APIKEYHELPER=true` enables the same loopback-broker boundary for agent gateway calls: helpers fetch short-lived app-SP OAuth tokens without persisting the SP client secret or a static token in terminal-visible configuration.
+`ENABLE_SP_APIKEYHELPER=true` enables the same loopback-broker boundary for agent gateway calls: helpers fetch short-lived app-SP OAuth tokens without persisting the SP client secret or a static token in terminal-visible configuration. It is **off by default**, because it also makes the service principal the identity behind every model call. The default (`CODA_MODEL_AUTH=pat`) signs model calls with the user's PAT instead, so inference is attributed to a real user rather than collapsing onto one principal — see [docs/auth-and-identity.md](docs/auth-and-identity.md).
 
 ---
 
@@ -414,7 +414,9 @@ Open [http://localhost:8000](http://localhost:8000) — type `claude`, `codex`, 
 | `OMNIGENTS_SERVER_URL` | No | Omnigent server to register against on boot. Unset = host integration off (default). See [Omnigent Host Integration](#omnigent-host-integration) |
 | `OMNIGENTS_WHEEL_SPEC` | No | UC Volume path holding the `omnigents host` wheels (app SP needs `READ_VOLUME`). Required when `OMNIGENTS_SERVER_URL` is set |
 | `OMNIGENTS_FORCE_REINSTALL` | No | Set `"1"` to reinstall the host CLI on boot (for rolling out a new wheel); otherwise `uv tool install` no-ops on an existing binary |
-| `ENABLE_SP_APIKEYHELPER` | No | Set `"true"` to broker short-lived app-SP OAuth tokens over loopback without persisting the client secret in terminal-visible configuration |
+| `ENABLE_SP_APIKEYHELPER` | No | Set `"true"` to broker short-lived app-SP OAuth tokens over loopback without persisting the client secret in terminal-visible configuration. Off by default — it makes the **service principal** the model-auth identity, which is the opposite of `CODA_MODEL_AUTH=pat` |
+| `CODA_MODEL_AUTH` | No | Which identity signs agent model calls: `pat` (default) attributes inference to the real user, so AI Gateway usage tracking, cost attribution and per-user governance work; `sp` uses the app service principal for zero-PAT onboarding. The other is always the fallback. See [docs/auth-and-identity.md](docs/auth-and-identity.md) |
+| `CODA_DISABLE_OWNER_CHECK` | No | Set `"true"` for a shared, trusted, time-boxed deployment: any authenticated workspace user may drive the terminal as the single injected identity. Off by default. Note it only opens the terminal + WebSocket — `configure-pat` and `omnigent-host/share` stay owner-only — and it means agent actions are attributed to the injected identity rather than to the person typing |
 | `DEEPWIKI_MCP_URL` | No | Override or disable the DeepWiki MCP server (set to `""` to remove) |
 | `EXA_MCP_URL` | No | Override or disable the Exa MCP server (set to `""` to remove) |
 | `TEAM_MEMORY_MCP_URL` | No | Optional shared-org-memory MCP server URL |

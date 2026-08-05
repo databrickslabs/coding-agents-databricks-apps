@@ -6,13 +6,23 @@ this helper *per request / per TTL*. Centralising the writer keeps a single
 source of truth for the token-resolution logic and its interpreter wiring, so
 the two agents can never drift apart.
 
-The helper prints exactly one line to stdout: the bearer token. Resolution
-order (see the emitted script's docstring for the full rationale):
-  1. SP OAuth token fetched from the loopback broker (host path).
-  2. Legacy ``omnigents-host`` M2M profile, for upgrades from older containers.
-  3. The PAT from ``$DATABRICKS_TOKEN`` or ``~/.databrickscfg`` [DEFAULT].
-All are resolved fresh on each invocation, so a long-running agent survives
-PAT rotation / SP-OAuth expiry without a restart.
+The helper prints exactly one line to stdout: the bearer token.
+
+Which identity is preferred is set by ``CODA_MODEL_AUTH``:
+
+  pat (default)
+      The user's PAT (``$DATABRICKS_TOKEN`` or ``~/.databrickscfg`` [DEFAULT]),
+      falling back to SP OAuth. Model inference is then attributed to the real
+      user, so AI Gateway usage tracking, cost attribution and per-user
+      governance all work — matching the identity the shell/CLI already uses.
+  sp
+      SP OAuth from the loopback broker (then the legacy ``omnigents-host`` M2M
+      profile), falling back to the PAT. Buys zero-PAT onboarding at the cost of
+      attributing every agent's model calls to one service principal.
+
+Whichever is preferred, the other is the fallback — a misconfiguration degrades
+instead of breaking. All sources are resolved fresh on each invocation, so a
+long-running agent survives PAT rotation / SP-OAuth expiry without a restart.
 """
 
 import configparser
@@ -25,6 +35,22 @@ from urllib.request import urlopen
 # Legacy SP OAuth profile name. New installs persist only a secret-free host
 # pointer under this name and fetch bearers from the loopback broker.
 SP_PROFILE = "omnigents-host"
+
+# Preferred identity for agent model calls. Kept here so the proxy
+# (content_filter_proxy) and the emitted helper script agree — having the two
+# disagree would mean browser-terminal agents and proxied agents ran as different
+# identities, which is exactly the drift this module exists to prevent.
+MODEL_AUTH_ENV = "CODA_MODEL_AUTH"
+
+
+def prefer_pat_for_model_auth() -> bool:
+    """True when model calls should be signed with the user's PAT.
+
+    Defaults to True: a real user identity is the desired posture, and it matches
+    what the shell/CLI already does. Set CODA_MODEL_AUTH=sp to prefer the app
+    service principal instead.
+    """
+    return os.environ.get(MODEL_AUTH_ENV, "pat").strip().lower() != "sp"
 
 
 def resolve_sp_oauth_token() -> str | None:
@@ -50,12 +76,11 @@ def resolve_sp_oauth_token() -> str | None:
     return None
 
 
-def resolve_databricks_token() -> str | None:
-    """Resolve a fresh SP OAuth token, falling back to the current PAT."""
-    token = resolve_sp_oauth_token()
-    if token:
-        return token
+def resolve_pat() -> str | None:
+    """The current user PAT, from the environment or ~/.databrickscfg [DEFAULT].
 
+    Read fresh (never cached) because the rotator rewrites the file every ~10 min.
+    """
     token = os.environ.get("DATABRICKS_TOKEN", "").strip()
     if token:
         return token
@@ -65,6 +90,17 @@ def resolve_databricks_token() -> str | None:
         return config.get("DEFAULT", "token", fallback="").strip() or None
     except Exception:
         return None
+
+
+def resolve_databricks_token() -> str | None:
+    """Resolve a model-auth bearer, honouring CODA_MODEL_AUTH.
+
+    Returns the preferred identity's token, the other one if the preferred is
+    unavailable, or None if neither is.
+    """
+    if prefer_pat_for_model_auth():
+        return resolve_pat() or resolve_sp_oauth_token()
+    return resolve_sp_oauth_token() or resolve_pat()
 
 _HELPER_SRC = '''#!/usr/bin/env python3
 """Print a Databricks bearer token for Claude Code / Pi token resolution.
@@ -153,10 +189,25 @@ def _pat_token():
         return None
 
 
+def _prefer_pat():
+    """Mirror of token_helper.prefer_pat_for_model_auth().
+
+    This script runs as a standalone subprocess per request, so it cannot import
+    the parent module -- the check is duplicated deliberately. Keep the two in
+    sync; tests/test_model_auth_priority.py asserts they agree.
+    """
+    return os.environ.get("CODA_MODEL_AUTH", "pat").strip().lower() != "sp"
+
+
 def main():
-    token = _sp_oauth_token() or _pat_token()
+    # Preferred identity first, the other as fallback, so a missing PAT (or a
+    # missing broker) degrades instead of failing outright.
+    if _prefer_pat():
+        token = _pat_token() or _sp_oauth_token()
+    else:
+        token = _sp_oauth_token() or _pat_token()
     if not token:
-        print("no token source (no SP token broker, no PAT)", file=sys.stderr)
+        print("no token source (no PAT, no SP token broker)", file=sys.stderr)
         sys.exit(1)
     sys.stdout.write(token)
 

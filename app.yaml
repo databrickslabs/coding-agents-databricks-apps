@@ -125,15 +125,16 @@ env:
   # pressure monitor's per-session RSS, not by guessing.
   - name: MAX_CONCURRENT_SESSIONS
     value: "2"
-  # WORKSHOP / shared-app mode (TEMPORARY): disable the single-user owner
-  # binding so every attendee can use the terminal as the single injected PAT
-  # identity. Isolation then rests entirely on the UC grants of that identity —
-  # prefer a dedicated low-privilege SP token, not a personal PAT, and revoke
-  # it when the workshop ends. Only opens the terminal + WebSocket; configure-pat
-  # and omnigent-host/share stay owner-only. Remove this line to restore
-  # single-user security. See _owner_check_disabled() in app.py.
-  - name: CODA_DISABLE_OWNER_CHECK
-    value: "true"
+  # SHARED-APP mode — deliberately OFF. Uncommenting disables the single-user
+  # owner binding so any authenticated workspace user can drive the terminal as
+  # the one injected PAT identity. Isolation then rests entirely on that
+  # identity's UC grants, and every agent action is attributed to it rather than
+  # to the person typing — which defeats the point of running agents under a
+  # real user identity. Only for a trusted, time-boxed workshop, and prefer a
+  # dedicated low-privilege SP token over a personal PAT.
+  # See _owner_check_disabled() in app.py.
+  # - name: CODA_DISABLE_OWNER_CHECK
+  #   value: "true"
 
   # ─── Omnigent host integration ────────────────────────────────────────────
   # Register this app as a persistent Omnigent host on boot:
@@ -180,13 +181,31 @@ env:
   - name: OMNIGENT_HOST_MAX_RUNNERS
     value: "10"
   #
-  # Claude Code / pi fetch their gateway bearer via an apiKeyHelper that mints
-  # a fresh app-SP OAuth token per-TTL (spec C), instead of the PAT rotator
-  # pushing a static token into settings.json. Requires the [omnigents-host]
-  # OAuth profile, which OMNIGENTS_SERVER_URL above causes to be written; the
-  # helper falls back to the PAT if it's ever absent.
-  - name: ENABLE_SP_APIKEYHELPER
-    value: "true"
+  # App-SP brokered model auth — deliberately OFF. When true, Claude Code / pi
+  # fetch their gateway bearer from an apiKeyHelper that mints a fresh app-SP
+  # OAuth token per-TTL, so **model inference is attributed to the service
+  # principal rather than to the user**. That buys zero-PAT onboarding (agents
+  # install with no paste) at the cost of collapsing all AI Gateway usage, cost
+  # attribution and per-user governance onto one SP identity.
+  #
+  # This deployment prefers the user's PAT for model auth as well as for shell
+  # commands, so agents act as a real user end to end — see CODA_MODEL_AUTH
+  # below. Note the app SP is still used for the Omnigent host tunnel, which
+  # cannot use a PAT (the Apps proxy rejects them).
+  # - name: ENABLE_SP_APIKEYHELPER
+  #   value: "true"
+
+  # Which identity signs agent model calls.
+  #   pat (default) — the user's PAT. Model usage is attributed to the real
+  #                   user, so AI Gateway usage tracking, cost attribution and
+  #                   per-user governance all work. Requires a PAT to have been
+  #                   provided (interactively, or via /api/inject-pat).
+  #   sp            — the app service principal via the loopback token broker.
+  #                   Zero-PAT onboarding, single attributed identity.
+  # Either way the other is used as a fallback when the preferred one is absent,
+  # so a misconfiguration degrades rather than breaks. See token_helper.py.
+  - name: CODA_MODEL_AUTH
+    value: "pat"
 
   # Workshop challenge repo (A-R7) — OPT-IN, both vars unset by default.
   # PRIVATE repo cloned from its main branch at container startup into

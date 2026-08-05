@@ -114,14 +114,36 @@ class TestMainOutput:
         out = capsys.readouterr().out
         assert out == "tok-abc"  # exact — no newline, no "Bearer "
 
-    def test_sp_wins_over_pat(self, monkeypatch, capsys):
+    def test_pat_wins_by_default(self, monkeypatch, capsys):
+        """Default is CODA_MODEL_AUTH=pat: model calls are signed with the user's
+        PAT so inference is attributed to a real user, matching the identity the
+        shell/CLI already uses. This inverted a previous SP-first default."""
+        monkeypatch.delenv("CODA_MODEL_AUTH", raising=False)
+        mod = _load_helper_module()
+        monkeypatch.setattr(mod, "_sp_oauth_token", lambda: "sp-loses")
+        monkeypatch.setattr(mod, "_pat_token", lambda: "pat-wins")
+        mod.main()
+        assert capsys.readouterr().out == "pat-wins"
+
+    def test_sp_wins_when_explicitly_selected(self, monkeypatch, capsys):
+        monkeypatch.setenv("CODA_MODEL_AUTH", "sp")
         mod = _load_helper_module()
         monkeypatch.setattr(mod, "_sp_oauth_token", lambda: "sp-wins")
         monkeypatch.setattr(mod, "_pat_token", lambda: "pat-loses")
         mod.main()
         assert capsys.readouterr().out == "sp-wins"
 
-    def test_falls_back_to_pat(self, monkeypatch, capsys):
+    def test_falls_back_to_sp_when_no_pat(self, monkeypatch, capsys):
+        """A missing PAT degrades to the SP rather than failing outright."""
+        monkeypatch.delenv("CODA_MODEL_AUTH", raising=False)
+        mod = _load_helper_module()
+        monkeypatch.setattr(mod, "_pat_token", lambda: None)
+        monkeypatch.setattr(mod, "_sp_oauth_token", lambda: "sp-used")
+        mod.main()
+        assert capsys.readouterr().out == "sp-used"
+
+    def test_falls_back_to_pat_when_sp_selected_but_absent(self, monkeypatch, capsys):
+        monkeypatch.setenv("CODA_MODEL_AUTH", "sp")
         mod = _load_helper_module()
         monkeypatch.setattr(mod, "_sp_oauth_token", lambda: None)
         monkeypatch.setattr(mod, "_pat_token", lambda: "pat-used")
