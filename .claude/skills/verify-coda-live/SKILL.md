@@ -138,7 +138,7 @@ Use Chrome DevTools tools, not curl.
 
 1. `chrome_devtools_list_pages`
 2. Select the page whose URL begins:
-   `https://coda-main-<workspace-id>.8.azure.databricksapps.com`
+   `https://<app-name>-<workspace-id>.<region>.azure.databricksapps.com`
 3. If absent, `chrome_devtools_new_page` with that URL.
 4. If a login/consent page appears, stop and ask the operator to finish login.
 

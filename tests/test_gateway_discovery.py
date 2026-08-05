@@ -77,7 +77,7 @@ class TestGetGatewayHost:
     # -- Tier 2: auto-construct from DATABRICKS_WORKSPACE_ID --
 
     @mock.patch("utils._probe_gateway", return_value=True)
-    @mock.patch.dict(os.environ, {"DATABRICKS_WORKSPACE_ID": "6280049833385130"}, clear=False)
+    @mock.patch.dict(os.environ, {"DATABRICKS_WORKSPACE_ID": "1234567890123456"}, clear=False)
     def test_auto_construct_from_workspace_id(self, mock_probe):
         """Tier 2: construct gateway URL from DATABRICKS_WORKSPACE_ID when reachable."""
         env = os.environ.copy()
@@ -85,11 +85,11 @@ class TestGetGatewayHost:
         env.pop("_GATEWAY_RESOLVED", None)
         with mock.patch.dict(os.environ, env, clear=True):
             result = self._get_fn()()
-            assert result == "https://6280049833385130.ai-gateway.cloud.databricks.com"
+            assert result == "https://1234567890123456.ai-gateway.cloud.databricks.com"
             mock_probe.assert_called_once()
 
     @mock.patch("utils._probe_gateway", return_value=False)
-    @mock.patch.dict(os.environ, {"DATABRICKS_WORKSPACE_ID": "6280049833385130"}, clear=False)
+    @mock.patch.dict(os.environ, {"DATABRICKS_WORKSPACE_ID": "1234567890123456"}, clear=False)
     def test_auto_construct_falls_back_when_unreachable(self, mock_probe):
         """Tier 2 fallback: returns empty when auto-discovered gateway is unreachable."""
         env = os.environ.copy()
@@ -153,7 +153,7 @@ class TestEndpointConstruction:
             "HOME": str(tmp_path),
             "DATABRICKS_HOST": "https://test.cloud.databricks.com",
             "DATABRICKS_TOKEN": "dapi_test_token",
-            "DATABRICKS_WORKSPACE_ID": "6280049833385130",
+            "DATABRICKS_WORKSPACE_ID": "1234567890123456",
             "PATH": os.environ.get("PATH", ""),
             "PYTHONPATH": str(SETUP_DIR),
             # Pre-resolve gateway so subprocess skips the network probe
@@ -230,7 +230,7 @@ class TestEndpointConstruction:
         """Codex endpoint should use gateway /openai/v1 path."""
         from utils import get_gateway_host
         with mock.patch.dict(os.environ, {
-            "DATABRICKS_WORKSPACE_ID": "6280049833385130",
+            "DATABRICKS_WORKSPACE_ID": "1234567890123456",
         }, clear=False):
             env = os.environ.copy()
             env.pop("DATABRICKS_GATEWAY_HOST", None)
@@ -238,14 +238,14 @@ class TestEndpointConstruction:
             with mock.patch.dict(os.environ, env, clear=True):
                 gw = get_gateway_host()
                 codex_url = f"{gw}/openai/v1"
-                assert codex_url == "https://6280049833385130.ai-gateway.cloud.databricks.com/openai/v1"
+                assert codex_url == "https://1234567890123456.ai-gateway.cloud.databricks.com/openai/v1"
 
     @mock.patch("utils._probe_gateway", return_value=True)
     def test_gemini_gateway_url_construction(self, mock_probe):
         """Gemini endpoint should use gateway /gemini path."""
         from utils import get_gateway_host
         with mock.patch.dict(os.environ, {
-            "DATABRICKS_WORKSPACE_ID": "6280049833385130",
+            "DATABRICKS_WORKSPACE_ID": "1234567890123456",
         }, clear=False):
             env = os.environ.copy()
             env.pop("DATABRICKS_GATEWAY_HOST", None)
@@ -253,14 +253,14 @@ class TestEndpointConstruction:
             with mock.patch.dict(os.environ, env, clear=True):
                 gw = get_gateway_host()
                 gemini_url = f"{gw}/gemini"
-                assert gemini_url == "https://6280049833385130.ai-gateway.cloud.databricks.com/gemini"
+                assert gemini_url == "https://1234567890123456.ai-gateway.cloud.databricks.com/gemini"
 
     @mock.patch("utils._probe_gateway", return_value=True)
     def test_anthropic_gateway_url_construction(self, mock_probe):
         """Anthropic endpoint should use gateway /anthropic path."""
         from utils import get_gateway_host
         with mock.patch.dict(os.environ, {
-            "DATABRICKS_WORKSPACE_ID": "6280049833385130",
+            "DATABRICKS_WORKSPACE_ID": "1234567890123456",
         }, clear=False):
             env = os.environ.copy()
             env.pop("DATABRICKS_GATEWAY_HOST", None)
@@ -268,14 +268,14 @@ class TestEndpointConstruction:
             with mock.patch.dict(os.environ, env, clear=True):
                 gw = get_gateway_host()
                 anthropic_url = f"{gw}/anthropic"
-                assert anthropic_url == "https://6280049833385130.ai-gateway.cloud.databricks.com/anthropic"
+                assert anthropic_url == "https://1234567890123456.ai-gateway.cloud.databricks.com/anthropic"
 
     @mock.patch("utils._probe_gateway", return_value=True)
     def test_proxy_gateway_url_construction(self, mock_probe):
         """Proxy endpoint should use gateway /mlflow/v1 path."""
         from utils import get_gateway_host
         with mock.patch.dict(os.environ, {
-            "DATABRICKS_WORKSPACE_ID": "6280049833385130",
+            "DATABRICKS_WORKSPACE_ID": "1234567890123456",
         }, clear=False):
             env = os.environ.copy()
             env.pop("DATABRICKS_GATEWAY_HOST", None)
@@ -283,4 +283,4 @@ class TestEndpointConstruction:
             with mock.patch.dict(os.environ, env, clear=True):
                 gw = get_gateway_host()
                 proxy_url = f"{gw}/mlflow/v1"
-                assert proxy_url == "https://6280049833385130.ai-gateway.cloud.databricks.com/mlflow/v1"
+                assert proxy_url == "https://1234567890123456.ai-gateway.cloud.databricks.com/mlflow/v1"

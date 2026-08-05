@@ -30,7 +30,7 @@ Databricks MLflow experiments  /Users/{owner}/{app_name}
 **Two tracks:** *coverage* (spec-D — create traces for the 3 un-hooked agents)
 and *destination* (specs A/B/C — route all traces to a network-reachable sink).
 
-**Author:** David O'Keeffe · **Date:** 2026-07-11 · **Dev profile:** `<dev-profile>`
+**Date:** 2026-07-11
 **Lands in:** `coding-agents-databricks-apps` (private:
 `<private-mirror>`).
 

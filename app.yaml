@@ -87,7 +87,7 @@ env:
   #       endpoint-level usage/cost is still captured by AI Gateway usage
   #       tracking on the model endpoints (enable per docs/observability).
   - name: MLFLOW_TRACING_ENABLED
-    value: "true"
+    value: "false"
   # ─── spec-B/D: route traces to the self-hosted MLflow OSS app (Lakebase) ─────
   # For network-restricted deployments where the direct `databricks` tracking
   # path is blocked (no zerobus/managed storage). When true, Claude Code (spec-B)
@@ -114,7 +114,7 @@ env:
   # Enabled here so the Traces UI shows the actual model conversation. NOTE: this
   # writes potentially sensitive prompt/response content into the OSS trace store.
   - name: PROXY_TRACE_CONTENT
-    value: "true"
+    value: "false"
   # Browser-terminal ceiling. These are a FALLBACK: real traffic runs as
   # Omnigent runners (see OMNIGENT_HOST_MAX_RUNNERS below), and the terminal is
   # mainly used to debug an Omnigent problem — so keep a small reserve here and
@@ -132,8 +132,8 @@ env:
   # it when the workshop ends. Only opens the terminal + WebSocket; configure-pat
   # and omnigent-host/share stay owner-only. Remove this line to restore
   # single-user security. See _owner_check_disabled() in app.py.
-  - name: CODA_DISABLE_OWNER_CHECK
-    value: "true"
+  # Shared workshop mode is intentionally not enabled in the safe default.
+  # Enable CODA_DISABLE_OWNER_CHECK only in a dedicated, approved workshop overlay.
 
   # ─── Omnigent host integration ────────────────────────────────────────────
   # Register this app as a persistent Omnigent host on boot:

@@ -12,7 +12,7 @@
 #
 # NOT wired into app.py startup — invoke it yourself when you need the repos:
 #     bash setup_gh_repos.sh                                    # default set
-#     bash setup_gh_repos.sh dgokeeffe/some-other-repo         # explicit list
+#     bash setup_gh_repos.sh owner/example-repo         # explicit list
 #     CODA_CLONE_REPOS="owner/a owner/b" bash setup_gh_repos.sh # via env var
 #
 # Auth precedence (first that applies wins):
@@ -28,15 +28,8 @@ set -euo pipefail
 # --- Config ---------------------------------------------------------------
 PROJECTS_DIR="${HOME}/projects"
 
-# Default repo list — the repos we currently keep pulled down in CoDA.
-# Override by passing repos as args, or via CODA_CLONE_REPOS.
-DEFAULT_REPOS=(
-  "<private-repo>"
-  "<private-mirror>"
-  "<private-repo>"
-  "<private-repo>"
-  "<private-repo>"
-)
+# No repository names are committed to this public project.
+# Pass repositories as args or via CODA_CLONE_REPOS.
 
 # Positional args win; then CODA_CLONE_REPOS; then the built-in default.
 if [ "$#" -gt 0 ]; then
@@ -45,7 +38,8 @@ elif [ -n "${CODA_CLONE_REPOS:-}" ]; then
   # shellcheck disable=SC2206  # intentional word-split on the space-separated list
   REPOS=(${CODA_CLONE_REPOS})
 else
-  REPOS=("${DEFAULT_REPOS[@]}")
+  echo "ERROR: pass repositories as arguments or set CODA_CLONE_REPOS." >&2
+  exit 2
 fi
 
 # --- Preconditions --------------------------------------------------------

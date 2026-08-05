@@ -4,8 +4,7 @@
 > tracing path (`setup_mlflow.py` → `MLFLOW_TRACKING_URI=databricks`) **for
 > network-restricted deployments only**. The direct path stays the default where
 > the network allows it.
-> **Author:** David O'Keeffe · **Date:** 2026-07-11
-> **Profile for development:** `<dev-profile>`
+> **Date:** 2026-07-11
 > **Repo the feature lands in:** `coding-agents-databricks-apps` (private mirror
 > `<private-mirror>`). This repo
 > (`databricks-mlflow-lakebase-tracing`) holds the spec + the standalone

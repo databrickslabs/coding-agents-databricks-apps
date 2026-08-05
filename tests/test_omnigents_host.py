@@ -413,7 +413,7 @@ def _install_fake_wc(monkeypatch, files):
 
 def test_materialize_spec_flat_top_level(monkeypatch, tmp_path):
     """Wheels sitting flat at the volume root still resolve (back-compat)."""
-    vol = "/Volumes/dais/omnigent/artifacts"
+    vol = "/Volumes/<catalog>/<schema>/<volume>"
     tree = {vol: [
         _FakeEntry(f"{vol}/omnigent-0.6.0-py3-none-any.whl", last_modified=100),
         _FakeEntry(f"{vol}/omnigent_client-0.6.0-py3-none-any.whl", last_modified=100),
@@ -427,7 +427,7 @@ def test_materialize_spec_flat_top_level(monkeypatch, tmp_path):
 
 def test_materialize_spec_nested_versioned_picks_newest(monkeypatch, tmp_path):
     """No wheels at root -> recurse; pick the newest-uploaded version dir."""
-    vol = "/Volumes/dais/omnigent/artifacts"
+    vol = "/Volumes/<catalog>/<schema>/<volume>"
     old = f"{vol}/wheels/0.6.0.post1"
     new = f"{vol}/wheels/0.6.0.post2"
     tree = {
@@ -451,7 +451,7 @@ def test_materialize_spec_nested_versioned_picks_newest(monkeypatch, tmp_path):
 
 
 def test_materialize_spec_no_wheels_raises(monkeypatch):
-    vol = "/Volumes/dais/omnigent/artifacts"
+    vol = "/Volumes/<catalog>/<schema>/<volume>"
     tree = {vol: [_FakeEntry(f"{vol}/readme.txt")]}
     _install_fake_wc(monkeypatch, _FakeFiles(tree, {}))
     import pytest

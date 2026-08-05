@@ -22,7 +22,7 @@ RUN IT (must use the app venv python that has mlflow):
     /app/python/source_code/.venv/bin/python scripts/prove_trace_lands.py
 
 Optional env overrides:
-    MLFLOW_EXPERIMENT_ID   (default: <experiment-id> — david.okeeffe1's CoDA exp)
+    MLFLOW_EXPERIMENT_ID   (required; use a deployment-specific experiment ID)
     DATABRICKS_HOST        (used only to build the clickable UI URL)
 
 Exit code 0 = trace emitted AND read back. Non-zero = something didn't land.
@@ -33,7 +33,7 @@ import subprocess
 import sys
 import time
 
-EXP_ID = os.environ.get("MLFLOW_EXPERIMENT_ID", "<experiment-id>")
+EXP_ID = os.environ.get("MLFLOW_EXPERIMENT_ID", "")
 
 
 def _fail(msg: str) -> "NoReturn":  # noqa: F821

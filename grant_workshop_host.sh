@@ -1,22 +1,17 @@
 #!/bin/bash
-# Convenience wrapper: grant a workshop CoDA app the two IAM permissions it
-# needs to register as an Omnigent host on omnigent-<profile> (<dev-profile>).
+# Convenience wrapper for granting a workshop CoDA app the two IAM permissions
+# required to register as an Omnigent host. All deployment-specific values must
+# be supplied by the operator; none are committed to this public repository.
 #
-#   ./grant_workshop_host.sh                 # defaults to coding-agents-01
-#   ./grant_workshop_host.sh coding-agents-02
-#   ./grant_workshop_host.sh coding-agents-0N
-#
-# Fixed for the <dev-profile> workshop fleet:
-#   profile      = <dev-profile>
-#   server app   = omnigent-<profile>
-#   wheel volume = <dev-profile>_catalog.<profile>_omnigent.artifacts  (from app.yaml.workshop)
-# The CoDA app's SP is derived from the app name by the underlying script, so
-# only the app name varies across the fleet.
-#
-# Delegates to grant_omnigent_host.sh (idempotent — safe to re-run).
+# Required environment variables: PROFILE, SERVER_APP, WHEEL_VOLUME
+# Optional first argument: the CoDA app name (defaults to coding-agents-01).
+set -euo pipefail
+: "${PROFILE:?Set PROFILE to the deployment's Databricks CLI profile}"
+: "${SERVER_APP:?Set SERVER_APP to the Omnigent server app name}"
+: "${WHEEL_VOLUME:?Set WHEEL_VOLUME to the UC volume path}"
 CODA_APP="${1:-coding-agents-01}"
 exec "$(dirname "$0")/grant_omnigent_host.sh" \
-  --profile <dev-profile> \
+  --profile "$PROFILE" \
   --coda-app "$CODA_APP" \
-  --server-app omnigent-<profile> \
-  --wheel-volume <dev-profile>_catalog.<profile>_omnigent.artifacts
+  --server-app "$SERVER_APP" \
+  --wheel-volume "$WHEEL_VOLUME"

@@ -25,7 +25,7 @@ the session is permanently bricked. This is OpenCode issue
 ## Why Not PR #52's Approach
 
 [PR #52](https://github.com/datasciencemonkey/coding-agents-databricks-apps/pull/52) proposes
-forking OpenCode (`<upstream-opencode>`) to add a native Databricks provider. After analysis:
+forking OpenCode to add a native Databricks provider. After analysis:
 
 1. **Does not fix the root cause** — The fork's `feat/databricks-ai-sdk-provider` branch
    has no commits that sanitize empty content blocks. The bug originates in OpenCode's core

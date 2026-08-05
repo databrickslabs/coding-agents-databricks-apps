@@ -31,7 +31,7 @@ WORKSPACE_PATH = /Workspace/Users/$(USER_EMAIL)/apps/$(APP_NAME)
 # omnigent CLI wheel. WHEEL_VOLUME (catalog.schema.volume) is derived from the
 # LOCAL app.yaml being deployed (its OMNIGENTS_WHEEL_SPEC = /Volumes/cat/sch/vol)
 # unless set explicitly. Reads the local file so it works before the first sync.
-# GRANT_YAML lets the workshop/<dev-profile> targets point at their own variant.
+# GRANT_YAML lets overlay targets point at their own variant.
 GRANT_YAML ?= app.yaml
 # Derive the server app name from OMNIGENTS_SERVER_URL in the deployed yaml
 # (first hostname label) so the grant always targets the SAME server the app
@@ -42,15 +42,14 @@ WHEEL_VOLUME ?= $(shell python3 -c "import sys,yaml; e={v['name']:v.get('value',
 # ── Git-based deploy config ──────────────────────────
 # Databricks Apps can deploy directly from a Git repo/ref (how coda-01..08 run).
 # Override any of these on the command line.
-GIT_URL      ?= https://github.com/<private-mirror>
+GIT_URL      ?= https://github.com/databrickslabs/coding-agents-databricks-apps
 GIT_PROVIDER ?= gitHub
 GIT_REF      ?= main
 # GIT_REF_TYPE: branch | tag | commit
 GIT_REF_TYPE ?= branch
 
 .PHONY: help test integration-test e2e-test e2e-auth deploy redeploy create-app create-pat sync deploy-app status open clean enterprise-doctor \
-	deploy-workshop redeploy-workshop guard-workshop-name create-app-workshop workshop-yaml workshop-secret \
-	deploy-<dev-profile> redeploy-<dev-profile> <dev-profile>-yaml grant-omnigent-host \
+	deploy-workshop redeploy-workshop guard-workshop-name create-app-workshop workshop-yaml workshop-secret grant-omnigent-host \
 	configure-git configure-git-credential deploy-git redeploy-git attach-omnigent-resources
 
 # ── Help ─────────────────────────────────────────────
@@ -180,41 +179,6 @@ workshop-secret: guard-workshop-name ## Store the challenge-repo read token (fro
 	@databricks apps update $(APP_NAME) --profile $(PROFILE) --json '{"resources": [{"name": "challenge-repo-token", "secret": {"scope": "$(WS_SECRET_SCOPE)", "key": "$(WS_SECRET_KEY)", "permission": "READ"}}]}' > /dev/null
 	@echo "    Secret stored ($(WS_SECRET_SCOPE)/$(WS_SECRET_KEY)) and attached as app resource 'challenge-repo-token'."
 	@echo "    Redeploy the app for the env var to take effect."
-
-# ── Lakemeter deploy (Omnigent host ON) ──────────────
-# The committed app.yaml keeps Omnigent OFF/commented for the upstream PR.
-# These targets swap app.yaml.<dev-profile> in as the deployed app.yaml so the
-# <dev-profile> app self-registers as an always-on Omnigent host, without
-# re-poisoning the committed config.
-#   make deploy-<dev-profile> PROFILE=<dev-profile>
-#   make redeploy-<dev-profile> PROFILE=<dev-profile>
-
-deploy-<dev-profile>: GRANT_YAML=$(LAKEMETER_YAML)
-deploy-<dev-profile>: create-app grant-omnigent-host sync <dev-profile>-yaml deploy-app ## Deploy to <dev-profile> (app.yaml.<dev-profile>, Omnigent host ON)
-	@echo ""
-	@echo "Lakemeter deployment complete! App URL:"
-	@databricks apps get $(APP_NAME) --profile $(PROFILE) --output json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('url','(pending)'))"
-
-redeploy-<dev-profile>: GRANT_YAML=$(LAKEMETER_YAML)
-redeploy-<dev-profile>: grant-omnigent-host sync <dev-profile>-yaml deploy-app ## Redeploy to <dev-profile> (skip app creation)
-	@echo ""
-	@echo "Lakemeter redeployment complete!"
-
-# Prefer the git-ignored .local override (real workspace values) over the
-# committed template (which has <placeholders>). Deploying the template would
-# dial <your-omnigent-app> and fail — so require .local to exist.
-LAKEMETER_YAML := $(shell [ -f app.yaml.<dev-profile>.local ] && echo app.yaml.<dev-profile>.local || echo app.yaml.<dev-profile>)
-
-<dev-profile>-yaml: ## Overwrite the synced app.yaml with the <dev-profile> variant (.local preferred)
-	@if [ "$(LAKEMETER_YAML)" = "app.yaml.<dev-profile>" ]; then \
-		echo "ERROR: app.yaml.<dev-profile>.local not found — the committed template has"; \
-		echo "       <placeholders>, not real values. Copy app.yaml.<dev-profile> to"; \
-		echo "       app.yaml.<dev-profile>.local and fill in your OMNIGENTS_SERVER_URL /"; \
-		echo "       OMNIGENTS_WHEEL_SPEC before deploying."; \
-		exit 1; \
-	fi
-	@echo "==> Swapping in $(LAKEMETER_YAML) as $(WORKSPACE_PATH)/app.yaml..."
-	@databricks workspace import $(WORKSPACE_PATH)/app.yaml --file $(LAKEMETER_YAML) --format AUTO --overwrite --profile $(PROFILE)
 
 # ── Git-based deploy (Databricks Apps native Git) ────
 # Deploys straight from a Git ref instead of the sync-to-workspace path.

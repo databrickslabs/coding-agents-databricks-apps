@@ -47,7 +47,7 @@ def _tracked_app_yamls() -> list[Path]:
         text=True,
         check=True,
     ).stdout.split()
-    return [REPO_ROOT / name for name in out]
+    return [REPO_ROOT / name for name in out if (REPO_ROOT / name).is_file()]
 
 
 def _env_names(path: Path) -> set[str]:
@@ -127,7 +127,7 @@ WORKSPACE_SPECIFIC = [
     (r"adb-\d{10,}", "an Azure workspace id"),
     (r"\bdbc-[0-9a-f]{4,}-[0-9a-f]{4,}", "an AWS workspace host"),
     (r"/Volumes/[a-z0-9_]*(sandbox|prod|dev)[a-z0-9_]*/", "a concrete UC Volume path"),
-    (r"edp_aisandbox", "a specific UC catalog"),
+    (r"[a-z0-9_]*(sandbox|prod|dev)[a-z0-9_]*", "a specific environment catalog"),
     (r"github\.com/[A-Za-z0-9._-]*(okeeffe|dgokeeffe)", "a personal GitHub repo"),
 ]
 

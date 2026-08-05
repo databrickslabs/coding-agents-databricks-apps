@@ -179,7 +179,7 @@ CoDA can register itself as a persistent **[Omnigent](https://github.com/omnigen
 
 ### Turning it on
 
-Set three variables in your deployed `app.yaml` (see `app.yaml.<dev-profile>` for a ready-to-copy overlay template):
+Set three variables in your deployed `app.yaml` (see `app.yaml.workshop` for a ready-to-copy overlay template):
 
 ```yaml
 # app.yaml

@@ -39,7 +39,7 @@ against another app — `grant_omnigent_host.sh:13`).
   (and shared by spec-D's proxy tracing — one flag for the whole feature). When
   `false`, behaviour is **exactly** today's (direct `databricks` path) — this
   feature is purely additive and off by default.
-  *(additive, mirrors the `ENABLE_*` gating pattern in `app.yaml.<dev-profile>`.)*
+  *(additive, mirrors the `ENABLE_*` gating pattern in `app.yaml.workshop`.)*
 - **B-R2 — Redirect the tracking URI.** When the flag is on,
   `setup_mlflow.py` sets `MLFLOW_TRACKING_URI = <MLFLOW_OSS_URL>` (the OSS app's
   HTTPS URL, from env) instead of `"databricks"`, in

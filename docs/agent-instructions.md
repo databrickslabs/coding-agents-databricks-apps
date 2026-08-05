@@ -145,8 +145,8 @@ of the live `coda` app can wedge platform boot.
 - `origin` → public `databrickslabs/coding-agents-databricks-apps` (PRs target
   here). Push topic branches directly to `databrickslabs` for upstream PRs — fork
   PRs don't work from the private mirror.
-- `private` → `<private-mirror>` (where the app
-  often deploys from). A reflexive `git push origin HEAD` from a
+- `private` → your approved private mirror (where the app may deploy from). A
+  reflexive `git push origin HEAD` from a
   `private`-tracking branch publishes sensitive work to the public labs repo.
 - Confirm tracking with `git rev-parse --abbrev-ref --symbolic-full-name @{u}`,
   not `remote.origin.url`.
@@ -248,8 +248,8 @@ verify container-internal state or exercise endpoints that read
   `~/.omnigent/config.yaml` for whatever harness the runner uses. CoDA runs it via
   `_run_setup_once()` in `omnigents_host.py`, decoupled from the interactive PAT
   bootstrap that gates `run_setup()`.
-- Personal Omnigent server app `omnigents-<profile>` may be STOPPED (reversible with
-  `databricks apps start omnigents-<profile> --profile <profile>`).
+- The deployment-specific Omnigent server app may be STOPPED (reversible with
+  `databricks apps start <server-app> --profile <profile>`).
 
 **E2E terminal output:** xterm.js renders to `<canvas>` — browser accessibility
 snapshots show garbage. Read CoDA app logs (`/api/logs`, `databricks apps logs`)

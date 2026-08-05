@@ -27,7 +27,7 @@ def test_otel_enabled_writes_all_signal_env_vars():
         changed = apply_claude_otel_env(
             settings,
             "dapi_test_token",
-            "https://adb-7405619319592766.6.azuredatabricks.net",
+            "https://adb-example.6.azuredatabricks.net",
         )
 
     env = settings["env"]

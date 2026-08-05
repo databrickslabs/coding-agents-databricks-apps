@@ -123,7 +123,7 @@ directly from `main` (matches how coda-01..08 already run).
 Add targets (keep existing sync-based ones for backward compat):
 
 ```make
-GIT_URL      ?= https://github.com/<private-mirror>
+GIT_URL      ?= https://github.com/databrickslabs/coding-agents-databricks-apps
 GIT_PROVIDER ?= gitHub
 GIT_REF      ?= main
 GIT_REF_TYPE ?= branch   # branch | tag | commit
