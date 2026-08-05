@@ -176,6 +176,20 @@ env:
   - name: CHALLENGE_REPO_READ_TOKEN
     valueFrom: challenge-repo-token
 
+  # ─── Enterprise security knobs ────────────────────────────────────────────
+  # Stable Flask session-cookie key. Without this, the key is regenerated on
+  # every worker restart and existing session cookies get invalidated. Wire to
+  # a Databricks secret in production (see app.yaml.template for syntax).
+  # - name: FLASK_SECRET_KEY
+  #   valueFrom: coda-prod/flask-secret-key
+  #
+  # Set to "true" to disable CoDA's outbound telemetry to Databricks (event-name
+  # pings via the SDK User-Agent — see telemetry.py). Regulated deployments
+  # (banks, retail PII, etc.) typically need this off so the third-party-risk
+  # register has no undisclosed data flow.
+  # - name: CODA_TELEMETRY_DISABLED
+  #   value: "true"
+
   # ─── Enterprise mode (proxy / registry redirects) ────────────────────────
   # Uncomment and set the env vars below to run CoDA in locked-down enterprise
   # networks. All are optional — set only what your environment requires.
