@@ -255,3 +255,46 @@ class TestEOFCleanup:
 
         with self.app_module.sessions_lock:
             assert session_id not in self.app_module.sessions
+
+    def test_utf8_character_split_across_reads_is_emitted_intact(self, monkeypatch):
+        session_id = "sess-utf8-split"
+        glyph = "│"
+        first, second = glyph.encode("utf-8")[:1], glyph.encode("utf-8")[1:]
+        chunks = iter((first, second, b""))
+        emitted = []
+
+        with self.app_module.sessions_lock:
+            self.app_module.sessions[session_id] = {
+                "pid": 123,
+                "master_fd": 456,
+                "output_buffer": deque(maxlen=1000),
+                "lock": threading.Lock(),
+                "last_poll_time": time.time(),
+                "created_at": time.time(),
+            }
+
+        monkeypatch.setattr(
+            self.app_module.select,
+            "select",
+            lambda *_args: ([456], [], []),
+        )
+        monkeypatch.setattr(self.app_module.os, "read", lambda *_args: next(chunks))
+        monkeypatch.setattr(
+            self.app_module.socketio,
+            "emit",
+            lambda event, data=None, **_kwargs: emitted.append((event, data)),
+        )
+        monkeypatch.setattr(
+            self.app_module,
+            "terminate_session",
+            lambda *_args: None,
+        )
+
+        self.app_module.read_pty_output(session_id, 456)
+
+        terminal_text = "".join(
+            data["output"]
+            for event, data in emitted
+            if event == "terminal_output"
+        )
+        assert terminal_text == glyph

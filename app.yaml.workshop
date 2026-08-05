@@ -1,0 +1,137 @@
+# Workshop variant of app.yaml (spec-A-coda-workshop-layer.md, milestone M1).
+# Deployed by `make deploy-workshop` which swaps this in as app.yaml in the
+# workspace copy. Differences from the standard app.yaml:
+#   - Full agent fleet: Claude + Codex + OpenCode + Gemini + Hermes + Pi all
+#     "true" (workshop drives all agents; MLflow tracing spans every channel).
+#     Heavier boot (more npm/pip installs) — smoke-test cold start on LARGE.
+#   - MAX_CONCURRENT_SESSIONS raised to 10 (A-C1; fleet sizing decision)
+#   - OMNIGENTS_SERVER_URL/OMNIGENTS_WHEEL_SPEC omitted -> boot host-register
+#     no-ops (A-R3: attendees use CoDA's own terminal, not the Omnigent tunnel)
+#   - CHALLENGE_REPO_URL + CHALLENGE_REPO_READ_TOKEN added: the ONE config
+#     spot for the preloaded private challenge repo (A-R7). Compute size is
+#     NOT set here — it's a create-time property
+#     (`databricks apps create --compute-size LARGE`, see Makefile).
+command:
+  - gunicorn
+  - app:app
+env:
+  - name: HOME
+    value: /app/python/source_code
+  - name: ANTHROPIC_MODEL
+    value: databricks-claude-opus-4-8
+  # Pi routes to the same /anthropic gateway route as Claude Code; PI_MODEL is
+  # the serving-endpoint name it addresses (validated against in-geo models).
+  - name: PI_MODEL
+    value: databricks-claude-opus-4-8
+  - name: GEMINI_MODEL
+    value: databricks-gemini-2-5-pro
+  # Must be a *-codex model served via the Responses API — the Codex harness
+  # (and CLI) speaks wire_api="responses", which only the -codex endpoints
+  # support. A general chat-completions model (e.g. databricks-gpt-5-5) 400s on
+  # /responses. See setup_codex.py base_url handling.
+  - name: CODEX_MODEL
+    value: databricks-gpt-5-3-codex
+  - name: HERMES_MODEL
+    value: databricks-claude-opus-4-8
+  - name: HERMES_FALLBACK_MODEL
+    value: databricks-claude-opus-4-8
+  # AI Gateway: route all agent model calls through the Databricks AI Gateway.
+  # This value is TRUSTED (no reachability probe - see utils.get_gateway_host
+  # tier 1), so it must be a real, reachable gateway on the workspace these
+  # instances (coda-01..08) deploy to: Azure workspace 7405614666872455.
+  # Without this the app falls back to auto-derivation or
+  # {DATABRICKS_HOST}/serving-endpoints.
+  - name: DATABRICKS_GATEWAY_HOST
+    value: "https://adb-7405614666872455.15.azuredatabricks.net/ai-gateway"
+  # ── Full agent fleet ─────────────────────────────────────────────────────
+  # The workshop drives all agents; MLflow tracing covers every channel.
+  # Trade-off: more CLIs to install at boot → slower cold start, larger
+  # failure surface. Validate cold-boot on LARGE before the day (spec A-O1).
+  # Codex disabled: no Responses-API (*-codex) model on this gateway/workspace
+  # (only databricks-gpt-oss-120b/20b, chat-completions only, 400 on /responses).
+  - name: ENABLE_CODEX
+    value: "false"
+  - name: ENABLE_OPENCODE
+    value: "true"
+  # Gemini disabled: no Gemini model served on this workspace (only
+  # databricks-gemma-3-12b, not addressable via the Gemini CLI /gemini route).
+  - name: ENABLE_GEMINI
+    value: "false"
+  - name: ENABLE_HERMES
+    value: "true"
+  - name: ENABLE_PI
+    value: "true"
+  - name: CLAUDE_CODE_DISABLE_AUTO_MEMORY
+    value: 0
+  # MLflow tracing spans every agent channel — the workshop observability
+  # story. Verified FLOWING per-channel (Part 3); the OTEL->UC path is NOT
+  # flowing yet (kept off below). See docs/part3-tracing-runbook.md.
+  - name: MLFLOW_TRACING_ENABLED
+    value: "true"
+  # OTEL export off — not flowing yet (Part 3: "MLflow FLOWING, OTEL NOT").
+  # To enable later, set "true" and point CLAUDE_CODE_OTEL_CATALOG_SCHEMA at a
+  # <catalog>.<schema> the app SP can write to.
+  - name: CLAUDE_CODE_OTEL_ENABLED
+    value: "false"
+  # - name: CLAUDE_CODE_OTEL_CATALOG_SCHEMA
+  #   value: <catalog>.<schema>
+  # 10 concurrent browser-terminal sessions per instance (assumed for LARGE,
+  # validated by the day-of smoke test — A-O1/A-O2).
+  - name: MAX_CONCURRENT_SESSIONS
+    value: "10"
+  # ── SP self-auth (no PAT paste) ──────────────────────────────────────────
+  # The app authenticates as its OWN app service principal: at boot it writes
+  # the omnigents-host OAuth (M2M) profile from its captured SP creds, and
+  # Claude/Pi's apiKeyHelper mints a fresh SP token per-TTL from it. No human
+  # or injected PAT is ever pasted; setup also runs at boot (see
+  # initialize_app). Isolation rests on the APP SP's grants — it needs
+  # model-serving CAN_QUERY (LLM calls) and whatever UC the exercise touches.
+  - name: ENABLE_SP_APIKEYHELPER
+    value: "true"
+  # ── Shared-app trust model ───────────────────────────────────────────────
+  # LESS-SECURE shared box: the single-user owner binding is switched OFF so
+  # every attendee can drive the terminal. With SP self-auth above, they act
+  # as the app SP (not a pasted identity). Isolation rests entirely on that
+  # SP's grants — scope them to the workshop, and clean up the app afterward.
+  # The owner-gated write endpoints (configure-pat, omnigent-host/share) stay
+  # owner-only even in this mode.
+  - name: CODA_DISABLE_OWNER_CHECK
+    value: "true"
+  # PAT rotation stretched to ~1h for the workshop: because that injected SP
+  # token is disposable and revoked post-workshop, the longer lifetime is an
+  # accepted trade for fewer mid-session rotations. token_lifetime must stay
+  # > rotation_interval so the token never expires between mints — 1h15m
+  # lifetime gives a 15-min overlap. Secure boxes keep the 600/900 default.
+  - name: PAT_ROTATION_INTERVAL
+    value: "3600"    # 1h — mint a fresh token every hour
+  - name: PAT_TOKEN_LIFETIME
+    value: "4500"    # 1h15m — outlives the interval so no expiry gap
+  # ── Challenge repo (A-R7) — the one config spot ─────────────────────────
+  # PRIVATE repo cloned from its main branch at container startup into
+  # ~/projects/<name>; the terminal opens directly inside it. The read token
+  # is a repo-scoped READ-ONLY GitHub token stored in a Databricks secret and
+  # attached to the app as a secret resource named "challenge-repo-token"
+  # (`make workshop-secret` does both). Token is used for the clone only and
+  # is stripped from attendee terminal sessions.
+  # STAND-IN: points at an existing private sandbox repo for M1 verification.
+  # Swap the URL (and the secret value) for the real challenge repo, then
+  # redeploy.
+  - name: CHALLENGE_REPO_URL
+    value: "https://github.com/david-okeeffe_data/dok-sandbox"
+  - name: CHALLENGE_REPO_READ_TOKEN
+    valueFrom: challenge-repo-token
+  # ── Omnigent host (workshop deploys ALSO register as a host) ─────────────
+  # initialize_app() -> start_host() dials the server as the app SP and
+  # registers this app as an Omnigent host, so agents can be driven INTO the
+  # container from the Omnigent side (in addition to the browser terminal).
+  # TRADE-OFF: this couples workshop boot to the Omnigent tunnel + host-wheel
+  # install (the reason it was previously OFF, spec A-R3). Install runs on a
+  # background thread so it won't block gunicorn, but it is added surface.
+  # The host is SP-owned — driveable by the app SP (MCP/session-create); NOT
+  # visible to human operators in the Omnigent Web UI (host-sharing is a 405
+  # in stock Omnigent). Requires the app SP to have: CAN_USE on the server app
+  # + READ_VOLUME on the wheel volume below (one-time IAM grants).
+  - name: OMNIGENTS_SERVER_URL
+    value: "https://omnigent-7405614666872455.15.azure.databricksapps.com"
+  - name: OMNIGENTS_WHEEL_SPEC
+    value: "/Volumes/edp_aisandbox_aisandbox_dev/ai/omnigents/wheels"

@@ -1,6 +1,6 @@
 [project]
 name = "coda"
-version = "0.18.2"
+version = "0.18.3"
 description = "CoDA - Coding Agents on Databricks Apps"
 requires-python = ">=3.10"
 dependencies = [
@@ -8,19 +8,58 @@ dependencies = [
     "flask-socketio>=5.0",
     "simple-websocket>=1.0",
     "claude-agent-sdk",
-    "databricks-sdk>=0.20.0",
-    "mlflow-skinny==3.11.1",
+    "databricks-sdk>=0.106.0",
+    "mlflow-skinny==3.14.0",
     "requests",
-    "cryptography>=46.0.7",
+    "cryptography>=48.0.1",
     # Security floors — make CVE-driven minimums explicit so future resolves
     # can't silently downgrade. See PR description for advisory IDs.
-    "gitpython>=3.1.49",
-    "python-multipart>=0.0.27",
+    "gitpython>=3.1.50",
+    "python-multipart>=0.0.31",
+    # GHSA-cg9f-27fq-jc2r — pyjwt < 2.13.0 mishandles issuer/audience
+    # validation. Transitive via databricks-sdk; pin a floor.
+    "pyjwt>=2.13.0",
+    # python-engineio <= 4.13.1 / python-socketio <= 5.16.1 carry
+    # Socket.IO CVEs. Both are transitive via flask-socketio; pin floors.
+    "python-engineio>=4.13.2",
+    "python-socketio>=5.16.2",
+    # GHSA-qccp-gfcp-xxvc + GHSA-mf9v-mfxr-j63j — urllib3 < 2.7.0 leaks
+    # sensitive headers across proxied redirects and bypasses the
+    # decompression-bomb safeguard. urllib3 is transitive; pin a floor
+    # so dependency resolves don't drift back.
+    "urllib3>=2.7.0",
+    # GHSA-65pc-fj4g-8rjx — idna < 3.15 lets crafted inputs bypass the
+    # CVE-2024-3651 fix in idna.encode(). idna is transitive; pin a floor.
+    "idna>=3.17",
     # Upper bound is forced by our transitive ecosystem: both mlflow-skinny 3.11.x
     # AND opentelemetry-api 1.41.x cap importlib-metadata<8.8. Dependabot tried
     # to bump it to 9.0.0 (PR #3) and broke every deploy — explicit ceiling so
     # the bot won't try again until upstream widens its caps.
     "importlib-metadata<8.8",
+    # Upper bound is forced by databricks-sdk: 0.106.0 declares
+    # `protobuf!=5.26.*,...,<7.0,>=4.25.8`. Dependabot tried to bump to
+    # protobuf 7.34.1 (PR #60) and broke `pip install -r requirements.txt`.
+    # Explicit ceiling so the bot won't try again until databricks-sdk lifts
+    # its <7.0 cap.
+    "protobuf<7",
+    # Security floor. Earlier the `starlette<1` cap was forced by mlflow-skinny
+    # 3.12.0's transitive `starlette<1`; mlflow-skinny 3.14.0 lifts that cap, so
+    # we can take the patched starlette. Multiple advisories affect < 1.3.1
+    # (e.g. DoS via multipart / range handling). Transitive via fastapi.
+    "starlette>=1.3.1",
+]
+
+[dependency-groups]
+# Dev/test-only deps — not shipped to the app container. Install with
+# `uv sync --group dev` or `uv pip install --group dev`.
+dev = [
+    "pytest>=8.0",
+    "pytest-timeout>=2.4",
+    # Playwright for the e2e suite (tests/e2e/) — drives a real browser
+    # against the deployed app to verify SSO + setup pipeline + security
+    # fixes end-to-end. Optional: tests skip cleanly when not installed.
+    "playwright>=1.40",
+    "pytest-playwright>=0.8.0",
 ]
 
 [tool.uv]
@@ -28,8 +67,3 @@ dependencies = [
 # This gives the community time to catch supply-chain issues before they land here.
 # Bump this date when you intentionally need a newer release.
 exclude-newer = "7 days"
-
-[tool.uv.sources]
-# Direct GitHub installs — workaround for Databricks internal PyPI proxy gaps.
-# Remove these once the proxy has current versions.
-requests = { git = "https://github.com/psf/requests", rev = "v2.33.0" }

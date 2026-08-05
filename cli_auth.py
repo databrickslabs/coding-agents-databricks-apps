@@ -9,6 +9,8 @@ import os
 import re
 import logging
 
+from claude_otel import refresh_claude_otel_token
+
 logger = logging.getLogger(__name__)
 
 _HOME = os.environ.get("HOME", "/app/python/source_code")
@@ -19,6 +21,7 @@ if not _HOME or _HOME == "/":
 def update_cli_tokens(token):
     """Update the literal token in all CLI config files."""
     _update_claude(token)
+    _update_pi(token)
     _update_codex(token)
     _update_opencode(token)
     _update_gemini(token)
@@ -26,15 +29,56 @@ def update_cli_tokens(token):
 
 
 def _update_claude(token):
-    """Update ANTHROPIC_AUTH_TOKEN in ~/.claude/settings.json."""
+    """Update Claude tokens in ~/.claude/settings.json."""
     path = os.path.join(_HOME, ".claude", "settings.json")
     try:
         with open(path) as f:
             settings = json.load(f)
+        changed = False
+        # Only refresh a *static* token if one is present. When the spec-C
+        # apiKeyHelper owns model auth, this key is absent and the rotator
+        # leaves it alone — Claude fetches its own token per-TTL. The OTEL
+        # refresh below still runs (it authenticates the OTLP export to the
+        # workspace, a separate concern the helper does not cover).
         if "env" in settings and "ANTHROPIC_AUTH_TOKEN" in settings["env"]:
             settings["env"]["ANTHROPIC_AUTH_TOKEN"] = token
+            changed = True
+        if refresh_claude_otel_token(settings, token):
+            changed = True
+        if changed:
             with open(path, "w") as f:
                 json.dump(settings, f, indent=2)
+    except (OSError, json.JSONDecodeError):
+        pass  # file doesn't exist yet — initial setup hasn't run
+
+
+def _update_pi(token):
+    """Update the databricks-claude provider apiKey in ~/.pi/agent/models.json.
+
+    Pi resolves an `apiKey` beginning with `!` as a shell command, fresh per
+    request (docs/models.md: "shell commands are resolved at request time"). We
+    configure it as `!<token helper>` (the same helper Claude's apiKeyHelper
+    runs), so a running pi resolves a live token per request and survives PAT
+    rotation / SP-OAuth expiry without a restart. In that mode the rotator must
+    NOT clobber the command back to a static literal, or the next rotation
+    reverts pi to the fragile cache-at-launch behavior. So skip the rewrite
+    whenever apiKey is already a command. This mirrors _update_claude, which
+    leaves ANTHROPIC_AUTH_TOKEN alone when the apiKeyHelper owns auth. (A legacy
+    static apiKey is still rewritten, for backward compatibility.)
+    """
+    path = os.path.join(_HOME, ".pi", "agent", "models.json")
+    try:
+        with open(path) as f:
+            config = json.load(f)
+        provider = config.get("providers", {}).get("databricks-claude")
+        if (
+            isinstance(provider, dict)
+            and "apiKey" in provider
+            and not str(provider["apiKey"]).startswith("!")
+        ):
+            provider["apiKey"] = token
+            with open(path, "w") as f:
+                json.dump(config, f, indent=2)
     except (OSError, json.JSONDecodeError):
         pass  # file doesn't exist yet — initial setup hasn't run
 
