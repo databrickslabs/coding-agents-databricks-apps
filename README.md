@@ -330,6 +330,8 @@ Open [http://localhost:8000](http://localhost:8000) — type `claude`, `codex`, 
 
 Single-user app — the owner is resolved via the app's service principal and Apps API (`app.creator`), with no PAT required at deploy time. Authorization checks `X-Forwarded-Email` against `app.creator`. On first terminal session, the user pastes a short-lived PAT interactively. Tokens auto-rotate every 10 minutes (15-minute lifetime), with old tokens proactively revoked. On restart, the user re-pastes (no persistence by design).
 
+Each GitHub Release ships a signed CycloneDX SBOM — see [docs/SECURITY.md](./docs/SECURITY.md) for verification steps.
+
 ### Gunicorn
 
 Production uses `workers=1` (PTY state is process-local), `threads=16` (concurrent polling + WebSocket), `gthread` worker class, `timeout=60` (long-lived WebSocket connections).
