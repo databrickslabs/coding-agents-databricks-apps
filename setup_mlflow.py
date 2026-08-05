@@ -134,7 +134,13 @@ mlflow_hook = {
     "hooks": [
         {
             "type": "command",
-            "command": f"{python_cmd} -c \"from mlflow.claude_code.hooks import stop_hook_handler; stop_hook_handler()\""
+            "command": f"{python_cmd} -c \"from mlflow.claude_code.hooks import stop_hook_handler; stop_hook_handler()\"",
+            # Bound the hook. On the pinned mlflow (3.14) the handler is a
+            # no-op that returns immediately, but this entry is deliberately
+            # kept for older builds where it processes the entire transcript
+            # synchronously and blocks everything else on the Stop chain.
+            # One dropped trace beats a wedged session.
+            "timeout": 10,
         }
     ]
 }
