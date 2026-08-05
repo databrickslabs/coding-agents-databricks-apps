@@ -40,8 +40,8 @@ home = Path(os.environ["HOME"])
 
 host = os.environ.get("DATABRICKS_HOST", "")
 token = os.environ.get("DATABRICKS_TOKEN", "")
-hermes_model = os.environ.get("HERMES_MODEL", "databricks-claude-opus-4-7")
-hermes_fallback_model = os.environ.get("HERMES_FALLBACK_MODEL", "databricks-claude-opus-4-6")
+hermes_model = os.environ.get("HERMES_MODEL", "databricks-claude-opus-4-8")
+hermes_fallback_model = os.environ.get("HERMES_FALLBACK_MODEL", "databricks-claude-opus-4-8")
 
 hermes_home = home / ".hermes"
 hermes_bin = home / ".local" / "bin" / "hermes"
@@ -50,7 +50,13 @@ hermes_bin = home / ".local" / "bin" / "hermes"
 # httpx, pyyaml, pydantic) cover chat + Databricks model serving. Not on PyPI,
 # so we install directly from GitHub. uv tool install handles venv + binary.
 # The mcp package is needed for HTTP transport (DeepWiki, Exa MCP servers).
-HERMES_PKG = "hermes-agent @ git+https://github.com/NousResearch/hermes-agent.git"
+# Honour HERMES_PIP_URL for enterprise environments where the upstream git
+# URL is firewalled — customers can point at a mirrored git URL or, once
+# Hermes is mirrored in their internal PyPI, a pinned spec like
+# `hermes-agent==1.2.3`.
+from enterprise_config import hermes_pip_url
+
+HERMES_PKG = hermes_pip_url()
 HERMES_EXTRA_DEPS = ["mcp>=1.2.0"]
 
 # 1. Install Hermes Agent (always, even without token).
@@ -107,14 +113,26 @@ if gateway_host and not gateway_token:
     print("Warning: AI Gateway resolved but DATABRICKS_TOKEN missing, falling back to DATABRICKS_HOST")
     gateway_host = ""
 
+# Route Hermes through the local content-filter proxy (127.0.0.1:4000) so
+# PAT rotation is transparent: the proxy reads ~/.databrickscfg on every
+# request and injects a fresh Bearer token, overriding whatever literal
+# api_key is cached in Hermes's in-memory config. Without this, the
+# long-running `hermes chat` process holds the startup token and gets
+# revoked-token 403s once the rotator swaps PATs (~10 min cadence).
+# OpenCode uses the same trick.
+#
+# upstream_base is recorded for the diagnostic banner below; the proxy
+# itself decides the actual upstream from PROXY_UPSTREAM_BASE.
 if gateway_host:
-    base_url = f"{gateway_host}/mlflow/v1"
+    upstream_base = f"{gateway_host}/mlflow/v1"
     auth_token = gateway_token
-    print(f"Using Databricks AI Gateway: {gateway_host}")
+    print(f"Hermes will route via content-filter proxy -> AI Gateway: {gateway_host}")
 else:
-    base_url = f"{host}/serving-endpoints"
+    upstream_base = f"{host}/serving-endpoints"
     auth_token = token
-    print(f"Using Databricks Host: {host}")
+    print(f"Hermes will route via content-filter proxy -> {host}/serving-endpoints")
+
+base_url = "http://127.0.0.1:4000"
 
 # 4. Write ~/.hermes/config.yaml
 config_path = hermes_home / "config.yaml"
@@ -123,13 +141,12 @@ claude_skills_dir = Path("/app/python/source_code/.claude/skills")
 external_skills = [str(claude_skills_dir)] if claude_skills_dir.exists() else []
 
 model_catalog = [
-    "databricks-claude-opus-4-6",
+    "databricks-claude-opus-4-8",
     "databricks-claude-sonnet-4-6",
     "databricks-claude-haiku-4-5",
     "databricks-gpt-5-3-codex",
     "databricks-gpt-5-1-codex-max",
     "databricks-gemini-2-5-flash",
-    "databricks-gemini-2-5-pro",
     "databricks-gemini-2-5-pro",
 ]
 
@@ -160,21 +177,30 @@ if external_skills:
 else:
     lines.append("  external_dirs: []")
 lines.append("")
-lines.append("# Native MCP servers — DeepWiki (GitHub wiki lookup) + Exa (web search)")
-lines.append("mcp_servers:")
-lines.append("  deepwiki:")
-lines.append("    url: https://mcp.deepwiki.com/mcp")
-lines.append("    timeout: 60")
-lines.append("  exa:")
-lines.append("    url: https://mcp.exa.ai/mcp")
-lines.append("    timeout: 60")
+# Native MCP servers — DeepWiki (GitHub wiki lookup) + Exa (web search) + an
+# optional team-memory server. Honour enterprise overrides: empty
+# DEEPWIKI_MCP_URL / EXA_MCP_URL drops the corresponding entry (F-04).
+from enterprise_config import deepwiki_mcp_url, exa_mcp_url
+
+_hermes_mcp_urls = {}
+if dw_url := deepwiki_mcp_url():
+    _hermes_mcp_urls["deepwiki"] = dw_url
+if exa_url := exa_mcp_url():
+    _hermes_mcp_urls["exa"] = exa_url
 
 team_memory_url = os.environ.get("TEAM_MEMORY_MCP_URL", "").strip().rstrip("/")
 if team_memory_url:
-    lines.append("  team-memory:")
-    lines.append(f"    url: {team_memory_url}/mcp")
-    lines.append("    timeout: 60")
+    _hermes_mcp_urls["team-memory"] = f"{team_memory_url}/mcp"
     print(f"Team memory MCP configured: {team_memory_url}/mcp")
+
+if _hermes_mcp_urls:
+    lines.append("mcp_servers:")
+    for _name, _url in _hermes_mcp_urls.items():
+        lines.append(f"  {_name}:")
+        lines.append(f"    url: {_url}")
+        lines.append("    timeout: 60")
+else:
+    lines.append("mcp_servers: {}")
 
 lines.append("")
 lines.append("# Model catalog hint — users can `/model` switch inside chat")
@@ -193,6 +219,16 @@ if config_path.exists():
 
 if should_write:
     config_path.write_text("\n".join(lines))
+    # 0o600 — the file contains the plaintext PAT in `api_key:`. Without an
+    # explicit chmod the file inherits umask-derived perms (often 0o644 on
+    # container filesystems) which makes the token world-readable for any
+    # other process under the same UID. Matches setup_opencode.py's auth.json
+    # handling. (F-05)
+    try:
+        config_path.chmod(0o600)
+    except OSError:
+        # Best effort — chmod can fail on some workspace filesystems.
+        pass
     print(f"Hermes config written: {config_path}")
 
 # 5. Adapt CLAUDE.md -> ~/.hermes/HERMES.md for first-run context
@@ -226,7 +262,7 @@ print("  hermes --tui chat              # Rich Ink TUI")
 print("  hermes model                   # Select default model")
 print("  hermes setup                   # Reconfigure wizard")
 print("  hermes mcp add <name> <url>    # Add MCP server")
-print(f"\nEndpoint:       {base_url}")
+print(f"\nEndpoint:       {base_url}  (forwards to {upstream_base})")
 print(f"Primary model:  {hermes_model}")
 print(f"Fallback model: {hermes_fallback_model} (auto-activates on 429/529/503)")
 print(f"Install:        minimal  (add extras: uv pip install \"hermes-agent[mcp,messaging,...]\")")

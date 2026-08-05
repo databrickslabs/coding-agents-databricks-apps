@@ -31,8 +31,7 @@ The `ask_genie` tool allows you to programmatically send questions to a Genie Sp
 
 | Tool | Purpose |
 |------|---------|
-| `ask_genie` | Ask a question, start new conversation |
-| `ask_genie_followup` | Ask follow-up in existing conversation |
+| `ask_genie` | Ask a question or follow-up (`conversation_id` optional) |
 
 ## Basic Usage
 
@@ -71,10 +70,10 @@ result = ask_genie(
 )
 
 # Follow-up (uses context from first question)
-ask_genie_followup(
+ask_genie(
     space_id="01abc123...",
-    conversation_id=result["conversation_id"],
-    question="Break that down by region"
+    question="Break that down by region",
+    conversation_id=result["conversation_id"]
 )
 ```
 
@@ -148,7 +147,7 @@ Claude:
 User: "I just created a Genie Space for HR data. Can you test it?"
 
 Claude:
-1. Gets the space_id from the user or recent create_or_update_genie result
+1. Gets the space_id from the user or recent manage_genie(action="create_or_update") result
 2. Calls ask_genie with test questions:
    - "How many employees do we have?"
    - "What is the average salary by department?"
@@ -163,9 +162,9 @@ User: "Use my analytics Genie to explore sales trends"
 Claude:
 1. ask_genie(space_id, "What were total sales by month this year?")
 2. User: "Which month had the highest growth?"
-3. ask_genie_followup(space_id, conv_id, "Which month had the highest growth?")
+3. ask_genie(space_id, "Which month had the highest growth?", conversation_id=conv_id)
 4. User: "What products drove that growth?"
-5. ask_genie_followup(space_id, conv_id, "What products drove that growth?")
+5. ask_genie(space_id, "What products drove that growth?", conversation_id=conv_id)
 ```
 
 ## Best Practices
@@ -181,8 +180,8 @@ result2 = ask_genie(space_id, "How many employees do we have?")  # New conversat
 
 # Good: Follow-up for related question
 result1 = ask_genie(space_id, "What were sales last month?")
-result2 = ask_genie_followup(space_id, result1["conversation_id"],
-                              "Break that down by product")  # Related follow-up
+result2 = ask_genie(space_id, "Break that down by product",
+                    conversation_id=result1["conversation_id"])  # Related follow-up
 ```
 
 ### Handle Clarification Requests
@@ -219,7 +218,7 @@ ask_genie(space_id, "Calculate customer lifetime value for all customers",
 
 - Verify the `space_id` is correct
 - Check you have access to the space
-- Use `get_genie(space_id)` to verify it exists
+- Use `manage_genie(action="get", space_id=...)` to verify it exists
 
 ### "Query timed out"
 

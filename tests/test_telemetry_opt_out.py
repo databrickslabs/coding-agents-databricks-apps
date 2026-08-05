@@ -1,9 +1,9 @@
 """Tests for the telemetry opt-out path (CODA_TELEMETRY_DISABLED).
 
-Enterprise procurement teams (NAB, Coles, etc.) require an inventory of
-every outbound data flow. The opt-out lets operators ship CoDA with no
-disclosed telemetry, which is the only way to pass third-party-risk
-review for regulated workspaces.
+Enterprise procurement teams require an inventory of every outbound data
+flow. The opt-out lets operators ship CoDA with no disclosed telemetry,
+which is often the only way to pass third-party-risk review for regulated
+workspaces.
 """
 
 from __future__ import annotations
@@ -59,3 +59,52 @@ def test_log_telemetry_fires_when_enabled(monkeypatch):
         log_telemetry("test_event", "1")
         mock_thread.assert_called_once()
         mock_thread.return_value.start.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Stable Flask session key (FLASK_SECRET_KEY)
+# ---------------------------------------------------------------------------
+
+
+class TestFlaskSecretKey:
+    """`app.secret_key` signs session cookies. Regenerating it per worker start
+    silently invalidates every live session, so operators can pin it."""
+
+    def _resolver(self):
+        import app as app_module
+
+        return app_module._resolve_secret_key
+
+    def test_uses_configured_key(self, monkeypatch):
+        monkeypatch.setenv("FLASK_SECRET_KEY", "s3cret-from-databricks")
+
+        assert self._resolver()() == b"s3cret-from-databricks"
+
+    def test_configured_key_is_stable_across_calls(self, monkeypatch):
+        """The whole point: two workers reading the same env var agree."""
+        monkeypatch.setenv("FLASK_SECRET_KEY", "s3cret-from-databricks")
+        resolve = self._resolver()
+
+        assert resolve() == resolve()
+
+    def test_whitespace_only_key_is_treated_as_unset(self, monkeypatch):
+        """An env var wired to an empty secret must not become the signing key."""
+        monkeypatch.setenv("FLASK_SECRET_KEY", "   ")
+        resolve = self._resolver()
+
+        key = resolve()
+        assert key != b"   "
+        assert len(key) == 24  # the os.urandom fallback
+
+    def test_falls_back_to_random_and_warns(self, monkeypatch, caplog):
+        import logging
+
+        monkeypatch.delenv("FLASK_SECRET_KEY", raising=False)
+        resolve = self._resolver()
+
+        with caplog.at_level(logging.WARNING, logger="app"):
+            first, second = resolve(), resolve()
+
+        assert first != second, "fallback must be random per call"
+        assert len(first) == 24
+        assert any("FLASK_SECRET_KEY not set" in r.message for r in caplog.records)

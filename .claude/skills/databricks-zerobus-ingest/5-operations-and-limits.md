@@ -12,40 +12,44 @@ Every ingested record returns a durability acknowledgment. An ACK indicates that
 
 | Strategy | When to Use | Trade-off |
 |----------|-------------|-----------|
-| **Sync block per record** | Low-volume, strict ordering | Simplest; lower throughput |
-| **ACK callback** | High-volume producers | Higher throughput; more complex |
-| **Periodic flush** | Batch-oriented workloads | Best throughput; eventual consistency |
+| **`ingest_record_offset` + `wait_for_offset`** | Low-volume, strict ordering | Simplest; lower throughput |
+| **`ingest_record_nowait` + `AckCallback`** | High-volume producers | Higher throughput; more complex |
+| **`ingest_record_nowait` + periodic `flush`** | Batch-oriented workloads | Best throughput; eventual consistency |
 
 ### Sync Block (Python)
 
 ```python
-ack = stream.ingest_record(record)
-ack.wait_for_ack()  # Blocks until durable
+offset = stream.ingest_record_offset(record)
+stream.wait_for_offset(offset)  # Blocks until durable
 ```
 
 ### ACK Callback (Python)
 
 ```python
-from zerobus.sdk.shared import IngestRecordResponse
+from zerobus.sdk.shared import AckCallback
 
-last_acked_offset = 0
+class MyAckHandler(AckCallback):
+    def __init__(self):
+        self.last_acked_offset = 0
 
-def on_ack(response: IngestRecordResponse) -> None:
-    global last_acked_offset
-    last_acked_offset = response.durability_ack_up_to_offset
+    def on_ack(self, offset: int) -> None:
+        self.last_acked_offset = offset
+
+    def on_error(self, offset: int, message: str) -> None:
+        print(f"Error at offset {offset}: {message}")
 
 options = StreamConfigurationOptions(
     record_type=RecordType.JSON,
-    ack_callback=on_ack,
+    ack_callback=MyAckHandler(),
 )
 ```
 
 ### Flush-Based
 
 ```python
-# Send many records without blocking
+# Send many records without blocking (fire-and-forget)
 for record in batch:
-    stream.ingest_record(record)
+    stream.ingest_record_nowait(record)
 
 # Flush ensures all buffered records are sent
 stream.flush()
@@ -89,8 +93,8 @@ def ingest_with_retry(stream_factory, record, max_retries=5):
 
     for attempt in range(max_retries):
         try:
-            ack = stream.ingest_record(record)
-            ack.wait_for_ack()
+            offset = stream.ingest_record_offset(record)
+            stream.wait_for_offset(offset)
             return stream  # Return the (possibly new) stream
         except Exception as e:
             err = str(e).lower()

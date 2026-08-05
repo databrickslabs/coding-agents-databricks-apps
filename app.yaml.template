@@ -7,17 +7,36 @@ env:
   - name: DATABRICKS_TOKEN
     valueFrom: DATABRICKS_TOKEN
   - name: ANTHROPIC_MODEL
-    value: databricks-claude-opus-4-6
+    value: databricks-claude-opus-4-8
+  - name: PI_MODEL
+    value: databricks-claude-opus-4-8
   - name: GEMINI_MODEL
     value: databricks-gemini-2-5-pro
   - name: HERMES_MODEL
-    value: databricks-claude-opus-4-7
+    value: databricks-claude-opus-4-8
   - name: HERMES_FALLBACK_MODEL
-    value: databricks-claude-opus-4-6
-  # Set ENABLE_HERMES=false to skip Hermes Agent install.
-  # Other CLIs are unaffected.
+    value: databricks-claude-opus-4-8
+  # Per-CLI install toggles. Each ENABLE_* defaults to true when the variable
+  # is absent, so list all of them here explicitly: an Apps overlay *replaces*
+  # app.yaml rather than merging with it, and an omitted toggle silently falls
+  # back to "install it".
+  #
+  # Set any to "false" to skip that CLI's install; the others are unaffected.
   - name: ENABLE_HERMES
     value: "true"
+  - name: ENABLE_PI
+    value: "true"
+  - name: ENABLE_OPENCODE
+    value: "true"
+  # Codex and Gemini default to "false" here because most workspaces don't
+  # serve endpoints they can talk to — Codex needs a Responses-API (*-codex)
+  # endpoint and Gemini needs a served Gemini model. Installing them anyway
+  # just costs boot time and produces agents that fail on first request.
+  # Flip to "true" once your gateway serves a compatible endpoint.
+  - name: ENABLE_CODEX
+    value: "false"
+  - name: ENABLE_GEMINI
+    value: "false"
   #OPTIONAL: Use the new Databricks AI Gateway if you have access (recommended), otherwise it will default to the older endpoint
   - name: DATABRICKS_GATEWAY_HOST
     value: https://<your-gateway-id>.ai-gateway.<env>.cloud.databricks.com
@@ -26,8 +45,9 @@ env:
   # completes the rollout and auto memory is on by default, this can be removed entirely.
   - name: CLAUDE_CODE_DISABLE_AUTO_MEMORY
     value: 0
-  # Set MLFLOW_TRACING_ENABLED=true to auto-trace Claude, Codex, and Gemini
-  # sessions into /Users/{app_owner}/{app_name}. Default off to keep installs
-  # lightweight — opt in when you want observability across all three agents.
+  # Set MLFLOW_TRACING_ENABLED=true to auto-trace Claude Code + Codex sessions
+  # into /Users/{app_owner}/{app_name}. (Gemini/Hermes/Pi/OpenCode have no
+  # first-party MLflow hook — see docs/observability.md §1.) Default off to keep
+  # installs lightweight — opt in when you want per-agent trajectory traces.
   - name: MLFLOW_TRACING_ENABLED
     value: "false"

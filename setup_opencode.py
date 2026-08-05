@@ -5,13 +5,29 @@ Routes requests through a local content-filter proxy proxy (localhost:4000) whic
 text content blocks before forwarding to Databricks AI Gateway. This fixes OpenCode
 issue #5028 where empty content blocks cause "Bad Request" errors.
 See docs/plans/2026-03-11-litellm-empty-content-blocks-design.md for details.
+
+Opt-out:
+  Set ENABLE_OPENCODE=false in app.yaml to skip installation entirely.
 """
 import os
 import json
 import subprocess
 from pathlib import Path
 
-from utils import ensure_https, get_gateway_host, get_npm_version
+from utils import (
+    discover_serving_endpoints,
+    ensure_https,
+    get_gateway_host,
+    get_npm_version,
+    pick_in_geo_model,
+)
+from enterprise_config import npm_env
+from token_helper import resolve_databricks_token
+
+# Opt-out: allow operators to disable OpenCode bundling without removing the file.
+if os.environ.get("ENABLE_OPENCODE", "true").strip().lower() in ("false", "0", "no"):
+    print("ENABLE_OPENCODE=false — skipping OpenCode CLI setup")
+    raise SystemExit(0)
 
 # content-filter proxy local proxy — sanitizes empty content blocks before reaching Databricks
 # (see https://github.com/sst/opencode/issues/5028)
@@ -24,8 +40,8 @@ if not os.environ.get("HOME") or os.environ["HOME"] == "/":
 home = Path(os.environ["HOME"])
 
 host = os.environ.get("DATABRICKS_HOST", "")
-token = os.environ.get("DATABRICKS_TOKEN", "")
-anthropic_model = os.environ.get("ANTHROPIC_MODEL", "databricks-claude-sonnet-4-6")
+token = resolve_databricks_token() or ""
+anthropic_model = os.environ.get("ANTHROPIC_MODEL", "databricks-claude-opus-4-8")
 
 # 1. Install OpenCode CLI into ~/.local/bin (always, even without token)
 local_bin = home / ".local" / "bin"
@@ -47,7 +63,7 @@ if not opencode_bin.exists():
         result = subprocess.run(
             ["npm", "install", "-g", f"--prefix={npm_prefix}", oc_pkg],
             capture_output=True, text=True,
-            env={**os.environ, "HOME": str(home)}
+            env={**os.environ, "HOME": str(home), **npm_env()}
         )
         if result.returncode == 0 and opencode_bin.exists():
             print(f"OpenCode CLI installed to {opencode_bin}")
@@ -74,7 +90,7 @@ if not opencode_bin.exists():
     result = subprocess.run(
         ["npm", "install", "-g", f"--prefix={npm_prefix}", sdk_pkg],
         capture_output=True, text=True,
-        env={**os.environ, "HOME": str(home)}
+        env={**os.environ, "HOME": str(home), **npm_env()}
     )
     if result.returncode == 0:
         print(f"@ai-sdk/openai@{sdk_version or 'latest'} installed (Responses API support)")
@@ -92,7 +108,7 @@ if not host or not token:
 host = ensure_https(host.rstrip("/"))
 
 gateway_host = get_gateway_host()
-gateway_token = os.environ.get("DATABRICKS_TOKEN", "") if gateway_host else ""
+gateway_token = token if gateway_host else ""
 if gateway_host and not gateway_token:
     print("Warning: AI Gateway resolved but DATABRICKS_TOKEN missing, falling back to DATABRICKS_HOST")
     gateway_host = ""
@@ -102,11 +118,95 @@ if gateway_host:
 else:
     print(f"Using Databricks Host: {host}")
 
+# 2b. Discover which endpoints the workspace actually serves, so the config
+# never advertises a model that isn't deployed here (e.g. gemini endpoints in a
+# claude-only workspace). A bad model id surfaces to opencode as
+# ``AI_APICallError: Not Found`` (ENDPOINT_NOT_FOUND) and is the exact failure
+# that broke opencode-native on the Omnigent host. Mirrors setup_pi.py.
+# Empty set = discovery unavailable (network/auth) → keep the static defaults.
+_served = discover_serving_endpoints(host, token)
+if _served:
+    print(f"Discovered {len(_served)} READY serving endpoints at workspace")
+
+# Candidate chat models with opencode display metadata, in preference order.
+# Only those actually served are written into the config.
+_CLAUDE_CANDIDATES = [
+    ("databricks-claude-opus-4-8", "Claude Opus 4.8 (Databricks)", 1000000, 16384),
+    ("databricks-claude-opus-4-7", "Claude Opus 4.7 (Databricks)", 1000000, 16384),
+    ("databricks-claude-opus-4-6", "Claude Opus 4.6 (Databricks)", 1000000, 16384),
+    ("databricks-claude-sonnet-4-6", "Claude Sonnet 4.6 (Databricks)", 1000000, 8192),
+    ("databricks-claude-sonnet-4-5", "Claude Sonnet 4.5 (Databricks)", 1000000, 8192),
+    ("databricks-claude-haiku-4-5", "Claude Haiku 4.5 (Databricks)", 1000000, 8192),
+    ("databricks-gemini-2-5-pro", "Gemini 2.5 Pro (Databricks)", 1000000, 8192),
+    ("databricks-gemini-2-5-flash", "Gemini 2.5 Flash (Databricks)", 1000000, 8192),
+]
+
+
+def _build_models(candidates):
+    """Return an opencode ``models`` dict for the served subset of *candidates*.
+
+    When discovery is unavailable (empty ``_served``), fall back to the static
+    candidate list unfiltered so a discovery blip doesn't wipe the config.
+    """
+    models = {}
+    for name, label, ctx, out in candidates:
+        if _served and name not in _served:
+            continue
+        models[name] = {"name": label, "limit": {"context": ctx, "output": out}}
+    if not models:  # discovery filtered everything out — never ship an empty map
+        for name, label, ctx, out in candidates:
+            models[name] = {"name": label, "limit": {"context": ctx, "output": out}}
+    return models
+
+
+_databricks_models = _build_models(_CLAUDE_CANDIDATES)
+
+# GPT / OpenAI-family endpoints for the (gateway-only) databricks-openai
+# provider. Same served-subset filtering so it never advertises a
+# non-deployed codex/gpt endpoint.
+_GPT_CANDIDATES = [
+    ("databricks-gpt-5-3-codex", "GPT 5.3 Codex (Databricks)", 200000, 16384),
+    ("databricks-gpt-5-1-codex-max", "GPT 5.1 Codex Max (Databricks)", 200000, 16384),
+    ("databricks-gpt-oss-120b", "GPT OSS 120B (Databricks)", 128000, 16384),
+    ("databricks-gpt-oss-20b", "GPT OSS 20B (Databricks)", 128000, 16384),
+]
+_databricks_openai_models = _build_models(_GPT_CANDIDATES)
+
+# Pick a valid default model that IS served (degradation chain), so opencode's
+# TUI + first turn launch on a real endpoint instead of an unknown id.
+active_model = pick_in_geo_model(
+    [anthropic_model, "databricks-claude-opus-4-8", "databricks-claude-opus-4-7",
+     "databricks-claude-opus-4-6", "databricks-claude-sonnet-4-6"],
+    _served,
+    fallback=anthropic_model,
+)
+if _served and active_model != anthropic_model:
+    print(f"ANTHROPIC_MODEL={anthropic_model} not served here, using {active_model}")
+
 # 3. Write global opencode.json config
 # OpenCode looks for config at ~/.config/opencode/opencode.json (global)
 # and ./opencode.json (project-level)
 opencode_config_dir = home / ".config" / "opencode"
 opencode_config_dir.mkdir(parents=True, exist_ok=True)
+
+# Build the MCP server dict once, honouring enterprise overrides — empty
+# DEEPWIKI_MCP_URL / EXA_MCP_URL drops the corresponding server (F-04).
+from enterprise_config import deepwiki_mcp_url, exa_mcp_url
+
+_mcp_servers = {}
+if dw_url := deepwiki_mcp_url():
+    _mcp_servers["deepwiki"] = {
+        "type": "remote",
+        "url": dw_url,
+        "enabled": True,
+        "oauth": False,
+    }
+if exa_url := exa_mcp_url():
+    _mcp_servers["exa"] = {
+        "type": "remote",
+        "url": exa_url,
+        "enabled": True,
+    }
 
 if gateway_host:
     # Gateway mode: route through content-filter proxy proxy for content block sanitization
@@ -122,43 +222,7 @@ if gateway_host:
                     "baseURL": CONTENT_FILTER_PROXY_URL,
                     "apiKey": "{env:DATABRICKS_TOKEN}"
                 },
-                "models": {
-                    "databricks-claude-opus-4-6": {
-                        "name": "Claude Opus 4.6 (Databricks)",
-                        "limit": {
-                            "context": 200000,
-                            "output": 16384
-                        }
-                    },
-                    "databricks-claude-sonnet-4-6": {
-                        "name": "Claude Sonnet 4.6 (Databricks)",
-                        "limit": {
-                            "context": 200000,
-                            "output": 8192
-                        }
-                    },
-                    "databricks-gemini-2-5-flash": {
-                        "name": "Gemini 2.5 Flash (Databricks)",
-                        "limit": {
-                            "context": 1000000,
-                            "output": 8192
-                        }
-                    },
-                    "databricks-gemini-2-5-pro": {
-                        "name": "Gemini 2.5 Pro (Databricks)",
-                        "limit": {
-                            "context": 1000000,
-                            "output": 8192
-                        }
-                    },
-                    "databricks-gemini-2-5-pro": {
-                        "name": "Gemini 2.5 Pro (Databricks)",
-                        "limit": {
-                            "context": 1000000,
-                            "output": 8192
-                        }
-                    },
-                }
+                "models": _databricks_models
             },
             "databricks-openai": {
                 "npm": "@ai-sdk/openai",
@@ -168,38 +232,11 @@ if gateway_host:
                     "apiKey": "{env:DATABRICKS_TOKEN}",
                     "compatibility": "compatible"
                 },
-                "models": {
-                    "databricks-gpt-5-3-codex": {
-                        "name": "GPT 5.3 Codex (Databricks)",
-                        "limit": {
-                            "context": 200000,
-                            "output": 16384
-                        }
-                    },
-                    "databricks-gpt-5-1-codex-max": {
-                        "name": "GPT 5.1 Codex Max (Databricks)",
-                        "limit": {
-                            "context": 200000,
-                            "output": 16384
-                        }
-                    }
-                }
+                "models": _databricks_openai_models
             }
         },
-        "mcp": {
-            "deepwiki": {
-                "type": "remote",
-                "url": "https://mcp.deepwiki.com/mcp",
-                "enabled": True,
-                "oauth": False
-            },
-            "exa": {
-                "type": "remote",
-                "url": "https://mcp.exa.ai/mcp",
-                "enabled": True
-            }
-        },
-        "model": f"databricks/{anthropic_model}"
+        "mcp": _mcp_servers,
+        "model": f"databricks/{active_model}"
     }
 else:
     # Fallback: route through content-filter proxy proxy for content block sanitization
@@ -214,59 +251,11 @@ else:
                     "baseURL": CONTENT_FILTER_PROXY_URL,
                     "apiKey": "{env:DATABRICKS_TOKEN}"
                 },
-                "models": {
-                    "databricks-claude-opus-4-6": {
-                        "name": "Claude Opus 4.6 (Databricks)",
-                        "limit": {
-                            "context": 200000,
-                            "output": 16384
-                        }
-                    },
-                    "databricks-claude-sonnet-4-6": {
-                        "name": "Claude Sonnet 4.6 (Databricks)",
-                        "limit": {
-                            "context": 200000,
-                            "output": 8192
-                        }
-                    },
-                    "databricks-gemini-2-5-flash": {
-                        "name": "Gemini 2.5 Flash (Databricks)",
-                        "limit": {
-                            "context": 1000000,
-                            "output": 8192
-                        }
-                    },
-                    "databricks-gemini-2-5-pro": {
-                        "name": "Gemini 2.5 Pro (Databricks)",
-                        "limit": {
-                            "context": 1000000,
-                            "output": 8192
-                        }
-                    },
-                    "databricks-gemini-2-5-pro": {
-                        "name": "Gemini 2.5 Pro (Databricks)",
-                        "limit": {
-                            "context": 1000000,
-                            "output": 8192
-                        }
-                    },
-                }
+                "models": _databricks_models
             }
         },
-        "mcp": {
-            "deepwiki": {
-                "type": "remote",
-                "url": "https://mcp.deepwiki.com/mcp",
-                "enabled": True,
-                "oauth": False
-            },
-            "exa": {
-                "type": "remote",
-                "url": "https://mcp.exa.ai/mcp",
-                "enabled": True
-            }
-        },
-        "model": f"databricks/{anthropic_model}"
+        "mcp": _mcp_servers,
+        "model": f"databricks/{active_model}"
     }
 
 config_path = opencode_config_dir / "opencode.json"
@@ -299,9 +288,12 @@ auth_path.write_text(json.dumps(auth_data, indent=2))
 auth_path.chmod(0o600)
 print(f"OpenCode auth configured: {auth_path}")
 
-print(f"\nOpenCode ready! Default model: {anthropic_model}")
+print(f"\nOpenCode ready! Default model: {active_model}")
 print("  opencode                          # Start OpenCode TUI")
-if gateway_host:
-    print("  opencode -m databricks-openai/databricks-gpt-5-3-codex  # Use GPT 5.3 Codex")
-print("  opencode -m databricks/databricks-gemini-2-5-flash  # Use Gemini")
-print(f"  opencode -m databricks/{anthropic_model} # Use Claude (default)")
+if gateway_host and _databricks_openai_models:
+    _gpt = sorted(_databricks_openai_models.keys())[0]
+    print(f"  opencode -m databricks-openai/{_gpt}  # Use a GPT model")
+_served_names = sorted(_databricks_models.keys())
+if _served_names:
+    print(f"  opencode -m databricks/{_served_names[0]}  # first served model")
+print(f"  opencode -m databricks/{active_model} # default")

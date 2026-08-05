@@ -86,14 +86,17 @@ For reviewers conducting vendor security assessments (SIG, CAIQ, etc.):
 - **PyPI dependencies** use `[tool.uv] exclude-newer = "7 days"` (see
   `pyproject.toml`) and are pinned in `requirements.txt` / `uv.lock`.
 - **Hermes** is installed from a SHA-pinned git URL (see
-  `setup_hermes.py:HERMES_PIN_SHA`); the pin is rotated deliberately on
-  CoDA releases, not auto-updated.
+  `enterprise_config.DEFAULT_HERMES_PIN_SHA`, overridable via `HERMES_PIP_URL`
+  for mirrored installs); the pin is rotated deliberately on CoDA releases,
+  not auto-updated.
 - **Enterprise mode** (see `docs/enterprise.md`) routes all dependency
   fetches through an operator-configured proxy (JFrog Artifactory / Nexus
   / internal PyPI) instead of public registries.
 - **CVE scanning** runs on every push via `.github/workflows/dependency-audit.yml`.
 - **Software Bill of Materials (SBOM)** is attached to each GitHub Release
-  as a CycloneDX-format JSON file (see `.github/workflows/release.yml`).
+  as a CycloneDX-format JSON file, signed with cosign keyless OIDC (see
+  `.github/workflows/release.yml`). [docs/SECURITY.md](../docs/SECURITY.md)
+  has the verification commands.
 
 ## Known limitations
 

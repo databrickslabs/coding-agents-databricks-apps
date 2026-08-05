@@ -194,6 +194,45 @@ class TestTokenPersistence:
         assert "host = https://test.databricks.com" in content
 
     @mock.patch("pat_rotator.requests.post")
+    def test_preserves_other_profiles(self, mock_post, tmp_path):
+        """Rotation must NOT clobber co-owned profiles (e.g. the Omnigent host's
+        [omnigents-host] OAuth profile). A fresh runner re-reads this file with
+        no token cache, so wiping the block on rotation breaks its tunnel auth.
+        """
+        cfg_path = str(tmp_path / ".databrickscfg")
+        # Simulate the on-disk state after the host appended its OAuth profile.
+        with open(cfg_path, "w") as f:
+            f.write(
+                "[DEFAULT]\n"
+                "host = https://test.databricks.com\n"
+                "token = dapi-old\n"
+                "\n[omnigents-host]\n"
+                "host = https://test.databricks.com\n"
+                "client_id = sp-client-id\n"
+                "client_secret = sp-secret\n"
+                "auth_type = oauth-m2m\n"
+            )
+        mock_post.side_effect = [
+            _mock_create_response(token_value="dapi-new", token_id="tid-new"),
+            _mock_delete_response(),
+        ]
+        rotator = _make_rotator()
+        rotator._current_token = "dapi-old"
+        rotator._current_token_id = "tid-old"
+        rotator._databrickscfg_path = cfg_path
+
+        rotator._rotate_once()
+
+        content = open(cfg_path).read()
+        # DEFAULT rotated to the new token.
+        assert "token = dapi-new" in content
+        assert "dapi-old" not in content
+        # The host's OAuth profile survived the rewrite.
+        assert "[omnigents-host]" in content
+        assert "client_id = sp-client-id" in content
+        assert "auth_type = oauth-m2m" in content
+
+    @mock.patch("pat_rotator.requests.post")
     def test_databrickscfg_permissions(self, mock_post, tmp_path):
         """Config file should have 0o600 permissions (owner read/write only)."""
         mock_post.side_effect = [
@@ -398,3 +437,115 @@ class TestLogging:
 
         combined = " ".join(caplog.messages)
         assert "PAT rotation complete" in combined
+
+
+class TestRotationOnNearExpiry:
+    """When sessions are idle but the in-process token is near expiry, the loop
+    must rotate anyway. Otherwise our own auth dies during idle periods and the
+    rotator deadlocks on subsequent token/create attempts."""
+
+    def test_skip_when_token_fresh_and_no_sessions(self, caplog):
+        import time as _time
+        rotator = _make_rotator(
+            session_count_fn=lambda: 0,
+            rotation_interval=1,
+            token_lifetime=3600,
+        )
+        rotator._current_token = "dapi-fresh"
+        rotator._current_token_id = "tid-fresh"
+        rotator._last_rotation_time = _time.time()  # just minted
+
+        with mock.patch.object(rotator, "_rotate_once") as mr:
+            t = threading.Thread(target=rotator._rotation_loop, daemon=True)
+            t.start()
+            _time.sleep(1.5)
+            rotator.stop()
+            t.join(timeout=2)
+
+        assert mr.call_count == 0
+
+    def test_rotate_when_token_near_expiry_even_with_no_sessions(self):
+        import time as _time
+        rotator = _make_rotator(
+            session_count_fn=lambda: 0,
+            rotation_interval=1,
+            token_lifetime=10,
+        )
+        rotator._current_token = "dapi-near-expiry"
+        rotator._current_token_id = "tid-near-expiry"
+        # Token is 9s old of a 10s lifetime — within the rotation interval of expiry.
+        rotator._last_rotation_time = _time.time() - 9
+
+        with mock.patch.object(rotator, "_rotate_once", return_value=True) as mr:
+            t = threading.Thread(target=rotator._rotation_loop, daemon=True)
+            t.start()
+            _time.sleep(1.5)
+            rotator.stop()
+            t.join(timeout=2)
+
+        assert mr.call_count >= 1
+
+
+# ---------------------------------------------------------------------------
+# 6. Per-instance rotation comment (multi-CoDA attribution)
+# ---------------------------------------------------------------------------
+
+class TestInstanceNaming:
+    """Auto-rotated PATs are tagged with the CoDA instance name so multiple
+    CoDAs sharing one identity produce attributable token names."""
+
+    def test_rotation_comment_helper(self):
+        from pat_rotator import rotation_comment
+        assert rotation_comment("") == "coda-auto-rotated"
+        assert rotation_comment("my-coda-1") == "coda-auto-rotated:my-coda-1"
+
+    def test_default_instance_name_from_env(self):
+        from pat_rotator import default_instance_name
+        with mock.patch.dict(os.environ, {"CODA_INSTANCE_NAME": "coda-alpha"}, clear=False):
+            assert default_instance_name() == "coda-alpha"
+
+    def test_default_instance_name_from_app_url(self):
+        from pat_rotator import default_instance_name
+        env = {"DATABRICKS_APP_URL": "https://my-coda-7788.aws.databricksapps.com"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            assert default_instance_name() == "my-coda-7788"
+
+    @mock.patch("pat_rotator.requests.post")
+    def test_rotate_uses_instance_comment(self, mock_post):
+        mock_post.side_effect = [
+            _mock_create_response(token_value="dapi-new", token_id="tid-new"),
+            _mock_delete_response(status_code=200),
+        ]
+        rotator = _make_rotator(instance_name="coda-beta")
+        rotator._current_token = "dapi-old"
+        rotator._current_token_id = "tid-old"
+
+        rotator._rotate_once()
+
+        create_call = mock_post.call_args_list[0]
+        assert create_call[1]["json"]["comment"] == "coda-auto-rotated:coda-beta"
+
+    @mock.patch("pat_rotator.requests.get")
+    @mock.patch("pat_rotator.requests.post")
+    def test_bootstrap_cleanup_ignores_other_codas(self, mock_post, mock_get):
+        """revoke_bootstrap_token must not revoke tokens minted by OTHER CoDAs
+        (they carry the coda-auto-rotated prefix), only the true bootstrap PAT."""
+        list_resp = mock.MagicMock()
+        list_resp.status_code = 200
+        list_resp.json.return_value = {"token_infos": [
+            {"token_id": "tid-current", "comment": "coda-auto-rotated:me", "creation_time": 100},
+            {"token_id": "tid-other-coda", "comment": "coda-auto-rotated:other", "creation_time": 200},
+            {"token_id": "tid-bootstrap", "comment": "manual bootstrap", "creation_time": 150},
+        ]}
+        mock_get.return_value = list_resp
+        mock_post.return_value = _mock_delete_response(status_code=200)
+
+        rotator = _make_rotator(instance_name="me")
+        rotator._current_token = "dapi-current"
+        rotator._current_token_id = "tid-current"
+
+        rotator.revoke_bootstrap_token()
+
+        # Exactly one delete, targeting the non-coda bootstrap token
+        assert mock_post.call_count == 1
+        assert mock_post.call_args[1]["json"]["token_id"] == "tid-bootstrap"

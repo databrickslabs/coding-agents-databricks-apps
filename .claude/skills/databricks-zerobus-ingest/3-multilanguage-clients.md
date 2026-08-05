@@ -51,7 +51,8 @@ public class ZerobusProducer {
                     .setTemp(22)
                     .setHumidity(55)
                     .build();
-                stream.ingestRecord(record).join();
+                long offset = stream.ingestRecordOffset(record);
+                stream.waitForOffset(offset);
             }
         } finally {
             stream.close();
@@ -126,12 +127,12 @@ func main() {
         record := fmt.Sprintf(
             `{"device_name": "sensor-%d", "temp": 22, "humidity": 55}`, i,
         )
-        ack, err := stream.IngestRecord(record)
+        offset, err := stream.IngestRecordOffset(record)
         if err != nil {
             log.Printf("Ingest failed for record %d: %v", i, err)
             continue
         }
-        ack.Await()
+        stream.WaitForOffset(offset)
     }
 
     stream.Flush()
@@ -187,7 +188,8 @@ const stream = await sdk.createStream(
 try {
   for (let i = 0; i < 100; i++) {
     const record = { device_name: `sensor-${i}`, temp: 22, humidity: 55 };
-    await stream.ingestRecord(record);
+    const offset = await stream.ingestRecordOffset(record);
+    await stream.waitForOffset(offset);
   }
   await stream.flush();
 } finally {
@@ -207,7 +209,8 @@ async function ingestWithRetry(
 ): Promise<boolean> {
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      await stream.ingestRecord(record);
+      const offset = await stream.ingestRecordOffset(record);
+      await stream.waitForOffset(offset);
       return true;
     } catch (error) {
       console.warn(`Attempt ${attempt + 1}/${maxRetries} failed:`, error);
@@ -268,8 +271,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             r#"{{"device_name": "sensor-{}", "temp": 22, "humidity": 55}}"#,
             i
         );
-        let ack = stream.ingest_record(record.into_bytes()).await?;
-        ack.await?;
+        let offset = stream.ingest_record_offset(record.into_bytes()).await?;
+        stream.wait_for_offset(offset).await?;
     }
 
     stream.close().await?;
@@ -296,8 +299,8 @@ let mut stream = sdk
 
 // Ingest serialized protobuf bytes
 let record_bytes = my_proto_message.encode_to_vec();
-let ack = stream.ingest_record(record_bytes).await?;
-ack.await?;
+let offset = stream.ingest_record_offset(record_bytes).await?;
+stream.wait_for_offset(offset).await?;
 ```
 
 ---
@@ -310,5 +313,5 @@ ack.await?;
 | Package | `databricks-zerobus-ingest-sdk` | `com.databricks:zerobus-ingest-sdk` | `github.com/databricks/zerobus-sdk-go` | `@databricks/zerobus-ingest-sdk` | `databricks-zerobus-ingest-sdk` |
 | Default serialization | JSON | Protobuf | JSON | JSON | JSON |
 | Async API | Yes (separate module) | CompletableFuture | Goroutines | Native async/await | Tokio async/await |
-| ACK pattern | `ack.wait_for_ack()` or callback | `.join()` | `ack.Await()` | Implicit in `await` | `ack.await?` |
+| ACK pattern | `wait_for_offset(offset)` or `AckCallback` | `waitForOffset(offset)` | `WaitForOffset(offset)` | `await waitForOffset(offset)` | `wait_for_offset(offset).await?` |
 | Proto generation | `python -m zerobus.tools.generate_proto` | JAR CLI tool | External `protoc` | External `protoc` | External `protoc` |
