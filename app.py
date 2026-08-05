@@ -170,6 +170,7 @@ setup_state = {
     "steps": [
         {"id": "git",        "label": "Configuring git identity",     "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "micro",      "label": "Installing micro editor",      "status": "pending", "started_at": None, "completed_at": None, "error": None},
+        {"id": "editors",    "label": "Detecting available editors",  "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "gh",         "label": "Installing GitHub CLI",        "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "dbcli",     "label": "Upgrading Databricks CLI",     "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "proxy",   "label": "Starting content-filter proxy", "status": "pending", "started_at": None, "completed_at": None, "error": None},
@@ -181,6 +182,7 @@ setup_state = {
         {"id": "hermes",     "label": "Configuring Hermes Agent",     "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "databricks", "label": "Setting up Databricks CLI",    "status": "pending", "started_at": None, "completed_at": None, "error": None},
         {"id": "mlflow",     "label": "Enabling MLflow tracing",       "status": "pending", "started_at": None, "completed_at": None, "error": None},
+        {"id": "projects",   "label": "Setting up bundled projects",   "status": "pending", "started_at": None, "completed_at": None, "error": None},
     ]
 }
 
@@ -501,6 +503,17 @@ def _setup_git_config():
         f.write("\n".join(lines) + "\n")
     logger.info(f"Git config written to {gitconfig_path}")
 
+    # Configure gh as git's credential helper so `git push` works without the
+    # user wiring credentials by hand. gh must be authenticated (GH_TOKEN, or
+    # `gh auth login` in the terminal) for the helper to actually supply
+    # anything — this only installs the plumbing.
+    try:
+        subprocess.run(["gh", "auth", "setup-git"], capture_output=True, timeout=10)
+        logger.info("gh auth setup-git configured")
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        # gh is installed later in run_setup(); absent at first boot is normal.
+        logger.debug("gh not available, skipping credential helper setup")
+
     # Write post-commit hook for workspace sync (works from any CLI: Claude, Gemini, OpenCode, etc.)
     # Only syncs repos inside ~/projects/ — skips the app source and any other repos
     post_commit = os.path.join(hooks_dir, "post-commit")
@@ -547,8 +560,90 @@ def _setup_git_config():
     os.chmod(post_commit, 0o755)
     logger.info(f"Post-commit hook written to {post_commit}")
 
+    # `wsync` — manual workspace sync for the current repo. The post-commit hook
+    # above covers the normal path; this is the recovery path for when a commit's
+    # sync failed (see ~/.sync.log) and you don't want an empty commit to retry.
+    local_bin = os.path.join(home, ".local", "bin")
+    os.makedirs(local_bin, exist_ok=True)
+    wsync_path = os.path.join(local_bin, "wsync")
+    with open(wsync_path, "w") as f:
+        f.write(
+            '#!/bin/bash\n'
+            '# Manually sync the current git repo to the Databricks Workspace.\n'
+            'set -euo pipefail\n'
+            'REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"\n'
+            'if [ -z "$REPO_ROOT" ]; then\n'
+            '    echo "Error: not inside a git repo" >&2\n'
+            '    exit 1\n'
+            'fi\n'
+            'APP_DIR="/app/python/source_code"\n'
+            'SYNC_SCRIPT="$APP_DIR/sync_to_workspace.py"\n'
+            'if [ ! -f "$SYNC_SCRIPT" ]; then\n'
+            '    echo "Error: sync script not found at $SYNC_SCRIPT" >&2\n'
+            '    exit 1\n'
+            'fi\n'
+            'echo "Syncing $REPO_ROOT to Databricks Workspace..."\n'
+            'uv run --project "$APP_DIR" python "$SYNC_SCRIPT" "$REPO_ROOT"\n'
+        )
+    os.chmod(wsync_path, 0o755)
+    logger.info(f"wsync command written to {wsync_path}")
+
     # Reinit app source git to remove template origin (Databricks Apps only)
     _reinit_app_git()
+
+
+def _setup_bundled_projects():
+    """Copy project templates bundled with the app source into ~/projects/.
+
+    Anything under <app_source>/projects/<name>/ is copied to ~/projects/<name>/
+    (skipped if already present) and git-init'd, so the post-commit hook picks it
+    up and commits sync to the Workspace — which is the only durable backup in
+    this ephemeral container.
+
+    No-op when the app ships no `projects/` directory, which is the default.
+    """
+    import shutil
+
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    bundled_dir = os.path.join(app_dir, "projects")
+    if not os.path.isdir(bundled_dir):
+        return
+
+    home = os.environ.get("HOME", "/app/python/source_code")
+    if not home or home == "/":
+        home = "/app/python/source_code"
+    projects_dir = os.path.join(home, "projects")
+    os.makedirs(projects_dir, exist_ok=True)
+
+    for name in sorted(os.listdir(bundled_dir)):
+        src = os.path.join(bundled_dir, name)
+        if not os.path.isdir(src):
+            continue
+        dest = os.path.join(projects_dir, name)
+        if os.path.exists(dest):
+            logger.info(f"Bundled project already present, skipping: {dest}")
+            continue
+
+        shutil.copytree(src, dest)
+        # git init so the post-commit workspace-sync hook applies here too.
+        subprocess.run(["git", "init"], cwd=dest, capture_output=True)
+        subprocess.run(["git", "add", "."], cwd=dest, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "Initial commit from bundled project"],
+            cwd=dest, capture_output=True,
+        )
+        logger.info(f"Bundled project initialized: {dest}")
+
+
+def _run_projects_step():
+    """Run bundled-project setup as a tracked setup step."""
+    _update_step("projects", status="running", started_at=time.time())
+    try:
+        _setup_bundled_projects()
+        _update_step("projects", status="complete", completed_at=time.time())
+    except Exception as e:
+        logger.warning(f"Bundled project setup failed: {e}")
+        _update_step("projects", status="error", completed_at=time.time(), error=str(e))
 
 
 def _reinit_app_git():
@@ -683,6 +778,22 @@ def run_setup():
     _run_step("micro", ["bash", "-c",
         "mkdir -p ~/.local/bin && bash install_micro.sh && mv micro ~/.local/bin/ 2>/dev/null || true"])
 
+    # Probe which terminal editors actually exist in this container. The runtime
+    # image's editor set is not guaranteed, and "which editor can I use?" is a
+    # recurring first question — for humans and for agents driving the terminal.
+    # Report lands at ~/.local/share/coda/editors.txt.
+    # Note the `|| true` on the probe: `command -v` returns non-zero for a
+    # missing editor, and without it the loop's exit status is the *last*
+    # probe's. Since `mcedit` is absent on the standard image, the whole step
+    # would exit 1 and be reported as an error on every single boot.
+    _run_step("editors", ["bash", "-c",
+        "mkdir -p ~/.local/share/coda && "
+        "{ echo 'Available terminal editors (detected at app startup):'; "
+        "  for ed in micro nano vim vi emacs ed pico joe mcedit; do "
+        "    p=$(command -v \"$ed\" 2>/dev/null) && echo \"  $ed -> $p\" || true; "
+        "  done; } > ~/.local/share/coda/editors.txt && "
+        "cat ~/.local/share/coda/editors.txt"])
+
     _run_step("gh", ["bash", "install_gh.sh"])
 
 
@@ -710,11 +821,14 @@ def run_setup():
         ("databricks", [_py, "setup_databricks.py"]),
     ]
 
-    with ThreadPoolExecutor(max_workers=len(parallel_steps)) as executor:
+    with ThreadPoolExecutor(max_workers=len(parallel_steps) + 1) as executor:
         futures = [
             executor.submit(_run_step, step_id, command)
             for step_id, command in parallel_steps
         ]
+        # Bundled projects (copy + git init) — no network, runs alongside the
+        # agent installs rather than adding to the critical path.
+        futures.append(executor.submit(_run_projects_step))
         wait(futures)
 
     # --- MLflow setup runs AFTER claude setup to avoid settings.json race ---
@@ -740,26 +854,136 @@ def run_setup():
         setup_state["completed_at"] = time.time()
 
 
-def get_token_owner():
-    """Get the owner email. Priority: Apps API (app.creator) > PAT (current_user.me).
+# Boot-time owner resolution is bounded so it can't stall gunicorn binding the
+# port (initialize_app runs before that). A transient failure is recovered by the
+# background retry thread below rather than by a longer boot stall.
+_OWNER_BOOT_ATTEMPTS = 3
+_OWNER_BOOT_BASE_DELAY = 2.0
+# The background retry keeps going for a while — the failure mode it exists for
+# (app-SP credentials not yet usable for OAuth exchange) resolves in seconds to
+# minutes, and until it does, check_authorization() fails closed and the app is
+# unusable.
+_OWNER_RETRY_ATTEMPTS = 8
+_OWNER_RETRY_MAX_DELAY = 60
 
-    Uses the auto-provisioned SP to call the Apps API — no PAT needed for
-    owner resolution. Falls back to PAT-based lookup for backward compat.
+
+def _owner_from_apps_api():
+    """Resolve the owner via the Apps API using the app's own SP credentials.
+
+    Returns the lowercased email, or None if the call failed. Prefers the
+    spawner's `owner:{email}` description over `app.creator`: when one identity
+    creates apps on behalf of others, `creator` is the spawner, not the user who
+    should own the box.
     """
     from databricks.sdk import WorkspaceClient
 
-    # 1. Try Apps API via SP credentials (no PAT needed)
     app_name = os.environ.get("DATABRICKS_APP_NAME")
-    if app_name:
-        try:
-            w = WorkspaceClient()  # auto-detects SP credentials
-            set_product_info(w)
-            app = w.apps.get(name=app_name)
-            owner = (app.creator or "").lower()
-            logger.info(f"Owner resolved from app.creator: {owner}")
+    if not app_name:
+        return None
+
+    w = WorkspaceClient()  # auto-detects SP credentials
+    set_product_info(w)
+    app_info = w.apps.get(name=app_name)
+
+    description = getattr(app_info, "description", "") or ""
+    if description.startswith("owner:"):
+        owner = description.split(":", 1)[1].strip().lower()
+        if owner:
+            logger.info(f"Owner resolved from app description: {owner}")
             return owner
-        except Exception as e:
-            logger.warning(f"Could not resolve owner via Apps API: {e}")
+
+    owner = (app_info.creator or "").lower()
+    if owner:
+        logger.info(f"Owner resolved from app.creator: {owner}")
+        return owner
+    return None
+
+
+def _retry_owner_resolution_in_background():
+    """Keep trying to resolve the owner after a failed boot-time attempt.
+
+    check_authorization() fails CLOSED when app_owner is unresolved, so a
+    transient Apps-API failure at boot would otherwise brick the app until
+    someone restarted it. Retrying in a daemon thread lets the app self-heal
+    without delaying the port bind.
+    """
+    def _retry():
+        global app_owner
+        for attempt in range(_OWNER_RETRY_ATTEMPTS):
+            delay = min(_OWNER_BOOT_BASE_DELAY * (2 ** attempt), _OWNER_RETRY_MAX_DELAY)
+            time.sleep(delay)
+            if app_owner:
+                return  # resolved elsewhere (e.g. a PAT was configured)
+            try:
+                owner = _owner_from_apps_api()
+            except Exception as e:
+                logger.warning(
+                    f"Background owner resolution attempt {attempt + 1}"
+                    f"/{_OWNER_RETRY_ATTEMPTS} failed: {e}"
+                )
+                continue
+            if owner:
+                app_owner = owner
+                os.environ["APP_OWNER"] = owner
+                try:
+                    app_state.set_app_owner(owner)
+                except Exception as e:
+                    logger.warning(f"Could not persist recovered owner: {e}")
+                logger.info(f"App owner recovered in background: {owner}")
+                return
+        logger.error(
+            "Owner resolution never succeeded — the app stays fail-closed. "
+            "Set APP_OWNER_EMAIL in app.yaml to resolve the owner without an "
+            "Apps API call."
+        )
+
+    threading.Thread(target=_retry, daemon=True, name="owner-resolve-retry").start()
+
+
+def get_token_owner():
+    """Get the owner email.
+
+    Priority: APP_OWNER_EMAIL env var > Apps API (spawner description, then
+    app.creator) > PAT (current_user.me).
+
+    The Apps API path uses the auto-provisioned SP, so it needs no PAT. It is
+    retried a few times because the SP's credentials are not always usable for
+    OAuth token exchange the instant the container starts — but only briefly,
+    since this runs before gunicorn binds the port. APP_OWNER_EMAIL skips the
+    call entirely and is the deterministic escape hatch when the API is
+    unreliable or the creator isn't the intended owner.
+    """
+    from databricks.sdk import WorkspaceClient
+
+    # 0. Explicit owner from the deployer — no API call, cannot fail.
+    explicit_owner = os.environ.get("APP_OWNER_EMAIL", "").strip().lower()
+    if explicit_owner:
+        logger.info(f"Owner resolved from APP_OWNER_EMAIL: {explicit_owner}")
+        return explicit_owner
+
+    # 1. Try Apps API via SP credentials (no PAT needed), bounded retry.
+    if os.environ.get("DATABRICKS_APP_NAME"):
+        for attempt in range(_OWNER_BOOT_ATTEMPTS):
+            try:
+                owner = _owner_from_apps_api()
+                if owner:
+                    return owner
+                logger.warning("Apps API returned no owner for this app")
+                break
+            except Exception as e:
+                last = attempt == _OWNER_BOOT_ATTEMPTS - 1
+                if last:
+                    logger.warning(
+                        f"Could not resolve owner via Apps API after "
+                        f"{_OWNER_BOOT_ATTEMPTS} attempts: {e}"
+                    )
+                else:
+                    delay = _OWNER_BOOT_BASE_DELAY * (2 ** attempt)
+                    logger.warning(
+                        f"Apps API call failed (attempt {attempt + 1}"
+                        f"/{_OWNER_BOOT_ATTEMPTS}): {e} — retrying in {delay:.0f}s"
+                    )
+                    time.sleep(delay)
 
     # 2. Fallback: PAT-based resolution
     try:
@@ -1961,7 +2185,15 @@ def initialize_app(local_dev=False):
         os.environ["APP_OWNER"] = app_owner
         app_state.set_app_owner(app_owner)
     else:
-        logger.warning("Could not determine app owner - authorization disabled")
+        # check_authorization() fails CLOSED on Databricks Apps when app_owner is
+        # unresolved, so this is not "authorization disabled" — it's "nobody can
+        # use the app". Keep trying in the background so a transient Apps-API
+        # failure at boot doesn't require a manual restart.
+        logger.error(
+            "Could not determine app owner — access stays denied (fail-closed) "
+            "until resolution succeeds"
+        )
+        _retry_owner_resolution_in_background()
 
     sp_helper_enabled = os.environ.get("ENABLE_SP_APIKEYHELPER", "").strip().lower() in (
         "true", "1", "yes",
