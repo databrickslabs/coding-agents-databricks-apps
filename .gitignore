@@ -21,12 +21,32 @@ uploads/
 # uv lockfile — not portable across PyPI proxies, generate locally with `uv lock`
 uv.lock
 
-# Codex CLI generated/cached files (only the bundled model catalog is tracked)
-.codex/*
-!.codex/databricks-models.json
+# Codex CLI generated/cached files (the bundled model catalog is tracked)
+.codex/config.toml
+.codex/.env
+.codex/AGENTS.md
+.codex/.personality_migration
+.codex/memories/
+.codex/tmp/
+.codex/sessions/
+.codex/cron/
+.codex/skills/
 
 # Codex skills are generated at runtime by setup_codex.py from .claude/skills/
 .agents/
 
 # Agent-plane reference clone
 agent-plane-ref/
+
+video/
+
+# Playwright e2e SSO session state (workspace cookies — DO NOT commit)
+tests/e2e/auth.json
+tests/e2e/.cache/
+
+# Playwright browser snapshots / traces from failed runs
+tests/e2e/test-results/
+tests/e2e/playwright-report/
+
+# Local env-specific app.yaml overrides (real workspace wiring — never commit)
+app.yaml.*.local

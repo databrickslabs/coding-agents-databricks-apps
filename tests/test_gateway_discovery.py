@@ -115,16 +115,25 @@ class TestGetGatewayHost:
 
     @mock.patch("utils._probe_gateway", return_value=True)
     @mock.patch.dict(os.environ, {"DATABRICKS_GATEWAY_HOST": "  ", "DATABRICKS_WORKSPACE_ID": "12345"})
-    def test_whitespace_only_gateway_falls_through(self, mock_probe):
-        """Whitespace-only DATABRICKS_GATEWAY_HOST falls through to workspace ID."""
+    def test_empty_gateway_host_forces_off(self, mock_probe):
+        """An explicitly-set-but-empty DATABRICKS_GATEWAY_HOST forces the gateway
+        OFF (returns "") — it does NOT fall through to workspace-ID derivation.
+        This is the operator kill-switch: setting it empty on an Azure host must
+        route model calls to serving-endpoints, not to a derived ai-gateway URL.
+        """
         os.environ.pop("_GATEWAY_RESOLVED", None)
-        assert self._get_fn()() == "https://12345.ai-gateway.cloud.databricks.com"
+        assert self._get_fn()() == ""
 
     @mock.patch("utils._probe_gateway", return_value=True)
-    @mock.patch.dict(os.environ, {"DATABRICKS_GATEWAY_HOST": "", "DATABRICKS_WORKSPACE_ID": " 99999 "})
+    @mock.patch.dict(os.environ, {"DATABRICKS_WORKSPACE_ID": " 99999 "})
     def test_workspace_id_whitespace_stripped(self, mock_probe):
-        """Leading/trailing whitespace in workspace ID is stripped."""
+        """Leading/trailing whitespace in workspace ID is stripped (tier 2).
+
+        DATABRICKS_GATEWAY_HOST is left unset so derivation runs — setting it
+        empty would now force the gateway off before tier 2 is reached.
+        """
         os.environ.pop("_GATEWAY_RESOLVED", None)
+        os.environ.pop("DATABRICKS_GATEWAY_HOST", None)
         assert self._get_fn()() == "https://99999.ai-gateway.cloud.databricks.com"
 
 
@@ -149,6 +158,7 @@ class TestEndpointConstruction:
             "PYTHONPATH": str(SETUP_DIR),
             # Pre-resolve gateway so subprocess skips the network probe
             "_GATEWAY_RESOLVED": "",
+            "CODA_SKIP_CLAUDE_INSTALL": "true",
         }
         # Ensure DATABRICKS_GATEWAY_HOST is NOT set (test auto-discovery)
         env.pop("DATABRICKS_GATEWAY_HOST", None)
