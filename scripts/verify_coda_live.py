@@ -37,6 +37,7 @@ HOME = Path(os.environ.get("HOME") or "/app/python/source_code")
 APP_ROOT = Path(__file__).resolve().parent.parent
 PI_CONFIG = HOME / ".pi" / "agent" / "models.json"
 OPENCODE_CONFIG = HOME / ".config" / "opencode" / "opencode.json"
+CLAUDE_CONFIG = HOME / ".claude" / "settings.json"
 DATABRICKS_CFG = HOME / ".databrickscfg"
 REPO = "databrickslabs/coding-agents-databricks-apps"
 
@@ -173,6 +174,18 @@ def pi_models(config: dict[str, Any]) -> list[str]:
     return sorted({str(m.get("id")) for m in models if isinstance(m, dict) and m.get("id")})
 
 
+def claude_active_models(config: dict[str, Any]) -> list[str]:
+    env = config.get("env") or {}
+    names = []
+    for key in ("ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL"):
+        value = str(env.get(key) or "")
+        # Claude's 1M routing suffix is metadata, not a serving endpoint id.
+        value = re.sub(r"\[1m\]$", "", value)
+        if value:
+            names.append(value)
+    return sorted(set(names))
+
+
 def opencode_models(config: dict[str, Any]) -> list[str]:
     providers = config.get("provider") or {}
     names: set[str] = set()
@@ -206,11 +219,14 @@ def opencode_displayed_models() -> dict[str, Any]:
 def catalog_comparison(ready: list[str]) -> dict[str, Any]:
     pi_cfg = load_json(PI_CONFIG)
     oc_cfg = load_json(OPENCODE_CONFIG)
+    claude_cfg = load_json(CLAUDE_CONFIG)
     pi_configured = pi_models(pi_cfg)
     oc_configured = opencode_models(oc_cfg)
     oc_display = opencode_displayed_models()
+    claude_configured = claude_active_models(claude_cfg)
     pi_expected = sorted(n for n in ready if n.startswith(PI_PREFIXES))
     oc_expected = sorted(n for n in ready if n.startswith(OPENCODE_PREFIXES))
+    claude_expected = sorted(n for n in ready if n.startswith(PI_PREFIXES))
 
     pi_provider = ((pi_cfg.get("providers") or {}).get("databricks-claude") or {})
     oc_providers = oc_cfg.get("provider") or {}
@@ -230,6 +246,11 @@ def catalog_comparison(ready: list[str]) -> dict[str, Any]:
         }
 
     return {
+        "claude": {
+            **compare(claude_configured, claude_expected),
+            "config_exists": CLAUDE_CONFIG.exists(),
+            "api_key_helper_present": bool(claude_cfg.get("apiKeyHelper")),
+        },
         "pi": {
             **compare(pi_configured, pi_expected),
             "config_exists": PI_CONFIG.exists(),
@@ -306,6 +327,18 @@ def inference_checks(catalogs: dict[str, Any], *, skip: bool) -> dict[str, Any]:
         return {"skipped": True, "reason": "--skip-inference"}
 
     result: dict[str, Any] = {}
+    claude = run(
+        ["claude", "--print", "--no-session", "--model", "sonnet", "Reply with exactly CODA_CLAUDE_OK"],
+        timeout=180,
+    )
+    result["claude"] = {
+        "ok": claude["ok"] and "CODA_CLAUDE_OK" in claude["stdout"],
+        "marker_seen": "CODA_CLAUDE_OK" in claude["stdout"],
+        "returncode": claude["returncode"],
+        "stdout": claude["stdout"],
+        "stderr": claude["stderr"],
+    }
+
     pi_models_list = catalogs["pi"]["configured"]
     if pi_models_list:
         model = pi_models_list[0]
@@ -424,7 +457,7 @@ def required_failures(report: dict[str, Any], expected_auth: str) -> list[str]:
 
     if not report["databricks_cli"]["command_ok"]:
         failures.append("databricks current-user me failed")
-    for agent in ("pi", "opencode"):
+    for agent in ("claude", "pi", "opencode"):
         catalog = report["model_catalogs"][agent]
         if not catalog["exact_match"]:
             failures.append(f"{agent} model catalog does not exactly match READY compatible endpoints")
@@ -434,7 +467,7 @@ def required_failures(report: dict[str, Any], expected_auth: str) -> list[str]:
         failures.append("OpenCode displayed model list does not exactly match READY compatible endpoints")
     inference = report["inference"]
     if not inference.get("skipped"):
-        for agent in ("pi", "opencode"):
+        for agent in ("claude", "pi", "opencode"):
             if not inference.get(agent, {}).get("ok"):
                 failures.append(f"{agent} inference smoke failed")
     if not report["github"]["ok"]:
