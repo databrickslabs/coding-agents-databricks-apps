@@ -45,6 +45,9 @@ class TestReadyEndpointParsing:
         raw = [{"name": "b", "state": {"ready": "READY"}}, {"name": "a", "state": {"ready": "READY"}}]
         assert verifier.ready_endpoints(raw) == ["a", "b"]
 
+    def test_accepts_flat_state_shape(self, verifier):
+        assert verifier.ready_endpoints({"endpoints": [{"name": "a", "state": "READY"}]}) == ["a"]
+
     @pytest.mark.parametrize("raw", [None, {}, [], "garbage"])
     def test_malformed_or_empty_is_empty(self, verifier, raw):
         assert verifier.ready_endpoints(raw) == []

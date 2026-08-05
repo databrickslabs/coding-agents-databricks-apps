@@ -119,7 +119,13 @@ def ready_endpoints(raw: Any) -> list[str]:
         if not isinstance(endpoint, dict):
             continue
         state = endpoint.get("state") or {}
-        ready = str(state.get("ready") or "").upper()
+        if isinstance(state, dict):
+            ready = str(state.get("ready") or "").upper()
+        else:
+            # Databricks CLI versions have emitted both {state: {ready: READY}}
+            # and {state: READY}; accept the canonical values, not an assumed
+            # one-version shape.
+            ready = str(state).upper()
         name = endpoint.get("name")
         if name and ready == "READY":
             names.append(str(name))
@@ -296,7 +302,18 @@ def token_identity_from_pi_helper() -> dict[str, Any]:
 
     host = os.environ.get("DATABRICKS_HOST", "").rstrip("/")
     if not host:
-        return {"ok": False, "reason": "DATABRICKS_HOST absent"}
+        # CoDA deliberately strips DATABRICKS_HOST from terminal env. The
+        # broker-owned profile still carries the workspace host; use that for
+        # this verifier's safe /Me request rather than treating correct secret
+        # stripping as an auth failure.
+        try:
+            cfg = configparser.ConfigParser(interpolation=None)
+            cfg.read(DATABRICKS_CFG)
+            host = (cfg.get("omnigents-host", "host", fallback="") or "").rstrip("/")
+        except Exception:
+            host = ""
+    if not host:
+        return {"ok": False, "reason": "DATABRICKS_HOST absent and profile host unavailable"}
     req = urllib.request.Request(
         f"{host}/api/2.0/preview/scim/v2/Me",
         headers={"Authorization": f"Bearer {token}"},
@@ -419,7 +436,7 @@ def workspace_round_trip(*, skip: bool) -> dict[str, Any]:
                 timeout=30,
             )
             steps["export"] = run(
-                ["databricks", "workspace", "export", f"{unique}/probe.txt", "--format", "RAW", "--file", str(dst)],
+                ["databricks", "workspace", "export", f"{unique}/probe.txt", "--format", "AUTO", "--file", str(dst)],
                 timeout=30,
             )
             round_trip_equal = dst.exists() and dst.read_text() == content
