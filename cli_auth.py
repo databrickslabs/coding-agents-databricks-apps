@@ -16,6 +16,7 @@ import stat
 import logging
 
 from claude_otel import refresh_claude_otel_token
+from utils import OPENCODE_AUTH_KEY_FIELD, is_opencode_api_credential
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +121,13 @@ def _update_codex(token):
 
 
 def _update_opencode(token):
-    """Update api_key values in ~/.local/share/opencode/auth.json."""
+    """Rotate API keys in ~/.local/share/opencode/auth.json.
+
+    The credential shape is defined once in utils — shared with the writer in
+    setup_opencode.py so the two can't drift. Only `type == "api"` entries are
+    touched; `oauth` and `wellknown` credentials carry different fields and must
+    not have a PAT written into them.
+    """
     path = os.path.join(_HOME, ".local", "share", "opencode", "auth.json")
     if not os.path.exists(path):
         return  # setup_opencode.py hasn't run yet
@@ -129,8 +136,8 @@ def _update_opencode(token):
             auth = json.load(f)
         changed = False
         for provider in auth.values():
-            if isinstance(provider, dict) and "api_key" in provider:
-                provider["api_key"] = token
+            if is_opencode_api_credential(provider):
+                provider[OPENCODE_AUTH_KEY_FIELD] = token
                 changed = True
         if changed:
             _atomic_write_text(path, json.dumps(auth, indent=2))

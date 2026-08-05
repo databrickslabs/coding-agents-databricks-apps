@@ -138,11 +138,24 @@ if not log.handlers:
 # JSON Schema keywords that Gemini doesn't support
 GEMINI_UNSUPPORTED_SCHEMA_KEYS = {
     "$schema", "$ref", "$defs", "$id", "$comment", "additionalProperties",
+    # Numeric/array validation keywords Gemini's function-declaration schema
+    # doesn't accept. Sending them yields a 400 on the whole request, so the
+    # tool is unusable rather than merely unvalidated.
+    "exclusiveMinimum", "exclusiveMaximum", "multipleOf", "uniqueItems",
 }
 
 # Top-level request fields that Gemini doesn't support
 GEMINI_UNSUPPORTED_REQUEST_KEYS = {
     "stream_options",
+}
+
+# Reasoning controls that only the GPT family accepts. Stripped for GPT-routed
+# requests where the served endpoint rejects them; deliberately NOT stripped
+# globally, because removing them from a model that *does* support reasoning
+# silently downgrades its output quality.
+GPT_REASONING_KEYS = {
+    "reasoningSummary",
+    "reasoning_effort",
 }
 
 
@@ -153,28 +166,34 @@ GEMINI_UNSUPPORTED_REQUEST_KEYS = {
 def strip_unsupported_schema_keys(obj):
     """Recursively strip JSON Schema keywords that Gemini doesn't support."""
     if isinstance(obj, dict):
-        return {
+        cleaned = {
             k: strip_unsupported_schema_keys(v)
             for k, v in obj.items()
             if k not in GEMINI_UNSUPPORTED_SCHEMA_KEYS
         }
+        # Gemini rejects range bounds on integer-typed properties specifically.
+        if cleaned.get("type") == "integer":
+            cleaned.pop("minimum", None)
+            cleaned.pop("maximum", None)
+        return cleaned
     elif isinstance(obj, list):
         return [strip_unsupported_schema_keys(item) for item in obj]
     return obj
 
 
 def sanitize_tool_schemas(data):
-    """Strip JSON Schema keywords that some providers reject.
+    """Strip request fields and JSON Schema keywords that providers reject.
 
-    Applied universally — $schema, additionalProperties etc. are never
-    required by any downstream API. Claude/GPT ignore them, Gemini rejects them.
-    Stripping for all models is safe and avoids model detection issues.
+    Schema stripping is applied universally — $schema, additionalProperties etc.
+    are never required by any downstream API. Claude/GPT ignore them, Gemini
+    rejects them. Stripping for all models is safe and avoids model detection.
+
+    Note there is deliberately NO early return for tool-less requests. There used
+    to be one, which meant the top-level cleanup below (stream_options, $schema,
+    and the GPT reasoning keys) silently never ran for any request without
+    `tools` — i.e. every plain chat turn.
     """
-    tools = data.get("tools", [])
-    if not tools:
-        return data
-
-    for tool in tools:
+    for tool in data.get("tools", []) or []:
         func = tool.get("function", {})
         if "parameters" in func:
             func["parameters"] = strip_unsupported_schema_keys(func["parameters"])
@@ -184,6 +203,15 @@ def sanitize_tool_schemas(data):
         if key in data:
             log.info(f"  Stripped top-level field: {key}")
             del data[key]
+
+    # GPT-only reasoning controls. Scoped by model id rather than applied
+    # globally so reasoning-capable models keep their settings.
+    model = (data.get("model") or "").lower()
+    if "gpt" in model:
+        for key in GPT_REASONING_KEYS:
+            if key in data:
+                log.info(f"  Stripped GPT reasoning field: {key} (model={model})")
+                del data[key]
 
     # Strip $schema from top level if present
     data.pop("$schema", None)
@@ -413,14 +441,36 @@ def remap_tool_call(tool_call):
     return tool_call
 
 
+def _flatten_content_blocks(content):
+    """Collapse an Anthropic-style content array into a plain string.
+
+    Some served models answer chat-completions requests with `content` as a list
+    of typed blocks (`[{"type": "text", "text": "..."}]`) instead of a string.
+    OpenAI-shaped clients like OpenCode expect a string and render the raw list
+    (or drop the message) when handed an array. Non-list input passes through, so
+    this is a no-op for well-behaved responses.
+    """
+    if not isinstance(content, list):
+        return content
+    parts = []
+    for block in content:
+        if isinstance(block, dict) and block.get("type") == "text":
+            text = block.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+    return "".join(parts)
+
+
 def fix_response_data(data):
-    """Fix tool names and finish_reason in a parsed response object."""
+    """Fix tool names, finish_reason, and content-block arrays in a response."""
     if not isinstance(data, dict):
         return data
 
     for choice in data.get("choices", []):
         # Non-streaming: choice.message
         message = choice.get("message", {})
+        if "content" in message:
+            message["content"] = _flatten_content_blocks(message["content"])
         tool_calls = message.get("tool_calls", [])
         if tool_calls:
             message["tool_calls"] = [remap_tool_call(tc) for tc in tool_calls]
@@ -430,6 +480,8 @@ def fix_response_data(data):
 
         # Streaming: choice.delta
         delta = choice.get("delta", {})
+        if "content" in delta:
+            delta["content"] = _flatten_content_blocks(delta["content"])
         delta_tool_calls = delta.get("tool_calls", [])
         if delta_tool_calls:
             delta["tool_calls"] = [remap_tool_call(tc) for tc in delta_tool_calls]
