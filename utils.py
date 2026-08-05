@@ -505,3 +505,52 @@ def workspace_sync_dest(repo_name: str) -> str:
         or "_local"
     )
     return f"/Workspace/Shared/coda/{app_name}/{repo_name}"
+
+
+# ---------------------------------------------------------------------------
+# OpenCode credential schema
+# ---------------------------------------------------------------------------
+#
+# opencode stores credentials at ~/.local/share/opencode/auth.json as a map of
+# provider-id -> credential, where the credential is a discriminated union on
+# `type`. The API-key variant keeps the secret in `key`:
+#
+#     export class Api extends Schema.Class<Api>("ApiAuth")({
+#         type: Schema.Literal("api"),
+#         key: Schema.String,
+#         metadata: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+#     }) {}
+#
+#     const _Info = Schema.Union([Oauth, Api, WellKnown])
+#         .annotate({ discriminator: "type", identifier: "Auth" })
+#
+# (opencode, packages/opencode/src/auth/index.ts)
+#
+# Two places touch this file and MUST agree, or token rotation silently stops
+# working: setup_opencode.py writes it, and cli_auth._update_opencode() rewrites
+# the secret on every PAT rotation. They previously both used `api_key` — not a
+# field opencode recognises — so the credential was unloadable and each rotation
+# faithfully updated a key nothing read. Defining the shape once here is what
+# stops that drifting again.
+
+OPENCODE_AUTH_TYPE_API = "api"
+OPENCODE_AUTH_KEY_FIELD = "key"
+
+
+def opencode_api_credential(key: str) -> dict:
+    """Build an opencode API-key credential in its tagged-union shape."""
+    return {"type": OPENCODE_AUTH_TYPE_API, OPENCODE_AUTH_KEY_FIELD: key}
+
+
+def is_opencode_api_credential(cred) -> bool:
+    """True if `cred` is an opencode API-key credential this code may rotate.
+
+    Deliberately narrow: `oauth` and `wellknown` credentials carry different
+    fields, and writing a PAT into one would corrupt a credential opencode
+    still needs.
+    """
+    return (
+        isinstance(cred, dict)
+        and cred.get("type") == OPENCODE_AUTH_TYPE_API
+        and OPENCODE_AUTH_KEY_FIELD in cred
+    )

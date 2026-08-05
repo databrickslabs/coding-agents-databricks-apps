@@ -19,6 +19,7 @@ from utils import (
     ensure_https,
     get_gateway_host,
     get_npm_version,
+    opencode_api_credential,
     pick_in_geo_model,
 )
 from enterprise_config import npm_env
@@ -263,24 +264,23 @@ config_path.write_text(json.dumps(opencode_config, indent=2))
 print(f"OpenCode configured: {config_path}")
 
 # 4. Also create auth credentials for the databricks provider(s)
-# OpenCode stores credentials at ~/.local/share/opencode/auth.json
+# OpenCode stores credentials at ~/.local/share/opencode/auth.json.
+#
+# The credential shape lives in utils.opencode_api_credential() — shared with
+# cli_auth._update_opencode(), which rotates the same field every 10 minutes.
+# See the comment there for why: both sides previously wrote `api_key`, which
+# opencode does not recognise.
 opencode_data_dir = home / ".local" / "share" / "opencode"
 opencode_data_dir.mkdir(parents=True, exist_ok=True)
 
 if gateway_host:
     auth_data = {
-        "databricks": {
-            "api_key": gateway_token
-        },
-        "databricks-openai": {
-            "api_key": gateway_token
-        }
+        "databricks": opencode_api_credential(gateway_token),
+        "databricks-openai": opencode_api_credential(gateway_token),
     }
 else:
     auth_data = {
-        "databricks": {
-            "api_key": token
-        }
+        "databricks": opencode_api_credential(token),
     }
 
 auth_path = opencode_data_dir / "auth.json"
