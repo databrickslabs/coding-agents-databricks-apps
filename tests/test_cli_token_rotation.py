@@ -147,18 +147,77 @@ class TestUpdateCodex:
 
 
 class TestUpdateOpenCode:
-    def test_updates_api_key_in_auth_json(self, isolated_home):
+    """opencode's auth.json is a map of provider-id -> credential, where the
+    credential is a discriminated union on `type`. The API-key variant keeps the
+    secret in `key`:
+
+        export class Api extends Schema.Class<Api>("ApiAuth")({
+            type: Schema.Literal("api"),
+            key: Schema.String,
+            ...
+
+    (packages/opencode/src/auth/index.ts). `api_key` is not a field opencode
+    recognises — these tests previously asserted that shape, which is how the
+    mismatch survived: setup_opencode.py wrote `api_key` and the rotator
+    faithfully rotated a field opencode never reads.
+    """
+
+    def test_rotates_key_for_api_credentials(self, isolated_home):
         from cli_auth import update_cli_tokens
         auth_dir = isolated_home / ".local" / "share" / "opencode"
         auth_dir.mkdir(parents=True)
-        auth = {"databricks": {"api_key": "old"}, "databricks-openai": {"api_key": "old"}}
+        auth = {
+            "databricks": {"type": "api", "key": "old"},
+            "databricks-openai": {"type": "api", "key": "old"},
+        }
         (auth_dir / "auth.json").write_text(json.dumps(auth))
 
         update_cli_tokens("new-token")
 
         result = json.loads((auth_dir / "auth.json").read_text())
-        assert result["databricks"]["api_key"] == "new-token"
-        assert result["databricks-openai"]["api_key"] == "new-token"
+        assert result["databricks"]["key"] == "new-token"
+        assert result["databricks-openai"]["key"] == "new-token"
+        # `type` is the union discriminant — rotation must preserve it.
+        assert result["databricks"]["type"] == "api"
+
+    def test_leaves_non_api_credentials_alone(self, isolated_home):
+        """oauth / wellknown credentials have different fields. Writing a PAT
+        into them would corrupt a credential opencode still needs."""
+        from cli_auth import update_cli_tokens
+        auth_dir = isolated_home / ".local" / "share" / "opencode"
+        auth_dir.mkdir(parents=True)
+        auth = {
+            "databricks": {"type": "api", "key": "old"},
+            "anthropic": {
+                "type": "oauth",
+                "refresh": "r-token",
+                "access": "a-token",
+                "expires": 123,
+            },
+            "corp": {"type": "wellknown", "key": "wk-key", "token": "wk-token"},
+        }
+        (auth_dir / "auth.json").write_text(json.dumps(auth))
+
+        update_cli_tokens("new-token")
+
+        result = json.loads((auth_dir / "auth.json").read_text())
+        assert result["databricks"]["key"] == "new-token"
+        assert result["anthropic"] == auth["anthropic"], "oauth credential mutated"
+        assert result["corp"]["token"] == "wk-token"
+        assert result["corp"]["key"] == "wk-key", "wellknown key mutated"
+
+    def test_ignores_legacy_api_key_shape(self, isolated_home):
+        """A file left over from the old (invalid) writer has no `type`, so it
+        isn't a credential opencode can load. Don't pretend rotating it works."""
+        from cli_auth import update_cli_tokens
+        auth_dir = isolated_home / ".local" / "share" / "opencode"
+        auth_dir.mkdir(parents=True)
+        (auth_dir / "auth.json").write_text(json.dumps({"databricks": {"api_key": "old"}}))
+
+        update_cli_tokens("new-token")
+
+        result = json.loads((auth_dir / "auth.json").read_text())
+        assert result["databricks"] == {"api_key": "old"}
 
     def test_skips_missing_file(self, isolated_home):
         from cli_auth import update_cli_tokens
@@ -267,7 +326,9 @@ class TestAllCLIsUpdated:
 
         oc_dir = isolated_home / ".local" / "share" / "opencode"
         oc_dir.mkdir(parents=True)
-        (oc_dir / "auth.json").write_text(json.dumps({"databricks": {"api_key": "old"}}))
+        (oc_dir / "auth.json").write_text(
+            json.dumps({"databricks": {"type": "api", "key": "old"}})
+        )
 
         gemini_dir = isolated_home / ".gemini"
         gemini_dir.mkdir()
@@ -285,7 +346,7 @@ class TestAllCLIsUpdated:
         assert json.loads((claude_dir / "settings.json").read_text())["env"]["ANTHROPIC_AUTH_TOKEN"] == "rotated-token"
         assert json.loads((pi_dir / "models.json").read_text())["providers"]["databricks-claude"]["apiKey"] == "rotated-token"
         assert "OPENAI_API_KEY=rotated-token" in (codex_dir / ".env").read_text()
-        assert json.loads((oc_dir / "auth.json").read_text())["databricks"]["api_key"] == "rotated-token"
+        assert json.loads((oc_dir / "auth.json").read_text())["databricks"]["key"] == "rotated-token"
         assert "GEMINI_API_KEY=rotated-token" in (gemini_dir / ".env").read_text()
         hermes_content = (hermes_dir / "config.yaml").read_text()
         assert hermes_content.count("api_key: rotated-token") == 2
