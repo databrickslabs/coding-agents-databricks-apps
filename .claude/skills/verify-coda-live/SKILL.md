@@ -231,8 +231,11 @@ async () => {
     if (s.output.includes(s.end)) break;
     await new Promise(resolve => setTimeout(resolve, 1000));
   }
-  const begin = s.output.indexOf(s.begin);
-  const end = s.output.indexOf(s.end);
+  // PTY echoes the command itself, which contains the marker text. Use the
+  // LAST begin marker, not the first echoed one, or reportText starts halfway
+  // through the command instead of at the JSON report.
+  const begin = s.output.lastIndexOf(s.begin);
+  const end = s.output.lastIndexOf(s.end);
   const reportText = begin >= 0 && end > begin
     ? s.output.slice(begin + s.begin.length, end).trim()
     : null;
