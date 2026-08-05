@@ -78,7 +78,7 @@ httpx==0.28.1
     # via mcp
 httpx-sse==0.4.3
     # via mcp
-idna==3.16
+idna==3.17
     # via
     #   coda (pyproject.toml)
     #   anyio

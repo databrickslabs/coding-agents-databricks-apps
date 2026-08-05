@@ -30,7 +30,7 @@ dependencies = [
     "urllib3>=2.7.0",
     # GHSA-65pc-fj4g-8rjx — idna < 3.15 lets crafted inputs bypass the
     # CVE-2024-3651 fix in idna.encode(). idna is transitive; pin a floor.
-    "idna>=3.15",
+    "idna>=3.17",
     # Upper bound is forced by our transitive ecosystem: both mlflow-skinny 3.11.x
     # AND opentelemetry-api 1.41.x cap importlib-metadata<8.8. Dependabot tried
     # to bump it to 9.0.0 (PR #3) and broke every deploy — explicit ceiling so
