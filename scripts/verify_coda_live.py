@@ -35,6 +35,11 @@ from typing import Any
 
 HOME = Path(os.environ.get("HOME") or "/app/python/source_code")
 APP_ROOT = Path(__file__).resolve().parent.parent
+# When invoked as `/app/python/source_code/scripts/verify_coda_live.py`, Python's
+# import root is `scripts/`, not the repo root. Add the root explicitly so the
+# verifier can import token_helper and use the broker for Gateway discovery.
+if str(APP_ROOT) not in sys.path:
+    sys.path.insert(0, str(APP_ROOT))
 PI_CONFIG = HOME / ".pi" / "agent" / "models.json"
 OPENCODE_CONFIG = HOME / ".config" / "opencode" / "opencode.json"
 CLAUDE_CONFIG = HOME / ".claude" / "settings.json"
