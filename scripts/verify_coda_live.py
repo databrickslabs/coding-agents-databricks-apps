@@ -441,6 +441,27 @@ def inference_checks(catalogs: dict[str, Any], *, skip: bool) -> dict[str, Any]:
             "stdout": pi["stdout"],
             "stderr": pi["stderr"],
         }
+        alternate = next((x for x in pi_models_list if x != model), None)
+        if alternate:
+            switched = run(
+                [
+                    "pi", "--print", "--no-session", "--no-tools", "--no-context-files",
+                    "--no-extensions", "--no-skills", "--model",
+                    f"databricks-claude/{alternate}",
+                    "Reply with exactly CODA_PI_SWITCH_OK",
+                ],
+                timeout=150,
+            )
+            result["pi_switch"] = {
+                "ok": switched["ok"] and "CODA_PI_SWITCH_OK" in switched["stdout"],
+                "model": alternate,
+                "marker_seen": "CODA_PI_SWITCH_OK" in switched["stdout"],
+                "returncode": switched["returncode"],
+                "stdout": switched["stdout"],
+                "stderr": switched["stderr"],
+            }
+        else:
+            result["pi_switch"] = {"ok": False, "reason": "only one Pi model configured"}
     else:
         result["pi"] = {"ok": False, "reason": "no configured Pi model"}
 
@@ -552,6 +573,8 @@ def required_failures(report: dict[str, Any], expected_auth: str) -> list[str]:
         for agent in ("claude", "pi", "opencode"):
             if not inference.get(agent, {}).get("ok"):
                 failures.append(f"{agent} inference smoke failed")
+        if not inference.get("pi_switch", {}).get("ok"):
+            failures.append("Pi model switch smoke failed")
     if not report["github"]["ok"]:
         failures.append("GitHub CLI/repository read smoke failed")
     workspace = report["workspace_round_trip"]

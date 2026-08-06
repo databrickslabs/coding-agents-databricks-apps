@@ -71,7 +71,15 @@ class TestSetupPiConfig:
         assert provider["apiKey"].endswith("anthropic-token-helper.py")
         assert provider["baseUrl"].endswith("/serving-endpoints/anthropic")
         assert provider["compat"] == {"supportsEagerToolInputStreaming": False}
-        assert provider["models"] == [{"id": "databricks-claude-opus-4-8", "contextWindow": 1000000}]
+        assert [m["id"] for m in provider["models"]] == [
+            "databricks-claude-opus-4-8",
+            "databricks-claude-haiku-4-5",
+            "databricks-claude-opus-4-7",
+            "databricks-claude-opus-4-6",
+            "databricks-claude-sonnet-4-6",
+            "databricks-claude-sonnet-4-5",
+        ]
+        assert all(m["contextWindow"] == 1000000 for m in provider["models"])
 
     def test_models_json_is_chmod_600(self, tmp_path):
         _seed_fake_pi_binary(tmp_path)

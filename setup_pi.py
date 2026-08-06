@@ -141,8 +141,32 @@ if os.environ.get("MLFLOW_OSS_TRACKING_ENABLED", "false").lower() == "true":
 available = discover_serving_endpoints(host, token)
 if available:
     print(f"Discovered {len(available)} READY serving endpoints at workspace")
+
+# Keep the whole compatible Claude picker, not just the selected default. Pi's
+# old config wrote one model, so Ctrl+P / --model could not switch even though
+# the Gateway served other Claude models. When endpoint discovery is available,
+# filter this list to READY endpoints; when discovery is unavailable, preserve
+# the known candidate list rather than silently collapsing the picker to one
+# model. The live verifier reports parity separately instead of treating that
+# fallback as proof of availability.
+pi_candidates = [
+    pi_model,
+    "databricks-claude-haiku-4-5",
+    "databricks-claude-opus-4-8",
+    "databricks-claude-opus-4-7",
+    "databricks-claude-opus-4-6",
+    "databricks-claude-sonnet-4-6",
+    "databricks-claude-sonnet-4-5",
+]
+# Preserve order while removing duplicate PI_MODEL entries.
+pi_candidates = list(dict.fromkeys(pi_candidates))
+if available:
+    served_candidates = [m for m in pi_candidates if m in available]
+    model_picker = served_candidates or [pi_model]
+else:
+    model_picker = pi_candidates
 active_model = pick_in_geo_model(
-    [pi_model, "databricks-claude-opus-4-7", "databricks-claude-opus-4-6", "databricks-claude-sonnet-4-6"],
+    pi_candidates,
     available,
     fallback=pi_model,
 )
@@ -190,7 +214,10 @@ config["providers"]["databricks-claude"] = {
     # models docs), so the 128K default badly under-uses it. Set the real window.
     # NB: the FMAPI *rate* limits are separate (e.g. ~200k input tokens/minute on
     # the default tier) — that's throughput, not context, and is not fixed here.
-    "models": [{"id": active_model, "contextWindow": 1000000}],
+    "models": [
+        {"id": model, "contextWindow": 1000000}
+        for model in model_picker
+    ],
 }
 
 models_path.write_text(json.dumps(config, indent=2))

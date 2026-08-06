@@ -156,7 +156,7 @@ class TestFailureAggregation:
                     "cli_display_exact_match": True,
                 },
             },
-            "inference": {"claude": {"ok": True}, "pi": {"ok": True}, "opencode": {"ok": True}},
+            "inference": {"claude": {"ok": True}, "pi": {"ok": True}, "pi_switch": {"ok": True}, "opencode": {"ok": True}},
             "github": {"ok": True},
             "workspace_round_trip": {"ok": True},
         }
@@ -173,6 +173,7 @@ class TestFailureAggregation:
             (lambda r: r["model_catalogs"]["claude"].update(exact_match=False), "claude model catalog does not exactly match READY compatible endpoints"),
             (lambda r: r["model_catalogs"]["pi"].update(exact_match=False), "pi model catalog does not exactly match READY compatible endpoints"),
             (lambda r: r["model_catalogs"]["opencode"].update(cli_display_exact_match=False), "OpenCode displayed model list does not exactly match READY compatible endpoints"),
+            (lambda r: r["inference"]["pi_switch"].update(ok=False), "Pi model switch smoke failed"),
             (lambda r: r["inference"]["opencode"].update(ok=False), "opencode inference smoke failed"),
             (lambda r: r["github"].update(ok=False), "GitHub CLI/repository read smoke failed"),
             (lambda r: r["workspace_round_trip"].update(ok=False), "Databricks workspace write/read/delete round-trip failed"),

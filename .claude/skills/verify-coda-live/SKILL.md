@@ -42,9 +42,10 @@ A run passes only when all three hold:
      byte-for-byte, and deleted. The verifier cleans it in `finally` even when
      an intermediate step fails.
 
-The three inference prompts request one fixed marker each (`CODA_CLAUDE_OK`,
-`CODA_PI_OK`, `CODA_OPENCODE_OK`) and enable no tools, so token/cost usage is
-minimal.
+The inference prompts request fixed markers (`CODA_CLAUDE_OK`, `CODA_PI_OK`,
+`CODA_OPENCODE_OK`) and enable no tools, so token/cost usage is minimal. Pi also
+runs a second configured model with `CODA_PI_SWITCH_OK` to prove `--model` switching
+works rather than only the default.
 
 ---
 
@@ -276,6 +277,8 @@ inference.claude.ok == true
 inference.claude.marker_seen == true
 inference.pi.ok == true
 inference.pi.marker_seen == true
+inference.pi_switch.ok == true
+inference.pi_switch.marker_seen == true
 inference.opencode.ok == true
 inference.opencode.marker_seen == true
 ```
