@@ -185,17 +185,85 @@ def allocate_workspace(lease_id: str, session_id: str) -> str:
     return workspace
 
 
-def _live_runner_count() -> int:
-    """Count live descendants of the supervised host process."""
+def _live_runner_count() -> int | None:
+    """Return live runner descendants, or ``None`` when inspection is unknown.
+
+    The host's zygote is a persistent infrastructure process, not a runner.
+    Runners can either be direct host children (when zygote mode is disabled)
+    or children forked by that zygote.  Process inspection is deliberately
+    fail-closed because treating an inaccessible process as absent could drop
+    an active user's lease.
+    """
     proc = _proc
-    if proc is None or proc.poll() is not None:
+    if proc is None:
         return 0
+    try:
+        if proc.poll() is not None:
+            return 0
+    except Exception as exc:  # pragma: no cover - defensive Popen boundary
+        logger.warning("unable to inspect Omnigents host process; preserving lease: %s", exc)
+        return None
+
     try:
         import psutil
 
-        return sum(child.is_running() for child in psutil.Process(proc.pid).children(recursive=True))
-    except Exception:
-        return 0
+        try:
+            descendants = psutil.Process(proc.pid).children(recursive=True)
+        except psutil.NoSuchProcess as exc:
+            # Popen reported running, so a psutil disappearance here is an
+            # inspection race rather than definitive evidence of no runners.
+            logger.warning(
+                "unable to inspect Omnigents runner processes; preserving lease: %s",
+                exc,
+            )
+            return None
+
+        dead_statuses = {psutil.STATUS_ZOMBIE}
+        if hasattr(psutil, "STATUS_DEAD"):
+            dead_statuses.add(psutil.STATUS_DEAD)
+        live: list[tuple[object, list[str], int]] = []
+        for child in descendants:
+            try:
+                status = child.status()
+                if status in dead_statuses or not child.is_running():
+                    continue
+                cmdline = child.cmdline()
+                ppid = child.ppid()
+            except psutil.NoSuchProcess:
+                # A child can disappear between children() and inspection.
+                continue
+            live.append((child, cmdline, ppid))
+
+        zygote_pids = {
+            child.pid
+            for child, cmdline, ppid in live
+            if ppid == proc.pid and _is_zygote_cmdline(cmdline)
+        }
+        return sum(
+            ppid in zygote_pids
+            or (
+                ppid == proc.pid
+                and _is_runner_cmdline(cmdline)
+                and not _is_zygote_cmdline(cmdline)
+            )
+            for child, cmdline, ppid in live
+        )
+    except Exception as exc:  # AccessDenied and unexpected psutil failures
+        logger.warning("unable to inspect Omnigents runner processes; preserving lease: %s", exc)
+        return None
+
+
+def _is_zygote_cmdline(cmdline: list[str]) -> bool:
+    """Whether a process command line is the persistent Omnigent zygote."""
+    return "omnigent.runner._zygote" in cmdline
+
+
+def _is_runner_cmdline(cmdline: list[str]) -> bool:
+    """Whether a direct process is an Omnigent runner rather than infrastructure."""
+    return any(
+        token.startswith("omnigent.runner") and token != "omnigent.runner._zygote"
+        for token in cmdline
+    )
 
 
 def release_idle_lease(*, now: float | None = None, runner_count: int | None = None) -> bool:
@@ -205,6 +273,9 @@ def release_idle_lease(*, now: float | None = None, runner_count: int | None = N
         _no_runner_since = None
         return False
     count = _live_runner_count() if runner_count is None else runner_count
+    if count is None:
+        _no_runner_since = None
+        return False
     current = time.time() if now is None else now
     if count > 0:
         _no_runner_since = None
