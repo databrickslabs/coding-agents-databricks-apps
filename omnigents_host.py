@@ -945,8 +945,20 @@ def _install_broker_cli_wrapper() -> None:
     logger.info("Installed Omnigent token-broker CLI wrapper at %s", wrapper)
 
 
-def _run_host_once(server_url: str, stop_event: threading.Event | None = None) -> int:
-    """Run ``omnigents host`` in the foreground until it exits. Returns rc."""
+def _run_host_once(
+    server_url: str,
+    stop_event: threading.Event | None = None,
+    *,
+    host_token: str | None = None,
+    host_id: str | None = None,
+    host_name: str | None = None,
+    host_config: dict[str, object] | None = None,
+    lease_id: str | None = None,
+) -> int:
+    """Run ``omnigents host`` in the foreground until it exits.
+
+    Identity values are optional so legacy boot-time starts remain unchanged.
+    """
     global _proc
 
     home = os.environ.get("HOME", "/app/python/source_code")
@@ -973,6 +985,16 @@ def _run_host_once(server_url: str, stop_event: threading.Event | None = None) -
     broker_bin = os.path.join(home, ".coda-broker-bin")
     path_parts = [broker_bin, local_bin, env.get("PATH", "")]
     env["PATH"] = ":".join(part for part in path_parts if part)
+    if host_token:
+        env["OMNIGENT_HOST_TOKEN"] = host_token
+    if host_id:
+        env["OMNIGENT_HOST_ID"] = host_id
+    if host_name:
+        env["OMNIGENT_HOST_NAME"] = host_name
+    if host_config is not None:
+        env["OMNIGENT_HOST_CONFIG"] = json.dumps(host_config, separators=(",", ":"))
+    if lease_id:
+        env["OMNIGENT_HOST_LEASE_ID"] = lease_id
     stable_identity = _stable_host_identity()
     if stable_identity is not None:
         env.setdefault("OMNIGENT_HOST_ID", stable_identity[0])
@@ -1021,6 +1043,12 @@ def _supervise(
     server_url: str,
     sp_creds: dict[str, str],
     stop_event: threading.Event,
+    *,
+    host_token: str | None = None,
+    host_id: str | None = None,
+    host_name: str | None = None,
+    host_config: dict[str, object] | None = None,
+    lease_id: str | None = None,
 ) -> None:
     """Install, write the profile, then run the host with bounded backoff.
 
@@ -1097,7 +1125,15 @@ def _supervise(
     backoff = _RESTART_BACKOFF_SECONDS
     while not stop_event.is_set():
         try:
-            rc = _run_host_once(server_url, stop_event=stop_event)
+            rc = _run_host_once(
+                server_url,
+                stop_event=stop_event,
+                host_token=host_token,
+                host_id=host_id,
+                host_name=host_name,
+                host_config=host_config,
+                lease_id=lease_id,
+            )
             if stop_event.is_set():
                 break
             logger.warning("omnigents host exited rc=%s; restarting in %ss", rc, backoff)
@@ -1112,6 +1148,12 @@ def _supervise(
 def connect_host(
     server_url: str,
     sp_creds: dict[str, str] | None,
+    *,
+    host_token: str | None = None,
+    host_id: str | None = None,
+    host_name: str | None = None,
+    host_config: dict[str, object] | None = None,
+    lease_id: str | None = None,
 ) -> tuple[bool, dict[str, object]]:
     """Start a supervised ``omnigent host`` for a runtime-supplied server URL."""
     global _sp_creds, _stop_event, _thread
@@ -1150,7 +1192,16 @@ def connect_host(
             "last_error": None,
         })
         _thread = threading.Thread(
-            target=_supervise,
+            target=lambda server_url, creds, stop_event: _supervise(
+                server_url,
+                creds,
+                stop_event,
+                host_token=host_token,
+                host_id=host_id,
+                host_name=host_name,
+                host_config=host_config,
+                lease_id=lease_id,
+            ),
             args=(server_url, _sp_creds, _stop_event),
             daemon=True,
             name="omnigent-host",
