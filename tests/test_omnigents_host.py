@@ -12,6 +12,7 @@ import os
 import shlex
 import sys
 
+import psutil
 import pytest
 import yaml
 
@@ -108,25 +109,161 @@ def test_idle_lease_releases_after_no_runner_window(monkeypatch) -> None:
     assert oh.active_lease() is None
 
 
-def test_live_runner_descendant_prevents_idle_lease_release(monkeypatch) -> None:
-    """A live supervised child keeps the lease through the idle window."""
-    oh.reset_for_tests()
-    oh.acquire_lease("alice@example.com", "lease-a")
+class _FakeRunnerProcess:
+    def __init__(self, pid, cmdline, ppid, status=psutil.STATUS_RUNNING, running=True):
+        self.pid = pid
+        self._cmdline = cmdline
+        self._ppid = ppid
+        self._status = status
+        self._running = running
 
-    class _Child:
-        def is_running(self):
-            return True
+    def status(self):
+        return self._status
+
+    def is_running(self):
+        return self._running
+
+    def cmdline(self):
+        return self._cmdline
+
+    def ppid(self):
+        return self._ppid
+
+
+def _patch_process_tree(monkeypatch, children):
+    class _HostProcess:
+        pid = 123
+
+        def poll(self):
+            return None
 
     class _Process:
-        def __init__(self, _pid):
-            pass
+        def __init__(self, pid):
+            assert pid == 123
 
         def children(self, recursive):
             assert recursive is True
-            return [_Child()]
+            return children
 
-    class _Psutil:
-        Process = _Process
+    monkeypatch.setattr(psutil, "Process", _Process)
+    monkeypatch.setattr(oh, "_proc", _HostProcess())
+
+
+def test_direct_runner_prevents_idle_lease_release(monkeypatch) -> None:
+    oh.reset_for_tests()
+    oh.acquire_lease("alice@example.com", "lease-a")
+    _patch_process_tree(
+        monkeypatch,
+        [_FakeRunnerProcess(201, ["python", "-m", "omnigent.runner._entry"], 123)],
+    )
+    monkeypatch.setattr(oh, "disconnect_host", lambda: (_ for _ in ()).throw(AssertionError()))
+
+    assert oh._live_runner_count() == 1
+    assert oh.release_idle_lease(now=100.0) is False
+    assert oh.release_idle_lease(now=700.0) is False
+    assert oh.active_lease() is not None
+
+
+def test_zygote_and_forked_runner_keep_lease_alive(monkeypatch) -> None:
+    oh.reset_for_tests()
+    oh.acquire_lease("alice@example.com", "lease-a")
+    _patch_process_tree(
+        monkeypatch,
+        [
+            _FakeRunnerProcess(200, ["python", "-m", "omnigent.runner._zygote"], 123),
+            # A fork may inherit the zygote's exact command line; parentage
+            # distinguishes the runner from the infrastructure process.
+            _FakeRunnerProcess(201, ["python", "-m", "omnigent.runner._zygote"], 200),
+        ],
+    )
+    monkeypatch.setattr(oh, "disconnect_host", lambda: (_ for _ in ()).throw(AssertionError()))
+
+    assert oh._live_runner_count() == 1
+    assert oh.release_idle_lease(now=100.0) is False
+    assert oh.release_idle_lease(now=700.0) is False
+
+
+def test_zygote_alone_allows_idle_lease_release(monkeypatch) -> None:
+    oh.reset_for_tests()
+    oh.acquire_lease("alice@example.com", "lease-a")
+    _patch_process_tree(
+        monkeypatch,
+        [_FakeRunnerProcess(200, ["python", "-m", "omnigent.runner._zygote"], 123)],
+    )
+    monkeypatch.setattr(oh, "disconnect_host", lambda: {})
+
+    assert oh._live_runner_count() == 0
+    assert oh.release_idle_lease(now=100.0) is False
+    assert oh.release_idle_lease(now=700.0) is True
+    assert oh.active_lease() is None
+
+
+def test_zombie_and_dead_descendants_are_ignored(monkeypatch) -> None:
+    oh.reset_for_tests()
+    _patch_process_tree(
+        monkeypatch,
+        [
+            _FakeRunnerProcess(
+                201,
+                ["python", "-m", "omnigent.runner"],
+                123,
+                status=psutil.STATUS_ZOMBIE,
+            ),
+            _FakeRunnerProcess(
+                202,
+                ["python", "-m", "omnigent.runner"],
+                123,
+                status=getattr(psutil, "STATUS_DEAD", "dead"),
+                running=False,
+            ),
+        ],
+    )
+
+    assert oh._live_runner_count() == 0
+
+
+def test_runner_inspection_failure_resets_armed_idle_timer(monkeypatch, caplog) -> None:
+    oh.reset_for_tests()
+    oh.acquire_lease("alice@example.com", "lease-a")
+
+    # Arm the timer, then make inspection unknown after the threshold. The
+    # unknown result must reset the timer rather than release the lease.
+    assert oh.release_idle_lease(now=100.0, runner_count=0) is False
+
+    class _DeniedRunner(_FakeRunnerProcess):
+        def status(self):
+            raise psutil.AccessDenied(self.pid)
+
+    _patch_process_tree(
+        monkeypatch,
+        [_DeniedRunner(201, ["python", "-m", "omnigent.runner._entry"], 123)],
+    )
+    monkeypatch.setattr(oh, "disconnect_host", lambda: {})
+
+    assert oh.release_idle_lease(now=700.0) is False
+    assert oh.active_lease() is not None
+    assert "preserving lease" in caplog.text
+
+    # A later definitive zero starts a fresh idle window; it does not inherit
+    # the pre-failure timer and release immediately.
+    _patch_process_tree(monkeypatch, [])
+    assert oh.release_idle_lease(now=800.0) is False
+    assert oh.release_idle_lease(now=1399.0) is False
+    assert oh.release_idle_lease(now=1400.0) is True
+    assert oh.active_lease() is None
+
+
+def test_root_disappearing_during_process_inspection_preserves_lease(monkeypatch, caplog) -> None:
+    oh.reset_for_tests()
+    oh.acquire_lease("alice@example.com", "lease-a")
+
+    class _Process:
+        def __init__(self, pid):
+            assert pid == 123
+
+        def children(self, recursive):
+            assert recursive is True
+            raise psutil.NoSuchProcess(123)
 
     class _HostProcess:
         pid = 123
@@ -134,14 +271,15 @@ def test_live_runner_descendant_prevents_idle_lease_release(monkeypatch) -> None
         def poll(self):
             return None
 
-    monkeypatch.setitem(sys.modules, "psutil", _Psutil)
+    monkeypatch.setattr(psutil, "Process", _Process)
     monkeypatch.setattr(oh, "_proc", _HostProcess())
     monkeypatch.setattr(oh, "disconnect_host", lambda: (_ for _ in ()).throw(AssertionError()))
 
-    assert oh._live_runner_count() == 1
+    assert oh._live_runner_count() is None
     assert oh.release_idle_lease(now=100.0) is False
     assert oh.release_idle_lease(now=700.0) is False
     assert oh.active_lease() is not None
+    assert "preserving lease" in caplog.text
 
 
 def test_managed_mode_skips_legacy_boot_registration(monkeypatch) -> None:
