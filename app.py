@@ -1714,16 +1714,59 @@ def omnigent_host_status():
     return jsonify(get_status())
 
 
+def _omnigent_server_request_authorized() -> bool:
+    """Authorize the configured Omnigent server service principal.
+
+    Databricks Apps validates the forwarded bearer before it reaches Flask;
+    this check narrows the M2M endpoint to the configured server SP.
+    """
+    expected = os.environ.get("OMNIGENT_SERVER_SP_CLIENT_ID", "").strip()
+    if not expected:
+        return False
+    token = (
+        request.headers.get("X-Forwarded-Access-Token", "").strip()
+        or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    )
+    try:
+        import base64
+        import json
+
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(payload))
+    except (IndexError, ValueError, TypeError, json.JSONDecodeError):
+        return False
+    principals = {
+        str(claims.get(key, "")).strip()
+        for key in ("sub", "client_id", "azp", "appid")
+    }
+    return any(hmac.compare_digest(principal, expected) for principal in principals)
+
+
 @app.route("/api/omnigent-host/connect", methods=["POST"])
 def omnigent_host_connect():
     """Start a runtime Omnigent host tunnel for a supplied server URL."""
+    if not _omnigent_server_request_authorized():
+        return jsonify({"error": "Forbidden"}), 403
     data = request.get_json(silent=True) or {}
     server_url = (data.get("server_url") or "").strip()
     if not server_url:
         return jsonify({"error": "server_url required"}), 400
 
     from omnigents_host import connect_host
-    ok, status = connect_host(server_url, _omnigent_sp_creds)
+
+    host_config = data.get("host_config")
+    if host_config is not None and not isinstance(host_config, dict):
+        return jsonify({"error": "host_config must be an object"}), 400
+    ok, status = connect_host(
+        server_url,
+        _omnigent_sp_creds,
+        host_token=(data.get("host_token") or None),
+        host_id=(data.get("host_id") or None),
+        host_name=(data.get("host_name") or None),
+        host_config=host_config,
+        lease_id=(data.get("lease_id") or None),
+    )
     if not ok:
         code = 409 if status.get("last_error") == "host already running" else 400
         return jsonify(status), code
