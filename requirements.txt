@@ -129,6 +129,8 @@ protobuf==6.33.6
     #   databricks-sdk
     #   mlflow-skinny
     #   opentelemetry-proto
+psutil==7.2.2
+    # via coda (pyproject.toml)
 pyasn1==0.6.4
     # via
     #   coda (pyproject.toml)
