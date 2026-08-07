@@ -1885,10 +1885,10 @@ def _omnigent_server_request_authorized() -> bool:
     expected = os.environ.get("OMNIGENT_SERVER_SP_CLIENT_ID", "").strip()
     if not expected:
         return False
-    token = (
-        request.headers.get("X-Forwarded-Access-Token", "").strip()
-        or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
-    )
+    # Only trust the Apps-proxy-injected token. Accepting a caller-supplied
+    # Authorization header here would make unverified JWT payload decoding an
+    # authorization bypass if the Flask port were ever exposed directly.
+    token = request.headers.get("X-Forwarded-Access-Token", "").strip()
     try:
         import base64
         import json
@@ -1913,8 +1913,12 @@ def omnigent_host_lease():
     data = request.get_json(silent=True) or {}
     owner = str(data.get("owner") or "").strip()
     lease_id = str(data.get("lease_id") or "").strip()
+    requested_app = str(data.get("app_name") or "").strip()
+    app_name = os.environ.get("DATABRICKS_APP_NAME", "").strip()
     if not owner or not lease_id:
         return jsonify({"error": "owner and lease_id required"}), 400
+    if not app_name or requested_app != app_name:
+        return jsonify({"error": "app_name does not match this CoDA instance"}), 409
     from omnigents_host import acquire_lease
 
     ok, lease = acquire_lease(owner, lease_id)

@@ -28,6 +28,29 @@ def test_omnigent_host_status_returns_state(monkeypatch):
     assert resp.get_json()["stage"] == "idle"
 
 
+def test_omnigent_host_lease_requires_matching_app_name(monkeypatch):
+    app_module = _import_app()
+    monkeypatch.setenv("DATABRICKS_APP_NAME", "coda-main")
+
+    with app_module.app.test_client() as client:
+        mismatch = client.post(
+            "/api/omnigent-host/lease",
+            json={"owner": "owner@example.com", "lease_id": "lease-a", "app_name": "coda"},
+        )
+        matched = client.post(
+            "/api/omnigent-host/lease",
+            json={
+                "owner": "owner@example.com",
+                "lease_id": "lease-a",
+                "app_name": "coda-main",
+            },
+        )
+
+    assert mismatch.status_code == 409
+    assert matched.status_code == 200
+    assert matched.get_json()["lease_id"] == "lease-a"
+
+
 def test_omnigent_host_connect_requires_url():
     app_module = _import_app()
 
