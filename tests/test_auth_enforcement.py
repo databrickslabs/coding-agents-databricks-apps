@@ -52,6 +52,10 @@ def test_connect_endpoint_requires_allowlisted_server_sp(monkeypatch):
     ):
         assert app_module._omnigent_server_request_authorized() is False
 
+    monkeypatch.setenv("OMNIGENT_SERVER_SP_CLIENT_ID", "server-sp")
+    with app_module.app.test_request_context(headers={"Authorization": f"Bearer {token}"}):
+        assert app_module._omnigent_server_request_authorized() is False
+
 
 # 1. Session endpoints MUST enforce owner check
 # ---------------------------------------------------------------------------
