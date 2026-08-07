@@ -108,6 +108,42 @@ def test_idle_lease_releases_after_no_runner_window(monkeypatch) -> None:
     assert oh.active_lease() is None
 
 
+def test_live_runner_descendant_prevents_idle_lease_release(monkeypatch) -> None:
+    """A live supervised child keeps the lease through the idle window."""
+    oh.reset_for_tests()
+    oh.acquire_lease("alice@example.com", "lease-a")
+
+    class _Child:
+        def is_running(self):
+            return True
+
+    class _Process:
+        def __init__(self, _pid):
+            pass
+
+        def children(self, recursive):
+            assert recursive is True
+            return [_Child()]
+
+    class _Psutil:
+        Process = _Process
+
+    class _HostProcess:
+        pid = 123
+
+        def poll(self):
+            return None
+
+    monkeypatch.setitem(sys.modules, "psutil", _Psutil)
+    monkeypatch.setattr(oh, "_proc", _HostProcess())
+    monkeypatch.setattr(oh, "disconnect_host", lambda: (_ for _ in ()).throw(AssertionError()))
+
+    assert oh._live_runner_count() == 1
+    assert oh.release_idle_lease(now=100.0) is False
+    assert oh.release_idle_lease(now=700.0) is False
+    assert oh.active_lease() is not None
+
+
 def test_managed_mode_skips_legacy_boot_registration(monkeypatch) -> None:
     oh.reset_for_tests()
     monkeypatch.setenv("CODA_OMNIGENT_MODE", "managed")
