@@ -8,9 +8,11 @@ without the OAuth-capable SP creds (a PAT alone is rejected by the Apps proxy).
 from __future__ import annotations
 
 import hashlib
+import os
 import shlex
 import sys
 
+import pytest
 import yaml
 
 import omnigents_host as oh
@@ -68,6 +70,42 @@ def test_status_initially_idle(monkeypatch):
     assert status["running"] is False
     assert status["server_url"] is None
     assert status["stage"] == "idle"
+
+
+def test_lease_is_user_scoped_and_same_owner_adopts_existing() -> None:
+    oh.reset_for_tests()
+    ok, first = oh.acquire_lease("alice@example.com", "lease-a")
+    assert ok is True
+    ok, adopted = oh.acquire_lease("alice@example.com", "lease-b")
+    assert ok is True
+    assert adopted["lease_id"] == first["lease_id"] == "lease-a"
+    ok, _ = oh.acquire_lease("bob@example.com", "lease-c")
+    assert ok is False
+    assert oh.release_lease("stale") is False
+    assert oh.release_lease("lease-a") is True
+
+
+def test_allocate_workspace_is_fenced_and_distinct(monkeypatch, tmp_path) -> None:
+    oh.reset_for_tests()
+    monkeypatch.setenv("HOME", str(tmp_path))
+    oh.acquire_lease("alice@example.com", "lease-a")
+    one = oh.allocate_workspace("lease-a", "session_one")
+    two = oh.allocate_workspace("lease-a", "session_two")
+    assert one != two
+    assert os.path.isdir(one)
+    assert os.path.isdir(two)
+    with pytest.raises(ValueError, match="stale lease"):
+        oh.allocate_workspace("lease-old", "session_three")
+
+
+def test_idle_lease_releases_after_no_runner_window(monkeypatch) -> None:
+    oh.reset_for_tests()
+    oh.acquire_lease("alice@example.com", "lease-a")
+    monkeypatch.setattr(oh, "disconnect_host", lambda: {})
+    assert oh.release_idle_lease(now=100.0, runner_count=0) is False
+    assert oh.release_idle_lease(now=699.0, runner_count=0) is False
+    assert oh.release_idle_lease(now=700.0, runner_count=0) is True
+    assert oh.active_lease() is None
 
 
 def test_connect_requires_server_url():
