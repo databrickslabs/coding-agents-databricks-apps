@@ -1869,7 +1869,9 @@ def omnigents_status():
 
 @app.route("/api/omnigent-host/status")
 def omnigent_host_status():
-    """Report runtime Omnigent host state."""
+    """Report runtime Omnigent host state to the configured server SP."""
+    if not _omnigent_server_request_authorized():
+        return jsonify({"error": "Forbidden"}), 403
     from omnigents_host import get_status
     return jsonify(get_status())
 
