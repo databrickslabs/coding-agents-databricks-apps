@@ -3,23 +3,24 @@
 # valueFrom, so workspace-specific values (the Omnigent server URL, the wheel
 # volume) never have to be committed in app.yaml.
 #
-# The generic app.yaml references two resource keys:
-#   - name: OMNIGENTS_SERVER_URL    valueFrom: omnigent-server-url
-#   - name: OMNIGENTS_WHEEL_SPEC    valueFrom: omnigent-wheels
+# The generic app.yaml references three resource keys:
+#   - name: OMNIGENTS_SERVER_URL         valueFrom: omnigent-server-url
+#   - name: OMNIGENT_SERVER_SP_CLIENT_ID valueFrom: omnigent-server-client-id
+#   - name: OMNIGENTS_WHEEL_SPEC         valueFrom: omnigent-wheels
 #
-# This script attaches those two resources to the app:
-#   1. omnigent-wheels  — a UC Volume resource pointing at the wheel volume
-#      (the same <catalog>.<schema>.<volume> grant_omnigent_host.sh grants
-#      READ_VOLUME on). Resolves at runtime to /Volumes/<c>/<s>/<v>.
-#   2. omnigent-server-url — a Secret resource holding the Omnigent server app
-#      URL for this workspace. Stored in a Databricks secret scope/key (created
-#      if missing) because app.yaml's valueFrom can only reference secrets, not
-#      arbitrary strings.
+# This script attaches those three resources to the app:
+#   1. omnigent-wheels — a UC Volume resource pointing at the wheel volume.
+#   2. omnigent-server-url — a Secret resource holding the server app URL.
+#   3. omnigent-server-client-id — a Secret resource holding the server app's
+#      service-principal client ID, used to authorize only that M2M caller.
+#
+# String values use Databricks secrets because app.yaml's valueFrom can only
+# reference app resources, not arbitrary workspace-specific strings.
 #
 # Uses `apps create-update <app> resources` (the targeted field-mask patch) so
 # ONLY the resources field is touched — `apps update --json` is a full-body
 # write that clears unset fields (notably git_repository on git-linked apps).
-# Merges the two resources with the app's existing ones (read → merge → write)
+# Merges the three resources with the app's existing ones (read → merge → write)
 # to avoid clobbering unrelated resources (e.g. workshop challenge-repo-token).
 #
 # Run AFTER grant_omnigent_host.sh (which grants the SP the UC traversal it
@@ -32,19 +33,23 @@
 #   ./attach_omnigent_resources.sh \
 #       --profile DEFAULT \
 #       --coda-app coda \
+#       --server-app omnigent \
 #       --server-url https://omnigent-<workspace-id>.<cloud>.databricksapps.com \
 #       --wheel-volume <catalog>.<schema>.<volume> \
 #       --secret-scope coda-omnigent \
-#       --secret-key omnigent-server-url
+#       --secret-key omnigent-server-url \
+#       --client-id-secret-key omnigent-server-client-id
 
 set -euo pipefail
 
 PROFILE=""
 CODA_APP=""
+SERVER_APP=""
 SERVER_URL=""
 WHEEL_VOLUME=""
 SECRET_SCOPE="coda-omnigent"
 SECRET_KEY="omnigent-server-url"
+CLIENT_ID_SECRET_KEY="omnigent-server-client-id"
 
 usage() {
   sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'
@@ -53,18 +58,20 @@ usage() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --profile)        PROFILE="$2"; shift 2 ;;
-    --coda-app)       CODA_APP="$2"; shift 2 ;;
-    --server-url)     SERVER_URL="$2"; shift 2 ;;
-    --wheel-volume)   WHEEL_VOLUME="$2"; shift 2 ;;
-    --secret-scope)   SECRET_SCOPE="$2"; shift 2 ;;
-    --secret-key)     SECRET_KEY="$2"; shift 2 ;;
+    --profile)              PROFILE="$2"; shift 2 ;;
+    --coda-app)             CODA_APP="$2"; shift 2 ;;
+    --server-app)           SERVER_APP="$2"; shift 2 ;;
+    --server-url)           SERVER_URL="$2"; shift 2 ;;
+    --wheel-volume)         WHEEL_VOLUME="$2"; shift 2 ;;
+    --secret-scope)         SECRET_SCOPE="$2"; shift 2 ;;
+    --secret-key)           SECRET_KEY="$2"; shift 2 ;;
+    --client-id-secret-key) CLIENT_ID_SECRET_KEY="$2"; shift 2 ;;
     -h|--help)        usage 0 ;;
     *) echo "unknown arg: $1" >&2; usage 1 ;;
   esac
 done
 
-for req in PROFILE CODA_APP SERVER_URL WHEEL_VOLUME; do
+for req in PROFILE CODA_APP SERVER_APP SERVER_URL WHEEL_VOLUME; do
   if [[ -z "${!req}" ]]; then
     echo "ERROR: --$(echo "$req" | tr 'A-Z_' 'a-z-') is required" >&2
     usage 1
@@ -74,9 +81,18 @@ done
 DBX=(databricks --profile "$PROFILE")
 
 echo "==> Attaching Omnigent resources to '$CODA_APP' on profile '$PROFILE'..."
+SERVER_CLIENT_ID=$("${DBX[@]}" apps get "$SERVER_APP" --output json \
+  | python3 -c "import sys,json; print(json.load(sys.stdin).get('service_principal_client_id',''))")
+if [[ -z "$SERVER_CLIENT_ID" ]]; then
+  echo "ERROR: could not resolve service principal for server app '$SERVER_APP'." >&2
+  exit 1
+fi
+
+echo "    server app:   $SERVER_APP"
 echo "    server URL:   $SERVER_URL"
 echo "    wheel volume: $WHEEL_VOLUME"
-echo "    secret:       $SECRET_SCOPE/$SECRET_KEY"
+echo "    URL secret:   $SECRET_SCOPE/$SECRET_KEY"
+echo "    SP secret:    $SECRET_SCOPE/$CLIENT_ID_SECRET_KEY"
 
 # ---- 1. Store the server URL in a Databricks secret -------------------------
 echo "==> Storing server URL in secret $SECRET_SCOPE/$SECRET_KEY..."
@@ -88,7 +104,9 @@ echo "==> Storing server URL in secret $SECRET_SCOPE/$SECRET_KEY..."
   || echo "    scope '$SECRET_SCOPE' already exists — reusing"
 # Put the secret value via stdin so it never lands on argv or in shell history.
 printf '%s' "$SERVER_URL" | "${DBX[@]}" secrets put-secret "$SECRET_SCOPE" "$SECRET_KEY"
-echo "    secret stored"
+printf '%s' "$SERVER_CLIENT_ID" | "${DBX[@]}" secrets put-secret \
+  "$SECRET_SCOPE" "$CLIENT_ID_SECRET_KEY"
+echo "    secrets stored"
 
 # ---- 2. Read the app's current resources (merge, don't replace) ------------
 echo "==> Reading current resources on '$CODA_APP'..."
@@ -101,7 +119,7 @@ print(json.dumps(d.get('resources') or []))
 ")
 echo "    existing resources: $(printf '%s' "$CURRENT" | python3 -c "import sys,json; print(len(json.load(sys.stdin)))")"
 
-# ---- 3. Merge the two omnigent resources and write -------------------------
+# ---- 3. Merge the three Omnigent resources and write -----------------------
 # Use the Apps SDK's create_update(app, update_mask='resources', app=App(...))
 # — the targeted field-mask patch — so ONLY the resources field is touched.
 # The `apps update --json` CLI path is a full-body write that CLEARS unset
@@ -111,15 +129,16 @@ echo "    existing resources: $(printf '%s' "$CURRENT" | python3 -c "import sys,
 # Merge with existing resources (indexed by name) so we don't clobber unrelated
 # ones (e.g. workshop challenge-repo-token).
 echo "==> Merging + attaching resources..."
-DATABRICKS_CONFIG_PROFILE="$PROFILE" python3 - "$CODA_APP" "$WHEEL_VOLUME" "$SECRET_SCOPE" "$SECRET_KEY" "$CURRENT" <<'PY'
+DATABRICKS_CONFIG_PROFILE="$PROFILE" python3 - "$CODA_APP" "$WHEEL_VOLUME" \
+  "$SECRET_SCOPE" "$SECRET_KEY" "$CLIENT_ID_SECRET_KEY" "$CURRENT" <<'PY'
 import json, os, sys
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.apps import App, AppResource, AppResourceUcSecurable, AppResourceUcSecurableUcSecurableType, AppResourceUcSecurableUcSecurablePermission, AppResourceSecret, AppResourceSecretSecretPermission
 
 coda_app = sys.argv[1]
 wheel_volume = sys.argv[2]
-scope, key = sys.argv[3], sys.argv[4]
-current = json.loads(sys.argv[5])
+scope, url_key, client_id_key = sys.argv[3], sys.argv[4], sys.argv[5]
+current = json.loads(sys.argv[6])
 
 w = WorkspaceClient(profile=os.environ['DATABRICKS_CONFIG_PROFILE'])
 # Index existing resources by name so we update in place, not duplicate.
@@ -134,7 +153,11 @@ by_name['omnigent-wheels'] = {
 }
 by_name['omnigent-server-url'] = {
     'name': 'omnigent-server-url',
-    'secret': {'scope': scope, 'key': key, 'permission': 'READ'},
+    'secret': {'scope': scope, 'key': url_key, 'permission': 'READ'},
+}
+by_name['omnigent-server-client-id'] = {
+    'name': 'omnigent-server-client-id',
+    'secret': {'scope': scope, 'key': client_id_key, 'permission': 'READ'},
 }
 
 def to_resource(d):
@@ -177,12 +200,17 @@ if 'omnigent-server-url' in res:
     out.append('omnigent-server-url=%s/%s perm=%s' % (s.get('scope'), s.get('key'), s.get('permission')))
 else:
     out.append('omnigent-server-url=MISSING')
+if 'omnigent-server-client-id' in res:
+    s=res['omnigent-server-client-id'].get('secret',{})
+    out.append('omnigent-server-client-id=%s/%s perm=%s' % (s.get('scope'), s.get('key'), s.get('permission')))
+else:
+    out.append('omnigent-server-client-id=MISSING')
 print('  ' + '  '.join(out))
 ")
 echo "$FINAL"
 
 if echo "$FINAL" | grep -q MISSING; then
-  echo "ERROR: one or both resources did not attach — see above." >&2
+  echo "ERROR: one or more resources did not attach — see above." >&2
   exit 1
 fi
 echo "==> Done. Redeploy '$CODA_APP' for the valueFrom refs to resolve."
