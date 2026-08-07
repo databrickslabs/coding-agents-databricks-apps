@@ -76,6 +76,11 @@ _sp_creds: dict[str, str] | None = None
 _log_tail: list[str] = []
 _LOG_TAIL_LIMIT = 80
 _runner_tailer_started = False
+_lease: dict[str, object] | None = None
+_CODA_MAX_LEASE_S = 12 * 3600
+_CODA_IDLE_RELEASE_S = 10 * 60
+_no_runner_since: float | None = None
+_lease_reaper_started = False
 
 
 def _stable_host_identity() -> tuple[str, str] | None:
@@ -111,9 +116,117 @@ def _append_log(line: str) -> None:
         _status["log_tail"] = list(_log_tail)
 
 
+def acquire_lease(owner: str, lease_id: str) -> tuple[bool, dict[str, object]]:
+    """Acquire or adopt the single user lease with an expiry fence."""
+    global _lease
+    now = time.time()
+    with _lock:
+        if _lease is not None and float(_lease.get("expires_at", 0)) <= now:
+            _lease = None
+        if _lease is not None:
+            if _lease.get("owner") != owner:
+                return False, dict(_lease)
+            return True, dict(_lease)
+        _lease = {
+            "owner": owner,
+            "lease_id": lease_id,
+            "acquired_at": now,
+            "expires_at": now + _CODA_MAX_LEASE_S,
+        }
+        return True, dict(_lease)
+
+
+def active_lease() -> dict[str, object] | None:
+    """Return the current unexpired lease, if any."""
+    global _lease
+    with _lock:
+        if _lease is not None and float(_lease.get("expires_at", 0)) <= time.time():
+            _lease = None
+        return dict(_lease) if _lease is not None else None
+
+
+def release_lease(lease_id: str) -> bool:
+    """Release only the matching lease generation."""
+    global _lease
+    with _lock:
+        if _lease is None or _lease.get("lease_id") != lease_id:
+            return False
+        _lease = None
+        return True
+
+
+def allocate_workspace(lease_id: str, session_id: str) -> str:
+    """Create a session-specific directory under the active lease."""
+    lease = active_lease()
+    if lease is None or lease.get("lease_id") != lease_id:
+        raise ValueError("stale lease")
+    allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+    if not session_id or any(ch not in allowed for ch in session_id):
+        raise ValueError("invalid session id")
+    root = os.path.join(os.environ.get("HOME", "/app/python/source_code"), "coda-sessions")
+    workspace = os.path.join(root, session_id)
+    os.makedirs(workspace, mode=0o700, exist_ok=True)
+    return workspace
+
+
+def _live_runner_count() -> int:
+    """Count live descendants of the supervised host process."""
+    proc = _proc
+    if proc is None or proc.poll() is not None:
+        return 0
+    try:
+        import psutil
+
+        return sum(child.is_running() for child in psutil.Process(proc.pid).children(recursive=True))
+    except Exception:
+        return 0
+
+
+def release_idle_lease(*, now: float | None = None, runner_count: int | None = None) -> bool:
+    """Release a lease after ten minutes with no live runner subprocesses."""
+    global _no_runner_since
+    if active_lease() is None:
+        _no_runner_since = None
+        return False
+    count = _live_runner_count() if runner_count is None else runner_count
+    current = time.time() if now is None else now
+    if count > 0:
+        _no_runner_since = None
+        return False
+    if _no_runner_since is None:
+        _no_runner_since = current
+        return False
+    if current - _no_runner_since < _CODA_IDLE_RELEASE_S:
+        return False
+    lease = active_lease()
+    if lease is None:
+        return False
+    disconnect_host()
+    released = release_lease(str(lease["lease_id"]))
+    _no_runner_since = None
+    return released
+
+
+def start_lease_reaper() -> None:
+    """Start the daemon safety valve that releases abandoned idle leases."""
+    global _lease_reaper_started
+    with _lock:
+        if _lease_reaper_started:
+            return
+        _lease_reaper_started = True
+
+    def _run() -> None:
+        while True:
+            time.sleep(30)
+            release_idle_lease()
+
+    threading.Thread(target=_run, daemon=True, name="coda-lease-reaper").start()
+
+
 def reset_for_tests() -> None:
     """Reset module state between tests."""
     global _proc, _sp_creds, _stop_event, _thread, _runner_tailer_started
+    global _lease, _no_runner_since, _lease_reaper_started
 
     if _proc is not None and _proc.poll() is None:
         _proc.terminate()
@@ -123,6 +236,9 @@ def reset_for_tests() -> None:
         _stop_event = None
         _thread = None
         _runner_tailer_started = False
+        _lease = None
+        _no_runner_since = None
+        _lease_reaper_started = False
         _log_tail.clear()
         _status.clear()
         _status.update({
