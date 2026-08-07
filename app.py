@@ -1938,6 +1938,19 @@ def omnigent_host_workspace():
     return jsonify({"workspace": workspace})
 
 
+@app.route("/api/omnigent-host/runner-log/<session_id>")
+def omnigent_host_runner_log(session_id):
+    """Return a bounded runner log tail to the configured server SP."""
+    if not _omnigent_server_request_authorized() and get_request_user() != app_owner:
+        return jsonify({"error": "Forbidden"}), 403
+    from omnigents_host import runner_log_tail
+
+    try:
+        return jsonify({"lines": runner_log_tail(session_id)})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+
 @app.route("/api/omnigent-host/connect", methods=["POST"])
 def omnigent_host_connect():
     """Start a runtime Omnigent host tunnel for a supplied server URL."""

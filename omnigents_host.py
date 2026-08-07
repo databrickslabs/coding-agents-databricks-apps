@@ -93,6 +93,22 @@ def _stable_host_identity() -> tuple[str, str] | None:
     return f"host_{digest}", app_name
 
 
+def runner_log_tail(session_id: str, *, lines: int = 80) -> list[str]:
+    """Return a bounded runner log tail for a validated session id."""
+    if len(session_id) != 32 or any(ch not in "0123456789abcdef" for ch in session_id):
+        raise ValueError("invalid session id")
+    import glob
+
+    home = os.environ.get("HOME", "/app/python/source_code")
+    matches = sorted(
+        glob.glob(os.path.join(home, ".omnigent", "logs", "runner", f"runner-{session_id}-*.log"))
+    )
+    if not matches:
+        return []
+    with open(matches[-1], errors="replace") as handle:
+        return handle.readlines()[-lines:]
+
+
 def get_status() -> dict[str, object]:
     """Return a copy of the current host-integration state."""
     with _lock:
