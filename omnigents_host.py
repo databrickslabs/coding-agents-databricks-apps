@@ -93,7 +93,7 @@ def _stable_host_identity() -> tuple[str, str] | None:
     return f"host_{digest}", app_name
 
 
-def runner_log_tail(session_id: str, *, lines: int = 80) -> list[str]:
+def runner_log_tail(session_id: str, *, lines: int = 1000) -> list[str]:
     """Return a bounded runner log tail for a validated session id."""
     if len(session_id) != 32 or any(ch not in "0123456789abcdef" for ch in session_id):
         raise ValueError("invalid session id")
