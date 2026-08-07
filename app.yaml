@@ -4,7 +4,7 @@ command:
 env:
   # M2M caller allowed to use /api/omnigent-host/connect.
   - name: OMNIGENT_SERVER_SP_CLIENT_ID
-    value: "b7c82866-04b5-4d10-9667-95190f52456f"
+    valueFrom: omnigent-server-client-id
   - name: HOME
     value: /app/python/source_code
   - name: ANTHROPIC_MODEL
