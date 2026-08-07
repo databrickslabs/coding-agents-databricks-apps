@@ -139,6 +139,8 @@ env:
   # Enable CODA_DISABLE_OWNER_CHECK only in a dedicated, approved workshop overlay.
 
   # ─── Omnigent host integration ────────────────────────────────────────────
+  - name: CODA_OMNIGENT_MODE
+    value: "managed"
   # Register this app as a persistent Omnigent host on boot:
   # initialize_app() -> start_host() dials the server as the app SP, so the
   # deployed app self-registers as an always-on host on every restart/redeploy.

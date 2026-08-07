@@ -108,6 +108,15 @@ def test_idle_lease_releases_after_no_runner_window(monkeypatch) -> None:
     assert oh.active_lease() is None
 
 
+def test_managed_mode_skips_legacy_boot_registration(monkeypatch) -> None:
+    oh.reset_for_tests()
+    monkeypatch.setenv("CODA_OMNIGENT_MODE", "managed")
+    monkeypatch.setenv("OMNIGENTS_SERVER_URL", "https://omnigent.example.com")
+    monkeypatch.setattr(oh, "connect_host", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError))
+    oh.start_host({"client_id": "id"})
+    assert oh.get_status()["stage"] == "idle"
+
+
 def test_connect_requires_server_url():
     oh.reset_for_tests()
     ok, status = oh.connect_host(

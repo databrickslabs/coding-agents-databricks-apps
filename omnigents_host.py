@@ -1353,6 +1353,9 @@ def start_host(sp_creds: dict[str, str] | None) -> None:
     Runtime control should call :func:`connect_host` directly. This remains so
     older app.yaml deployments with ``OMNIGENTS_SERVER_URL`` still behave.
     """
+    if os.environ.get("CODA_OMNIGENT_MODE", "external").strip().lower() == "managed":
+        _set(stage="idle")
+        return
     if not omnigents_host_enabled():
         _set(stage="idle")
         return
