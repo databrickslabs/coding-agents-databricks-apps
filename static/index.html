@@ -712,7 +712,7 @@
     let omnigentShareFired = false;
 
     async function refreshOmnigentHostStatus() {
-      const resp = await fetch('/api/omnigent-host/status');
+      const resp = await fetch('/api/omnigents-status');
       const status = await resp.json();
       renderOmnigentHostStatus(status);
       if (status.stage === 'running' && !omnigentShareFired) {

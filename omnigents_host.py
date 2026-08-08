@@ -132,14 +132,30 @@ def _append_log(line: str) -> None:
         _status["log_tail"] = list(_log_tail)
 
 
+def _lease_expired(lease: dict[str, object], *, now: float | None = None) -> bool:
+    """Return whether a lease crossed its unchanged hard expiry fence."""
+    current = time.time() if now is None else now
+    return float(lease.get("expires_at", 0)) <= current
+
+
+def _scrub_session_workspaces() -> None:
+    """Remove all workspace data belonging to the released lease generation."""
+    shutil.rmtree(
+        os.path.join(os.environ.get("HOME", "/app/python/source_code"), "coda-sessions"),
+        ignore_errors=True,
+    )
+
+
 def acquire_lease(owner: str, lease_id: str) -> tuple[bool, dict[str, object]]:
     """Acquire or adopt the single user lease with an expiry fence."""
     global _lease
     now = time.time()
     with _lock:
-        if _lease is not None and float(_lease.get("expires_at", 0)) <= now:
-            _lease = None
         if _lease is not None:
+            # The reaper stops and scrubs expired generations outside this
+            # lock. Fail closed until that cleanup completes.
+            if _lease_expired(_lease, now=now):
+                return False, dict(_lease)
             if _lease.get("owner") != owner:
                 return False, dict(_lease)
             return True, dict(_lease)
@@ -154,11 +170,10 @@ def acquire_lease(owner: str, lease_id: str) -> tuple[bool, dict[str, object]]:
 
 def active_lease() -> dict[str, object] | None:
     """Return the current unexpired lease, if any."""
-    global _lease
     with _lock:
-        if _lease is not None and float(_lease.get("expires_at", 0)) <= time.time():
-            _lease = None
-        return dict(_lease) if _lease is not None else None
+        if _lease is None or _lease_expired(_lease):
+            return None
+        return dict(_lease)
 
 
 def release_lease(lease_id: str) -> bool:
@@ -267,16 +282,24 @@ def _is_runner_cmdline(cmdline: list[str]) -> bool:
 
 
 def release_idle_lease(*, now: float | None = None, runner_count: int | None = None) -> bool:
-    """Release a lease after ten minutes with no live runner subprocesses."""
+    """Release an expired generation or one idle for ten minutes."""
     global _no_runner_since
-    if active_lease() is None:
+    current = time.time() if now is None else now
+    with _lock:
+        lease_snapshot = dict(_lease) if _lease is not None else None
+    if lease_snapshot is None:
         _no_runner_since = None
         return False
+    if _lease_expired(lease_snapshot, now=current):
+        disconnect_host()
+        _scrub_session_workspaces()
+        released = release_lease(str(lease_snapshot["lease_id"]))
+        _no_runner_since = None
+        return released
     count = _live_runner_count() if runner_count is None else runner_count
     if count is None:
         _no_runner_since = None
         return False
-    current = time.time() if now is None else now
     if count > 0:
         _no_runner_since = None
         return False
