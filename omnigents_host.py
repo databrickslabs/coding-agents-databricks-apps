@@ -328,7 +328,10 @@ def start_lease_reaper() -> None:
     def _run() -> None:
         while True:
             time.sleep(30)
-            release_idle_lease()
+            try:
+                release_idle_lease()
+            except Exception:
+                logger.exception("CoDA lease reaper cleanup failed; preserving lease")
 
     threading.Thread(target=_run, daemon=True, name="coda-lease-reaper").start()
 

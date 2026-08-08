@@ -1702,9 +1702,19 @@ def get_version():
 
 @app.route("/api/omnigents-status")
 def omnigents_status():
-    """Report Omnigents host-integration state (FR-9 observability)."""
+    """Report browser-safe host state without runner or host log content."""
     from omnigents_host import get_status
-    return jsonify(get_status())
+
+    status = get_status()
+    browser_fields = (
+        "configured",
+        "running",
+        "installed",
+        "host_launched",
+        "server_url",
+        "stage",
+    )
+    return jsonify({key: status.get(key) for key in browser_fields})
 
 
 @app.route("/api/omnigent-host/status")
