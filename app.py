@@ -1702,9 +1702,19 @@ def get_version():
 
 @app.route("/api/omnigents-status")
 def omnigents_status():
-    """Report Omnigents host-integration state (FR-9 observability)."""
+    """Report browser-safe host state without runner or host log content."""
     from omnigents_host import get_status
-    return jsonify(get_status())
+
+    status = get_status()
+    browser_fields = (
+        "configured",
+        "running",
+        "installed",
+        "host_launched",
+        "server_url",
+        "stage",
+    )
+    return jsonify({key: status.get(key) for key in browser_fields})
 
 
 @app.route("/api/omnigent-host/status")
@@ -1804,6 +1814,9 @@ def omnigent_host_connect():
     server_url = (data.get("server_url") or "").strip()
     if not server_url:
         return jsonify({"error": "server_url required"}), 400
+    configured_server_url = os.environ.get("OMNIGENTS_SERVER_URL", "").strip()
+    if configured_server_url and server_url.rstrip("/") != configured_server_url.rstrip("/"):
+        return jsonify({"error": "server_url does not match configured Omnigent server"}), 409
 
     from omnigents_host import active_lease, connect_host
 
@@ -1836,17 +1849,19 @@ def omnigent_host_disconnect():
         return jsonify({"error": "Forbidden"}), 403
     data = request.get_json(silent=True) or {}
     lease_id = str(data.get("lease_id") or "")
-    from omnigents_host import active_lease, disconnect_host, release_lease
+    from omnigents_host import (
+        _scrub_session_workspaces,
+        active_lease,
+        disconnect_host,
+        release_lease,
+    )
 
     lease = active_lease()
     if lease is None or lease.get("lease_id") != lease_id:
         return jsonify({"released": False, "stale": True})
     status = disconnect_host()
     if data.get("scrub"):
-        shutil.rmtree(
-            os.path.join(os.environ.get("HOME", "/app/python/source_code"), "coda-sessions"),
-            ignore_errors=True,
-        )
+        _scrub_session_workspaces()
     release_lease(lease_id)
     status["released"] = True
     return jsonify(status)
