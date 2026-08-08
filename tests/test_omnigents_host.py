@@ -99,6 +99,33 @@ def test_allocate_workspace_is_fenced_and_distinct(monkeypatch, tmp_path) -> Non
         oh.allocate_workspace("lease-old", "session_three")
 
 
+def test_expired_lease_cleans_generation_before_owner_handoff(monkeypatch, tmp_path) -> None:
+    oh.reset_for_tests()
+    now = [100.0]
+    monkeypatch.setattr(oh.time, "time", lambda: now[0])
+    monkeypatch.setenv("HOME", str(tmp_path))
+    ok, _ = oh.acquire_lease("alice@example.com", "lease-a")
+    assert ok is True
+    workspace = oh.allocate_workspace("lease-a", "session_one")
+    assert os.path.isdir(workspace)
+
+    now[0] += oh._CODA_MAX_LEASE_S + 1
+    assert oh.active_lease() is None
+    ok, stale = oh.acquire_lease("bob@example.com", "lease-b")
+    assert ok is False
+    assert stale["lease_id"] == "lease-a"
+
+    disconnected: list[bool] = []
+    monkeypatch.setattr(oh, "disconnect_host", lambda: disconnected.append(True) or {})
+    assert oh.release_idle_lease(now=now[0], runner_count=1) is True
+    assert disconnected == [True]
+    assert not os.path.exists(tmp_path / "coda-sessions")
+
+    ok, lease = oh.acquire_lease("bob@example.com", "lease-b")
+    assert ok is True
+    assert lease["lease_id"] == "lease-b"
+
+
 def test_idle_lease_releases_after_no_runner_window(monkeypatch) -> None:
     oh.reset_for_tests()
     oh.acquire_lease("alice@example.com", "lease-a")

@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest import mock
 
 
@@ -88,6 +89,31 @@ def test_omnigent_host_connect_calls_supervisor(monkeypatch):
     assert called["url"] == "https://omnigent.example.com"
     assert called["sp_creds"] == app_module._omnigent_sp_creds
     assert called["lease_id"] == "lease-a"
+
+
+def test_omnigent_host_connect_rejects_configured_server_mismatch(monkeypatch):
+    app_module = _import_app()
+    monkeypatch.setenv("OMNIGENTS_SERVER_URL", "https://omnigent.example.com/")
+    from omnigents_host import acquire_lease
+
+    acquire_lease("owner@example.com", "lease-a")
+    with app_module.app.test_client() as client:
+        resp = client.post(
+            "/api/omnigent-host/connect",
+            json={"server_url": "https://attacker.example", "lease_id": "lease-a"},
+        )
+
+    assert resp.status_code == 409
+    assert resp.get_json() == {
+        "error": "server_url does not match configured Omnigent server"
+    }
+
+
+def test_browser_polls_owner_authenticated_status_endpoint():
+    static_html = Path(__file__).parents[1] / "static" / "index.html"
+    source = static_html.read_text()
+    assert "fetch('/api/omnigents-status')" in source
+    assert "fetch('/api/omnigent-host/status')" not in source
 
 
 def test_omnigent_host_connect_conflict(monkeypatch):
