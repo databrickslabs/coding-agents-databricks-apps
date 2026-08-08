@@ -17,6 +17,37 @@ def _import_app():
         return module
 
 
+def test_browser_status_omits_logs_and_error_details(monkeypatch):
+    app_module = _import_app()
+    monkeypatch.setattr(
+        "omnigents_host.get_status",
+        lambda: {
+            "configured": True,
+            "running": True,
+            "installed": True,
+            "host_launched": True,
+            "server_url": "https://omnigent.example.com",
+            "stage": "running",
+            "last_error": "Authorization: Bearer secret",
+            "log_tail": ["SECRET_REPOSITORY_OUTPUT"],
+        },
+    )
+
+    with app_module.app.test_client() as client:
+        with mock.patch.object(app_module, "_is_databricks_apps", return_value=False):
+            resp = client.get("/api/omnigents-status")
+
+    assert resp.status_code == 200
+    assert resp.get_json() == {
+        "configured": True,
+        "host_launched": True,
+        "installed": True,
+        "running": True,
+        "server_url": "https://omnigent.example.com",
+        "stage": "running",
+    }
+
+
 def test_omnigent_host_status_returns_state(monkeypatch):
     app_module = _import_app()
     monkeypatch.setattr("omnigents_host.get_status", lambda: {"stage": "idle", "running": False})
