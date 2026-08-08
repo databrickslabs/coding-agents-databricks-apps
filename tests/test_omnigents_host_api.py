@@ -6,7 +6,14 @@ def _import_app():
         import importlib
         import app
 
-        return importlib.reload(app)
+        module = importlib.reload(app)
+        import omnigents_host
+
+        omnigents_host.reset_for_tests()
+        # Endpoint behavior is exercised here; M2M authorization has dedicated
+        # coverage in test_auth_enforcement.py.
+        module._omnigent_server_request_authorized = lambda: True
+        return module
 
 
 def test_omnigent_host_status_returns_state(monkeypatch):
@@ -19,6 +26,29 @@ def test_omnigent_host_status_returns_state(monkeypatch):
 
     assert resp.status_code == 200
     assert resp.get_json()["stage"] == "idle"
+
+
+def test_omnigent_host_lease_requires_matching_app_name(monkeypatch):
+    app_module = _import_app()
+    monkeypatch.setenv("DATABRICKS_APP_NAME", "coda-main")
+
+    with app_module.app.test_client() as client:
+        mismatch = client.post(
+            "/api/omnigent-host/lease",
+            json={"owner": "owner@example.com", "lease_id": "lease-a", "app_name": "coda"},
+        )
+        matched = client.post(
+            "/api/omnigent-host/lease",
+            json={
+                "owner": "owner@example.com",
+                "lease_id": "lease-a",
+                "app_name": "coda-main",
+            },
+        )
+
+    assert mismatch.status_code == 409
+    assert matched.status_code == 200
+    assert matched.get_json()["lease_id"] == "lease-a"
 
 
 def test_omnigent_host_connect_requires_url():
@@ -36,23 +66,28 @@ def test_omnigent_host_connect_calls_supervisor(monkeypatch):
     app_module._omnigent_sp_creds = {"client_id": "c", "client_secret": "s", "host": "https://h"}
     called = {}
 
-    def fake_connect(url, sp_creds):
+    def fake_connect(url, sp_creds, **kwargs):
         called["url"] = url
         called["sp_creds"] = sp_creds
+        called.update(kwargs)
         return True, {"stage": "starting", "server_url": url}
 
     monkeypatch.setattr("omnigents_host.connect_host", fake_connect)
+    from omnigents_host import acquire_lease
+
+    acquire_lease("owner@example.com", "lease-a")
 
     with app_module.app.test_client() as client:
         with mock.patch.object(app_module, "_is_databricks_apps", return_value=False):
             resp = client.post(
                 "/api/omnigent-host/connect",
-                json={"server_url": "https://omnigent.example.com"},
+                json={"server_url": "https://omnigent.example.com", "lease_id": "lease-a"},
             )
 
-    assert resp.status_code == 200
+    assert resp.status_code == 202
     assert called["url"] == "https://omnigent.example.com"
     assert called["sp_creds"] == app_module._omnigent_sp_creds
+    assert called["lease_id"] == "lease-a"
 
 
 def test_omnigent_host_connect_conflict(monkeypatch):
@@ -60,14 +95,20 @@ def test_omnigent_host_connect_conflict(monkeypatch):
     app_module._omnigent_sp_creds = {"client_id": "c", "client_secret": "s", "host": "https://h"}
     monkeypatch.setattr(
         "omnigents_host.connect_host",
-        lambda url, sp_creds: (False, {"stage": "running", "last_error": "host already running"}),
+        lambda url, sp_creds, **kwargs: (
+            False,
+            {"stage": "running", "last_error": "host already running"},
+        ),
     )
+    from omnigents_host import acquire_lease
+
+    acquire_lease("owner@example.com", "lease-a")
 
     with app_module.app.test_client() as client:
         with mock.patch.object(app_module, "_is_databricks_apps", return_value=False):
             resp = client.post(
                 "/api/omnigent-host/connect",
-                json={"server_url": "https://omnigent.example.com"},
+                json={"server_url": "https://omnigent.example.com", "lease_id": "lease-a"},
             )
 
     assert resp.status_code == 409
@@ -76,10 +117,13 @@ def test_omnigent_host_connect_conflict(monkeypatch):
 def test_omnigent_host_disconnect_calls_supervisor(monkeypatch):
     app_module = _import_app()
     monkeypatch.setattr("omnigents_host.disconnect_host", lambda: {"stage": "stopped", "running": False})
+    from omnigents_host import acquire_lease
+
+    acquire_lease("owner@example.com", "lease-a")
 
     with app_module.app.test_client() as client:
         with mock.patch.object(app_module, "_is_databricks_apps", return_value=False):
-            resp = client.post("/api/omnigent-host/disconnect")
+            resp = client.post("/api/omnigent-host/disconnect", json={"lease_id": "lease-a"})
 
     assert resp.status_code == 200
     assert resp.get_json()["stage"] == "stopped"

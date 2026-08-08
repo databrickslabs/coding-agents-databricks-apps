@@ -1535,7 +1535,7 @@ def authorize_request():
     # has SSO cookies — no functional regression.
     if request.path in (
         "/health", "/api/configure-pat", "/api/inject-pat",
-    ) or request.path.startswith("/socket.io"):
+    ) or request.path.startswith(("/socket.io", "/api/omnigent-host/")):
         return None
 
     authorized, user = check_authorization()
@@ -1709,32 +1709,147 @@ def omnigents_status():
 
 @app.route("/api/omnigent-host/status")
 def omnigent_host_status():
-    """Report runtime Omnigent host state."""
+    """Report runtime Omnigent host state to the configured server SP."""
+    if not _omnigent_server_request_authorized():
+        return jsonify({"error": "Forbidden"}), 403
     from omnigents_host import get_status
     return jsonify(get_status())
+
+
+def _omnigent_server_request_authorized() -> bool:
+    """Authorize the configured Omnigent server service principal.
+
+    Databricks Apps validates the forwarded bearer before it reaches Flask;
+    this check narrows the M2M endpoint to the configured server SP.
+    """
+    expected = os.environ.get("OMNIGENT_SERVER_SP_CLIENT_ID", "").strip()
+    if not expected:
+        return False
+    # Only trust the Apps-proxy-injected token. Accepting a caller-supplied
+    # Authorization header here would make unverified JWT payload decoding an
+    # authorization bypass if the Flask port were ever exposed directly.
+    token = request.headers.get("X-Forwarded-Access-Token", "").strip()
+    try:
+        import base64
+        import json
+
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(payload))
+    except (IndexError, ValueError, TypeError, json.JSONDecodeError):
+        return False
+    principals = {
+        str(claims.get(key, "")).strip()
+        for key in ("sub", "client_id", "azp", "appid")
+    }
+    return any(hmac.compare_digest(principal, expected) for principal in principals)
+
+
+@app.route("/api/omnigent-host/lease", methods=["POST"])
+def omnigent_host_lease():
+    """Acquire or adopt the single user-scoped managed lease."""
+    if not _omnigent_server_request_authorized():
+        return jsonify({"error": "Forbidden"}), 403
+    data = request.get_json(silent=True) or {}
+    owner = str(data.get("owner") or "").strip()
+    lease_id = str(data.get("lease_id") or "").strip()
+    requested_app = str(data.get("app_name") or "").strip()
+    app_name = os.environ.get("DATABRICKS_APP_NAME", "").strip()
+    if not owner or not lease_id:
+        return jsonify({"error": "owner and lease_id required"}), 400
+    if not app_name or requested_app != app_name:
+        return jsonify({"error": "app_name does not match this CoDA instance"}), 409
+    from omnigents_host import acquire_lease
+
+    ok, lease = acquire_lease(owner, lease_id)
+    return jsonify(lease), (200 if ok else 409)
+
+
+@app.route("/api/omnigent-host/workspaces", methods=["POST"])
+def omnigent_host_workspace():
+    """Allocate a distinct session directory under the active lease."""
+    if not _omnigent_server_request_authorized():
+        return jsonify({"error": "Forbidden"}), 403
+    data = request.get_json(silent=True) or {}
+    from omnigents_host import allocate_workspace
+
+    try:
+        workspace = allocate_workspace(
+            str(data.get("lease_id") or ""), str(data.get("session_id") or "")
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 409
+    return jsonify({"workspace": workspace})
+
+
+@app.route("/api/omnigent-host/runner-log/<session_id>")
+def omnigent_host_runner_log(session_id):
+    """Return a bounded runner log tail to the configured server SP."""
+    if not _omnigent_server_request_authorized() and get_request_user() != app_owner:
+        return jsonify({"error": "Forbidden"}), 403
+    from omnigents_host import runner_log_tail
+
+    try:
+        return jsonify({"lines": runner_log_tail(session_id)})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
 
 
 @app.route("/api/omnigent-host/connect", methods=["POST"])
 def omnigent_host_connect():
     """Start a runtime Omnigent host tunnel for a supplied server URL."""
+    if not _omnigent_server_request_authorized():
+        return jsonify({"error": "Forbidden"}), 403
     data = request.get_json(silent=True) or {}
     server_url = (data.get("server_url") or "").strip()
     if not server_url:
         return jsonify({"error": "server_url required"}), 400
 
-    from omnigents_host import connect_host
-    ok, status = connect_host(server_url, _omnigent_sp_creds)
+    from omnigents_host import active_lease, connect_host
+
+    lease = active_lease()
+    if lease is None or lease.get("lease_id") != data.get("lease_id"):
+        return jsonify({"error": "stale or missing lease"}), 409
+    host_config = data.get("host_config")
+    if host_config is not None and not isinstance(host_config, dict):
+        return jsonify({"error": "host_config must be an object"}), 400
+    ok, status = connect_host(
+        server_url,
+        _omnigent_sp_creds,
+        host_token=(data.get("host_token") or None),
+        host_id=(data.get("host_id") or None),
+        host_name=(data.get("host_name") or None),
+        host_config=host_config,
+        lease_id=(data.get("lease_id") or None),
+    )
     if not ok:
         code = 409 if status.get("last_error") == "host already running" else 400
         return jsonify(status), code
-    return jsonify(status)
+    status["workspace"] = os.environ.get("HOME", "/app/python/source_code")
+    return jsonify(status), 202
 
 
 @app.route("/api/omnigent-host/disconnect", methods=["POST"])
 def omnigent_host_disconnect():
-    """Stop the active runtime Omnigent host tunnel, if any."""
-    from omnigents_host import disconnect_host
-    return jsonify(disconnect_host())
+    """Release and scrub only the matching managed lease generation."""
+    if not _omnigent_server_request_authorized():
+        return jsonify({"error": "Forbidden"}), 403
+    data = request.get_json(silent=True) or {}
+    lease_id = str(data.get("lease_id") or "")
+    from omnigents_host import active_lease, disconnect_host, release_lease
+
+    lease = active_lease()
+    if lease is None or lease.get("lease_id") != lease_id:
+        return jsonify({"released": False, "stale": True})
+    status = disconnect_host()
+    if data.get("scrub"):
+        shutil.rmtree(
+            os.path.join(os.environ.get("HOME", "/app/python/source_code"), "coda-sessions"),
+            ignore_errors=True,
+        )
+    release_lease(lease_id)
+    status["released"] = True
+    return jsonify(status)
 
 
 @app.route("/api/omnigent-host/share", methods=["POST"])
@@ -2242,8 +2357,9 @@ def initialize_app(local_dev=False):
     # Capture the app SP's M2M OAuth creds BEFORE the strip below — the
     # Omnigents host tunnel needs an OAuth token (the Apps proxy rejects PATs).
     # No-op / returns None when disabled or creds absent. See omnigents_host.py.
-    from omnigents_host import capture_sp_credentials, start_host
+    from omnigents_host import capture_sp_credentials, start_host, start_lease_reaper
     _omnigent_sp_creds = capture_sp_credentials()
+    start_lease_reaper()
 
     # Resolve owner: Apps API (app.creator via SP) > PAT (current_user.me)
     app_owner = get_token_owner()

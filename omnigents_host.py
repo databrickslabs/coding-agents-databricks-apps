@@ -76,6 +76,11 @@ _sp_creds: dict[str, str] | None = None
 _log_tail: list[str] = []
 _LOG_TAIL_LIMIT = 80
 _runner_tailer_started = False
+_lease: dict[str, object] | None = None
+_CODA_MAX_LEASE_S = 12 * 3600
+_CODA_IDLE_RELEASE_S = 10 * 60
+_no_runner_since: float | None = None
+_lease_reaper_started = False
 
 
 def _stable_host_identity() -> tuple[str, str] | None:
@@ -86,6 +91,22 @@ def _stable_host_identity() -> tuple[str, str] | None:
     app_name = os.environ.get("DATABRICKS_APP_NAME", "").strip() or "coda"
     digest = hashlib.sha256(f"coda-omnigents-host:{app_client_id}".encode()).hexdigest()[:32]
     return f"host_{digest}", app_name
+
+
+def runner_log_tail(session_id: str, *, lines: int = 1000) -> list[str]:
+    """Return a bounded runner log tail for a validated session id."""
+    if len(session_id) != 32 or any(ch not in "0123456789abcdef" for ch in session_id):
+        raise ValueError("invalid session id")
+    import glob
+
+    home = os.environ.get("HOME", "/app/python/source_code")
+    matches = sorted(
+        glob.glob(os.path.join(home, ".omnigent", "logs", "runner", f"runner-{session_id}-*.log"))
+    )
+    if not matches:
+        return []
+    with open(matches[-1], errors="replace") as handle:
+        return handle.readlines()[-lines:]
 
 
 def get_status() -> dict[str, object]:
@@ -111,9 +132,188 @@ def _append_log(line: str) -> None:
         _status["log_tail"] = list(_log_tail)
 
 
+def acquire_lease(owner: str, lease_id: str) -> tuple[bool, dict[str, object]]:
+    """Acquire or adopt the single user lease with an expiry fence."""
+    global _lease
+    now = time.time()
+    with _lock:
+        if _lease is not None and float(_lease.get("expires_at", 0)) <= now:
+            _lease = None
+        if _lease is not None:
+            if _lease.get("owner") != owner:
+                return False, dict(_lease)
+            return True, dict(_lease)
+        _lease = {
+            "owner": owner,
+            "lease_id": lease_id,
+            "acquired_at": now,
+            "expires_at": now + _CODA_MAX_LEASE_S,
+        }
+        return True, dict(_lease)
+
+
+def active_lease() -> dict[str, object] | None:
+    """Return the current unexpired lease, if any."""
+    global _lease
+    with _lock:
+        if _lease is not None and float(_lease.get("expires_at", 0)) <= time.time():
+            _lease = None
+        return dict(_lease) if _lease is not None else None
+
+
+def release_lease(lease_id: str) -> bool:
+    """Release only the matching lease generation."""
+    global _lease
+    with _lock:
+        if _lease is None or _lease.get("lease_id") != lease_id:
+            return False
+        _lease = None
+        return True
+
+
+def allocate_workspace(lease_id: str, session_id: str) -> str:
+    """Create a session-specific directory under the active lease."""
+    lease = active_lease()
+    if lease is None or lease.get("lease_id") != lease_id:
+        raise ValueError("stale lease")
+    allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+    if not session_id or any(ch not in allowed for ch in session_id):
+        raise ValueError("invalid session id")
+    root = os.path.join(os.environ.get("HOME", "/app/python/source_code"), "coda-sessions")
+    workspace = os.path.join(root, session_id)
+    os.makedirs(workspace, mode=0o700, exist_ok=True)
+    return workspace
+
+
+def _live_runner_count() -> int | None:
+    """Return live runner descendants, or ``None`` when inspection is unknown.
+
+    The host's zygote is a persistent infrastructure process, not a runner.
+    Runners can either be direct host children (when zygote mode is disabled)
+    or children forked by that zygote.  Process inspection is deliberately
+    fail-closed because treating an inaccessible process as absent could drop
+    an active user's lease.
+    """
+    proc = _proc
+    if proc is None:
+        return 0
+    try:
+        if proc.poll() is not None:
+            return 0
+    except Exception as exc:  # pragma: no cover - defensive Popen boundary
+        logger.warning("unable to inspect Omnigents host process; preserving lease: %s", exc)
+        return None
+
+    try:
+        import psutil
+
+        try:
+            descendants = psutil.Process(proc.pid).children(recursive=True)
+        except psutil.NoSuchProcess as exc:
+            # Popen reported running, so a psutil disappearance here is an
+            # inspection race rather than definitive evidence of no runners.
+            logger.warning(
+                "unable to inspect Omnigents runner processes; preserving lease: %s",
+                exc,
+            )
+            return None
+
+        dead_statuses = {psutil.STATUS_ZOMBIE}
+        if hasattr(psutil, "STATUS_DEAD"):
+            dead_statuses.add(psutil.STATUS_DEAD)
+        live: list[tuple[object, list[str], int]] = []
+        for child in descendants:
+            try:
+                status = child.status()
+                if status in dead_statuses or not child.is_running():
+                    continue
+                cmdline = child.cmdline()
+                ppid = child.ppid()
+            except psutil.NoSuchProcess:
+                # A child can disappear between children() and inspection.
+                continue
+            live.append((child, cmdline, ppid))
+
+        zygote_pids = {
+            child.pid
+            for child, cmdline, ppid in live
+            if ppid == proc.pid and _is_zygote_cmdline(cmdline)
+        }
+        return sum(
+            ppid in zygote_pids
+            or (
+                ppid == proc.pid
+                and _is_runner_cmdline(cmdline)
+                and not _is_zygote_cmdline(cmdline)
+            )
+            for child, cmdline, ppid in live
+        )
+    except Exception as exc:  # AccessDenied and unexpected psutil failures
+        logger.warning("unable to inspect Omnigents runner processes; preserving lease: %s", exc)
+        return None
+
+
+def _is_zygote_cmdline(cmdline: list[str]) -> bool:
+    """Whether a process command line is the persistent Omnigent zygote."""
+    return "omnigent.runner._zygote" in cmdline
+
+
+def _is_runner_cmdline(cmdline: list[str]) -> bool:
+    """Whether a direct process is an Omnigent runner rather than infrastructure."""
+    return any(
+        token.startswith("omnigent.runner") and token != "omnigent.runner._zygote"
+        for token in cmdline
+    )
+
+
+def release_idle_lease(*, now: float | None = None, runner_count: int | None = None) -> bool:
+    """Release a lease after ten minutes with no live runner subprocesses."""
+    global _no_runner_since
+    if active_lease() is None:
+        _no_runner_since = None
+        return False
+    count = _live_runner_count() if runner_count is None else runner_count
+    if count is None:
+        _no_runner_since = None
+        return False
+    current = time.time() if now is None else now
+    if count > 0:
+        _no_runner_since = None
+        return False
+    if _no_runner_since is None:
+        _no_runner_since = current
+        return False
+    if current - _no_runner_since < _CODA_IDLE_RELEASE_S:
+        return False
+    lease = active_lease()
+    if lease is None:
+        return False
+    disconnect_host()
+    released = release_lease(str(lease["lease_id"]))
+    _no_runner_since = None
+    return released
+
+
+def start_lease_reaper() -> None:
+    """Start the daemon safety valve that releases abandoned idle leases."""
+    global _lease_reaper_started
+    with _lock:
+        if _lease_reaper_started:
+            return
+        _lease_reaper_started = True
+
+    def _run() -> None:
+        while True:
+            time.sleep(30)
+            release_idle_lease()
+
+    threading.Thread(target=_run, daemon=True, name="coda-lease-reaper").start()
+
+
 def reset_for_tests() -> None:
     """Reset module state between tests."""
     global _proc, _sp_creds, _stop_event, _thread, _runner_tailer_started
+    global _lease, _no_runner_since, _lease_reaper_started
 
     if _proc is not None and _proc.poll() is None:
         _proc.terminate()
@@ -123,6 +323,9 @@ def reset_for_tests() -> None:
         _stop_event = None
         _thread = None
         _runner_tailer_started = False
+        _lease = None
+        _no_runner_since = None
+        _lease_reaper_started = False
         _log_tail.clear()
         _status.clear()
         _status.update({
@@ -945,8 +1148,20 @@ def _install_broker_cli_wrapper() -> None:
     logger.info("Installed Omnigent token-broker CLI wrapper at %s", wrapper)
 
 
-def _run_host_once(server_url: str, stop_event: threading.Event | None = None) -> int:
-    """Run ``omnigents host`` in the foreground until it exits. Returns rc."""
+def _run_host_once(
+    server_url: str,
+    stop_event: threading.Event | None = None,
+    *,
+    host_token: str | None = None,
+    host_id: str | None = None,
+    host_name: str | None = None,
+    host_config: dict[str, object] | None = None,
+    lease_id: str | None = None,
+) -> int:
+    """Run ``omnigents host`` in the foreground until it exits.
+
+    Identity values are optional so legacy boot-time starts remain unchanged.
+    """
     global _proc
 
     home = os.environ.get("HOME", "/app/python/source_code")
@@ -973,6 +1188,16 @@ def _run_host_once(server_url: str, stop_event: threading.Event | None = None) -
     broker_bin = os.path.join(home, ".coda-broker-bin")
     path_parts = [broker_bin, local_bin, env.get("PATH", "")]
     env["PATH"] = ":".join(part for part in path_parts if part)
+    if host_token:
+        env["OMNIGENT_HOST_TOKEN"] = host_token
+    if host_id:
+        env["OMNIGENT_HOST_ID"] = host_id
+    if host_name:
+        env["OMNIGENT_HOST_NAME"] = host_name
+    if host_config is not None:
+        env["OMNIGENT_HOST_CONFIG"] = json.dumps(host_config, separators=(",", ":"))
+    if lease_id:
+        env["OMNIGENT_HOST_LEASE_ID"] = lease_id
     stable_identity = _stable_host_identity()
     if stable_identity is not None:
         env.setdefault("OMNIGENT_HOST_ID", stable_identity[0])
@@ -1021,6 +1246,12 @@ def _supervise(
     server_url: str,
     sp_creds: dict[str, str],
     stop_event: threading.Event,
+    *,
+    host_token: str | None = None,
+    host_id: str | None = None,
+    host_name: str | None = None,
+    host_config: dict[str, object] | None = None,
+    lease_id: str | None = None,
 ) -> None:
     """Install, write the profile, then run the host with bounded backoff.
 
@@ -1097,7 +1328,15 @@ def _supervise(
     backoff = _RESTART_BACKOFF_SECONDS
     while not stop_event.is_set():
         try:
-            rc = _run_host_once(server_url, stop_event=stop_event)
+            rc = _run_host_once(
+                server_url,
+                stop_event=stop_event,
+                host_token=host_token,
+                host_id=host_id,
+                host_name=host_name,
+                host_config=host_config,
+                lease_id=lease_id,
+            )
             if stop_event.is_set():
                 break
             logger.warning("omnigents host exited rc=%s; restarting in %ss", rc, backoff)
@@ -1112,6 +1351,12 @@ def _supervise(
 def connect_host(
     server_url: str,
     sp_creds: dict[str, str] | None,
+    *,
+    host_token: str | None = None,
+    host_id: str | None = None,
+    host_name: str | None = None,
+    host_config: dict[str, object] | None = None,
+    lease_id: str | None = None,
 ) -> tuple[bool, dict[str, object]]:
     """Start a supervised ``omnigent host`` for a runtime-supplied server URL."""
     global _sp_creds, _stop_event, _thread
@@ -1150,7 +1395,16 @@ def connect_host(
             "last_error": None,
         })
         _thread = threading.Thread(
-            target=_supervise,
+            target=lambda server_url, creds, stop_event: _supervise(
+                server_url,
+                creds,
+                stop_event,
+                host_token=host_token,
+                host_id=host_id,
+                host_name=host_name,
+                host_config=host_config,
+                lease_id=lease_id,
+            ),
             args=(server_url, _sp_creds, _stop_event),
             daemon=True,
             name="omnigent-host",
@@ -1186,6 +1440,9 @@ def start_host(sp_creds: dict[str, str] | None) -> None:
     Runtime control should call :func:`connect_host` directly. This remains so
     older app.yaml deployments with ``OMNIGENTS_SERVER_URL`` still behave.
     """
+    if os.environ.get("CODA_OMNIGENT_MODE", "external").strip().lower() == "managed":
+        _set(stage="idle")
+        return
     if not omnigents_host_enabled():
         _set(stage="idle")
         return

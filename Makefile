@@ -226,9 +226,10 @@ redeploy-git: grant-omnigent-host deploy-git ## (Re)grant Omnigent host IAM, the
 OMNIGENT_SERVER_URL ?=
 OMNIGENT_SECRET_SCOPE ?= coda-omnigent
 OMNIGENT_SECRET_KEY ?= omnigent-server-url
+OMNIGENT_CLIENT_ID_SECRET_KEY ?= omnigent-server-client-id
 
-attach-omnigent-resources: ## Attach the per-app omnigent-wheels (UC Volume) + omnigent-server-url (Secret) resources the generic app.yaml resolves via valueFrom
-	@# The generic app.yaml references two resource keys at runtime:
+attach-omnigent-resources: ## Attach the workspace-specific Omnigent volume, URL, and server-SP resources
+	@# The generic app.yaml references three resource keys at runtime:
 	@#   OMNIGENTS_WHEEL_SPEC    valueFrom: omnigent-wheels
 	@#   OMNIGENTS_SERVER_URL    valueFrom: omnigent-server-url
 	@# This target attaches those resources to the app (merging with existing
@@ -247,10 +248,12 @@ attach-omnigent-resources: ## Attach the per-app omnigent-wheels (UC Volume) + o
 	@./attach_omnigent_resources.sh \
 		--profile $(PROFILE) \
 		--coda-app $(APP_NAME) \
+		--server-app $(OMNIGENT_SERVER_APP) \
 		--server-url $(OMNIGENT_SERVER_URL) \
 		--wheel-volume $(WHEEL_VOLUME) \
 		--secret-scope $(OMNIGENT_SECRET_SCOPE) \
-		--secret-key $(OMNIGENT_SECRET_KEY)
+		--secret-key $(OMNIGENT_SECRET_KEY) \
+		--client-id-secret-key $(OMNIGENT_CLIENT_ID_SECRET_KEY)
 
 # ── Monitoring ───────────────────────────────────────
 

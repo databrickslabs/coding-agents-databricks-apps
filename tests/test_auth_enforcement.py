@@ -29,6 +29,34 @@ def _make_client(app_module):
 
 
 # ---------------------------------------------------------------------------
+def test_connect_endpoint_requires_allowlisted_server_sp(monkeypatch):
+    """The M2M host-connect route accepts only the configured server SP."""
+    import base64
+    import json
+
+    app_module = _get_app_module()
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"sub": "server-sp"}).encode()
+    ).decode().rstrip("=")
+    token = f"header.{payload}.signature"
+    monkeypatch.setenv("OMNIGENT_SERVER_SP_CLIENT_ID", "server-sp")
+
+    with app_module.app.test_request_context(
+        headers={"X-Forwarded-Access-Token": token}
+    ):
+        assert app_module._omnigent_server_request_authorized() is True
+
+    monkeypatch.setenv("OMNIGENT_SERVER_SP_CLIENT_ID", "other-sp")
+    with app_module.app.test_request_context(
+        headers={"X-Forwarded-Access-Token": token}
+    ):
+        assert app_module._omnigent_server_request_authorized() is False
+
+    monkeypatch.setenv("OMNIGENT_SERVER_SP_CLIENT_ID", "server-sp")
+    with app_module.app.test_request_context(headers={"Authorization": f"Bearer {token}"}):
+        assert app_module._omnigent_server_request_authorized() is False
+
+
 # 1. Session endpoints MUST enforce owner check
 # ---------------------------------------------------------------------------
 
