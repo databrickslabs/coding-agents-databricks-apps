@@ -82,7 +82,7 @@ dependencies = [
 # Dev/test-only deps — not shipped to the app container. Install with
 # `uv sync --group dev` or `uv pip install --group dev`.
 dev = [
-    "pytest>=8.0",
+    "pytest>=9.1.1",
     "pytest-timeout>=2.4",
     # Playwright for the e2e suite (tests/e2e/) — drives a real browser
     # against the deployed app to verify SSO + setup pipeline + security
