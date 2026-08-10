@@ -167,6 +167,50 @@ def test_proxy_ready_accepts_exact_authenticated_readiness(monkeypatch):
     assert urlopen.call_args.kwargs["timeout"] == 5
 
 
+def test_proxy_ready_accepts_authenticated_mlflow_route_without_listing(monkeypatch):
+    payload = {
+        **_healthy_payload(),
+        "upstream": "https://gateway.example.com/mlflow/v1",
+        "upstream_status": 400,
+        "check": "mlflow-models",
+        "readiness_semantics": "authenticated-route-listing-unsupported",
+    }
+    monkeypatch.setattr(oh, "urlopen", lambda *_args, **_kwargs: _HealthResponse(payload))
+
+    assert oh._proxy_ready() is True
+
+
+@pytest.mark.parametrize(
+    ("upstream", "check", "semantics"),
+    [
+        (
+            "https://gateway.example.com/mlflow/v1",
+            "mlflow-models",
+            None,
+        ),
+        (
+            "https://workspace.example.com/serving-endpoints",
+            "workspace-serving-endpoints",
+            "authenticated-route-listing-unsupported",
+        ),
+    ],
+)
+def test_proxy_ready_rejects_unscoped_400_readiness(
+    monkeypatch, upstream, check, semantics
+):
+    payload = {
+        **_healthy_payload(),
+        "upstream": upstream,
+        "upstream_status": 400,
+        "check": check,
+    }
+    if semantics is not None:
+        payload["readiness_semantics"] = semantics
+    monkeypatch.setattr(oh, "urlopen", lambda *_args, **_kwargs: _HealthResponse(payload))
+
+    assert oh._proxy_ready() is False
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

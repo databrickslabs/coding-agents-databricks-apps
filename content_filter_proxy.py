@@ -175,9 +175,20 @@ def _readiness_status() -> tuple[int, dict]:
                     timeout=3,
                 )
                 payload["upstream_status"] = response.status_code
-                if response.status_code == 200:
+                gateway_listing_unsupported = (
+                    check == "mlflow-models" and response.status_code == 400
+                )
+                if response.status_code == 200 or gateway_listing_unsupported:
+                    # The MLflow AI Gateway route returns 400 for unsupported
+                    # model listing after TLS, routing, and auth have succeeded.
+                    # This is a zero-inference readiness signal only for that
+                    # exact gateway check; workspace listings still require 200.
                     payload["status"] = "ready"
                     payload["upstream_ready"] = True
+                    if gateway_listing_unsupported:
+                        payload["readiness_semantics"] = (
+                            "authenticated-route-listing-unsupported"
+                        )
                     status = 200
                 else:
                     payload["reason"] = "upstream_status"

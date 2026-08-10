@@ -430,12 +430,57 @@ def test_readiness_rejects_missing_current_token(readiness, monkeypatch):
     get.assert_not_called()
 
 
-@pytest.mark.parametrize("upstream_status", [401, 403, 404, 500, 503])
+@pytest.mark.parametrize("upstream_status", [400, 401, 403, 404, 500, 503])
 def test_readiness_rejects_upstream_error_status(
     readiness, monkeypatch, upstream_status
 ):
     monkeypatch.setattr(
         readiness, "UPSTREAM_BASE", "https://workspace.example.com/serving-endpoints"
+    )
+    monkeypatch.setattr(
+        readiness.requests,
+        "get",
+        mock.Mock(return_value=mock.Mock(status_code=upstream_status)),
+    )
+
+    status, payload = readiness._readiness_status()
+
+    assert status == 503
+    assert payload["reason"] == "upstream_status"
+    assert payload["upstream_status"] == upstream_status
+
+
+def test_readiness_accepts_mlflow_listing_unsupported_after_auth(
+    readiness, monkeypatch
+):
+    monkeypatch.setattr(
+        readiness, "UPSTREAM_BASE", "https://gateway.example.com/mlflow/v1"
+    )
+    monkeypatch.setattr(
+        readiness.requests,
+        "get",
+        mock.Mock(return_value=mock.Mock(status_code=400)),
+    )
+
+    status, payload = readiness._readiness_status()
+
+    assert status == 200
+    assert payload["status"] == "ready"
+    assert payload["upstream_ready"] is True
+    assert payload["upstream_status"] == 400
+    assert payload["check"] == "mlflow-models"
+    assert (
+        payload["readiness_semantics"]
+        == "authenticated-route-listing-unsupported"
+    )
+
+
+@pytest.mark.parametrize("upstream_status", [401, 403, 404, 500, 503])
+def test_readiness_rejects_mlflow_auth_route_or_server_error(
+    readiness, monkeypatch, upstream_status
+):
+    monkeypatch.setattr(
+        readiness, "UPSTREAM_BASE", "https://gateway.example.com/mlflow/v1"
     )
     monkeypatch.setattr(
         readiness.requests,
