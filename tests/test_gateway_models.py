@@ -25,10 +25,16 @@ CATALOG = {
 }
 
 
-def _seed_binary(home: Path, name: str) -> None:
+def _seed_binary(home: Path, name: str, version: str = "1.18.11") -> None:
+    """Seed a fake CLI that answers ``--version``.
+
+    setup_opencode.py compares the installed version against Omnigent's floor,
+    so a stub that says nothing is treated as too old and the setup script would
+    try a real ``npm install``.
+    """
     path = home / ".local" / "bin" / name
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("#!/bin/sh\nexit 0\n")
+    path.write_text(f'#!/bin/sh\nif [ "$1" = "--version" ]; then echo "{version}"; fi\nexit 0\n')
     path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
 
@@ -156,6 +162,37 @@ def test_setup_opencode_writes_ucode_provider_buckets(monkeypatch, tmp_path):
         "databricks-google",
         "databricks-oss",
     }
+
+
+def test_setup_opencode_upgrades_a_binary_below_the_omnigent_floor(monkeypatch, tmp_path):
+    """A pre-existing old opencode must be upgraded, not accepted.
+
+    Omnigent reports the host as `version-too-low` and refuses to launch an
+    opencode-native session, which is invisible until a session fails.
+    """
+    _seed_binary(tmp_path, "opencode", version="0.0.0-beta-202605152242")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("DATABRICKS_HOST", WORKSPACE)
+    monkeypatch.setenv("DATABRICKS_TOKEN", "test-token")
+    monkeypatch.setattr(gm, "discover_model_catalog", lambda *_: CATALOG)
+
+    import utils
+
+    monkeypatch.setattr(utils, "get_npm_version", lambda *a, **kw: "0.0.0-beta-202605152242")
+    installs: list[list[str]] = []
+
+    def _fake_run(cmd, **_kwargs):
+        installs.append(cmd)
+        return mock.Mock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("subprocess.run", _fake_run)
+    runpy.run_path(str(Path(__file__).parents[1] / "setup_opencode.py"), run_name="__main__")
+
+    opencode_installs = [c for c in installs if any("opencode-ai@" in str(p) for p in c)]
+    assert opencode_installs, "an out-of-date opencode must trigger an install"
+    spec = next(str(p) for p in opencode_installs[0] if "opencode-ai@" in str(p))
+    # A resolved snapshot below the floor must not be requested verbatim.
+    assert spec == "opencode-ai@^1.17.7", spec
 
 
 def test_setup_proxy_source_pins_workspace_mlflow_route():

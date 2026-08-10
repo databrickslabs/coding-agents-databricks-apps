@@ -110,6 +110,58 @@ def _default_npm_min_age_days() -> int:
         return 7
 
 
+def release_tuple(version):
+    """Return a comparable release tuple for a version string, or None.
+
+    Pre-release/build suffixes are dropped, so ``"1.18.11-beta.2"`` compares as
+    ``(1, 18, 11)``. Anything unparseable returns ``None``.
+    """
+    if not version:
+        return None
+    head = str(version).strip().lstrip("v").split("+")[0].split("-")[0]
+    parts = head.split(".")
+    if not parts or not all(part.isdigit() for part in parts):
+        return None
+    return tuple(int(part) for part in parts)
+
+
+def version_at_least(actual, minimum):
+    """Return True when ``actual`` is a release at or above ``minimum``.
+
+    An unparseable or missing ``actual`` is treated as too low: an npm
+    ``latest`` tag can point at a ``0.0.0-<snapshot>`` build, which is *lower*
+    than every real release, and a harness that requires a floor version must
+    not silently accept it.
+    """
+    actual_tuple = release_tuple(actual)
+    minimum_tuple = release_tuple(minimum)
+    if actual_tuple is None or minimum_tuple is None:
+        return False
+    width = max(len(actual_tuple), len(minimum_tuple))
+    actual_padded = actual_tuple + (0,) * (width - len(actual_tuple))
+    minimum_padded = minimum_tuple + (0,) * (width - len(minimum_tuple))
+    return actual_padded >= minimum_padded
+
+
+def installed_cli_version(binary):
+    """Return ``<binary> --version``'s first version-looking token, or None."""
+    try:
+        result = subprocess.run(
+            [str(binary), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return None
+    if result.returncode != 0:
+        return None
+    for token in (result.stdout or "").split():
+        if release_tuple(token) is not None:
+            return token.strip().lstrip("v")
+    return None
+
+
 def get_npm_version(package_name, min_age_days=None):
     """Resolve the latest stable npm version that satisfies a release-age cooldown.
 

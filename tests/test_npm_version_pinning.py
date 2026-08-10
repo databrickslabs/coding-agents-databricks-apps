@@ -340,3 +340,59 @@ class TestNpmVersionLive:
         parts = version.split(".")
         assert len(parts) >= 2, f"Expected semver, got: {version}"
         assert parts[0].isdigit(), f"Major version not a number: {version}"
+
+
+class TestVersionFloor:
+    """npm's `latest` can point at a 0.0.0 snapshot, below every real release.
+
+    Omnigent's opencode-native harness enforces a floor and reports a host as
+    `version-too-low` when the CLI is older, which fails session launch — so the
+    installer has to compare versions, not just check that a file exists.
+    """
+
+    @pytest.mark.parametrize(
+        "actual,minimum,expected",
+        [
+            ("1.18.11", "1.17.7", True),
+            ("1.17.7", "1.17.7", True),
+            ("1.17.6", "1.17.7", False),
+            ("0.0.0-beta-202605152242", "1.17.7", False),
+            ("v1.18.0", "1.17.7", True),
+            ("1.18", "1.17.7", True),
+            ("2.0.0-rc.1", "1.17.7", True),
+            (None, "1.17.7", False),
+            ("", "1.17.7", False),
+            ("not-a-version", "1.17.7", False),
+        ],
+    )
+    def test_version_at_least(self, actual, minimum, expected):
+        from utils import version_at_least
+
+        assert version_at_least(actual, minimum) is expected
+
+    def test_release_tuple_drops_prerelease_and_build(self):
+        from utils import release_tuple
+
+        assert release_tuple("1.18.11-beta.2+build7") == (1, 18, 11)
+        assert release_tuple("0.0.0-snapshot-x") == (0, 0, 0)
+        assert release_tuple("garbage") is None
+
+    def test_installed_cli_version_reads_the_binary(self, monkeypatch):
+        import utils
+
+        monkeypatch.setattr(
+            utils.subprocess,
+            "run",
+            lambda *a, **kw: mock.Mock(returncode=0, stdout="opencode 1.18.11\n"),
+        )
+        assert utils.installed_cli_version("/tmp/opencode") == "1.18.11"
+
+    def test_installed_cli_version_is_none_when_the_binary_fails(self, monkeypatch):
+        import utils
+
+        monkeypatch.setattr(
+            utils.subprocess,
+            "run",
+            lambda *a, **kw: mock.Mock(returncode=1, stdout=""),
+        )
+        assert utils.installed_cli_version("/tmp/opencode") is None
