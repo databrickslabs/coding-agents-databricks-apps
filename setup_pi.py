@@ -23,6 +23,7 @@ import json
 import subprocess
 from pathlib import Path
 
+<<<<<<< HEAD
 from cli_auth import _atomic_write_text
 from utils import adapt_instructions_file, get_npm_version
 from gateway_models import (
@@ -31,6 +32,10 @@ from gateway_models import (
     pi_base_urls,
     preferred_model,
 )
+=======
+from utils import adapt_instructions_file, get_npm_version
+from gateway_models import discover_model_catalog, pi_base_urls, preferred_model
+>>>>>>> 7304e6c (fix: route Pi and OpenCode through workspace AI Gateway v2)
 from token_helper import resolve_databricks_token
 
 # Opt-out: allow operators to disable Pi bundling without removing the file.
@@ -52,7 +57,11 @@ host = os.environ.get("DATABRICKS_HOST", "")
 # then user PAT. This token is only used during setup; Pi writes a helper command
 # for per-request freshness below.
 token = resolve_databricks_token() or ""
+<<<<<<< HEAD
 pi_model = os.environ.get("PI_MODEL", "system.ai.claude-sonnet-5")
+=======
+pi_model = os.environ.get("PI_MODEL", "system.ai.claude-opus-5")
+>>>>>>> 7304e6c (fix: route Pi and OpenCode through workspace AI Gateway v2)
 
 PI_PACKAGE = "@earendil-works/pi-coding-agent"
 
@@ -150,6 +159,7 @@ for owned_provider in (
     "databricks-mlflow",
 ):
     config["providers"].pop(owned_provider, None)
+<<<<<<< HEAD
 # Mirrors ucode's `_pi_claude_model_entry`. Databricks model ids don't match
 # Pi's built-in Anthropic ids, so a bare entry silently inherits Pi's 128k/4k
 # defaults — the limits have to be explicit. Newer Claude tiers need
@@ -175,13 +185,28 @@ def _pi_model_entry(model: str) -> dict:
     return entry
 
 
+=======
+>>>>>>> 7304e6c (fix: route Pi and OpenCode through workspace AI Gateway v2)
 config["providers"]["databricks-claude"] = {
     "baseUrl": base_urls["claude"],
     "api": "anthropic-messages",
     "apiKey": api_key_command,
     "authHeader": True,
     "compat": {"supportsEagerToolInputStreaming": False},
+<<<<<<< HEAD
     "models": [_pi_model_entry(model) for model in claude_models],
+=======
+    "models": [
+        {
+            "id": model,
+            "reasoning": True,
+            "input": ["text", "image"],
+            "contextWindow": 1_000_000,
+            "maxTokens": 128_000,
+        }
+        for model in claude_models
+    ],
+>>>>>>> 7304e6c (fix: route Pi and OpenCode through workspace AI Gateway v2)
 }
 if catalog["openai"]:
     config["providers"]["databricks-openai"] = {

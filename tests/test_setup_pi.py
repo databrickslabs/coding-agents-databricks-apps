@@ -1,10 +1,9 @@
 """Tests for setup_pi.py — verify the Pi models.json config is written correctly.
 
 Runs the real setup_pi.py as a subprocess against a fake HOME. A fake `pi`
-binary is pre-seeded so the npm install is skipped (setup_pi.py guards it behind
-`if not pi_bin.exists()`), and no gateway host is configured so discovery fails
-closed to an empty set — pick_in_geo_model then returns PI_MODEL unchanged, so
-the write path is deterministic without network access.
+binary is pre-seeded so the npm install is skipped. Model-services discovery
+fails closed against the fake workspace, so only the requested system.ai model
+is configured and the write path remains deterministic without inference.
 """
 
 import json
@@ -36,8 +35,6 @@ def run_setup_pi(tmp_path, env_overrides=None):
         "DATABRICKS_HOST": "https://test.cloud.databricks.com",
         "DATABRICKS_TOKEN": "dapi_test_token",
         "PATH": os.environ.get("PATH", ""),
-        # No DATABRICKS_GATEWAY_HOST / workspace id -> get_gateway_host() returns
-        # "" -> base_url falls to /serving-endpoints/anthropic (deterministic).
         "_GATEWAY_RESOLVED": "",
     }
     if env_overrides:
@@ -56,11 +53,11 @@ def read_models(tmp_path):
 class TestSetupPiConfig:
     def test_writes_databricks_claude_provider_schema(self, tmp_path):
         _seed_fake_pi_binary(tmp_path)
-        result = run_setup_pi(tmp_path, {"PI_MODEL": "databricks-claude-opus-4-8"})
+        result = run_setup_pi(tmp_path, {"PI_MODEL": "system.ai.claude-opus-5"})
         assert result.returncode == 0, result.stderr
 
         config = read_models(tmp_path)
-        assert config["model"] == "databricks-claude/databricks-claude-opus-4-8"
+        assert config["model"] == "databricks-claude/system.ai.claude-opus-5"
         provider = config["providers"]["databricks-claude"]
         assert provider["api"] == "anthropic-messages"
         assert provider["authHeader"] is True
@@ -69,17 +66,12 @@ class TestSetupPiConfig:
         # rotation / SP-OAuth expiry without a restart.
         assert provider["apiKey"].startswith("!")
         assert provider["apiKey"].endswith("anthropic-token-helper.py")
-        assert provider["baseUrl"].endswith("/serving-endpoints/anthropic")
+        assert provider["baseUrl"] == "https://test.cloud.databricks.com/ai-gateway/anthropic"
+        assert ".ai-gateway." not in provider["baseUrl"]
         assert provider["compat"] == {"supportsEagerToolInputStreaming": False}
-        assert [m["id"] for m in provider["models"]] == [
-            "databricks-claude-opus-4-8",
-            "databricks-claude-haiku-4-5",
-            "databricks-claude-opus-4-7",
-            "databricks-claude-opus-4-6",
-            "databricks-claude-sonnet-4-6",
-            "databricks-claude-sonnet-4-5",
-        ]
-        assert all(m["contextWindow"] == 1000000 for m in provider["models"])
+        assert [m["id"] for m in provider["models"]] == ["system.ai.claude-opus-5"]
+        assert provider["models"][0]["contextWindow"] == 1_000_000
+        assert provider["models"][0]["maxTokens"] == 128_000
 
     def test_models_json_is_chmod_600(self, tmp_path):
         _seed_fake_pi_binary(tmp_path)

@@ -27,6 +27,7 @@ from socketserver import ThreadingMixIn
 from urllib.parse import urlsplit
 
 import requests
+from gateway_models import normalize_workspace
 from token_helper import resolve_databricks_token, resolve_sp_oauth_token
 
 UPSTREAM_BASE = os.environ.get("PROXY_UPSTREAM_BASE", "")
@@ -125,19 +126,43 @@ def _get_fresh_token() -> str | None:
     return _TOKEN_CACHE.get("token")  # stale is better than interrupting a request
 
 
-def _readiness_target(upstream: str) -> tuple[str, str] | None:
-    """Return the zero-inference listing endpoint for a supported upstream."""
+def _readiness_target(upstream: str) -> tuple[str, str, str, str, str] | None:
+    """Return the authenticated zero-inference readiness target and semantics."""
     parsed = urlsplit(upstream)
     path = parsed.path.rstrip("/")
-    if parsed.scheme != "https" or not parsed.netloc or parsed.query or parsed.fragment:
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username
+        or parsed.password
+        or parsed.query
+        or parsed.fragment
+    ):
         return None
-    if path.endswith("/serving-endpoints"):
+    if path == "/serving-endpoints":
+        workspace = f"{parsed.scheme}://{parsed.netloc}"
         return (
-            f"{parsed.scheme}://{parsed.netloc}/api/2.0/serving-endpoints",
+            workspace + "/api/2.0/serving-endpoints",
             "workspace-serving-endpoints",
+            "authenticated-workspace-serving-endpoints-listing",
+            workspace,
+            "upstream_status",
         )
-    if path.endswith("/mlflow/v1"):
-        return (upstream.rstrip("/") + "/models", "mlflow-models")
+    if path == "/ai-gateway/mlflow/v1":
+        workspace = f"{parsed.scheme}://{parsed.netloc}"
+        try:
+            configured_workspace = normalize_workspace(os.environ.get("DATABRICKS_HOST", ""))
+        except ValueError:
+            return None
+        if workspace != configured_workspace:
+            return None
+        return (
+            workspace + "/api/2.0/serving-endpoints:foundation-models",
+            "workspace-foundation-models",
+            "authenticated-workspace-foundation-models-for-mlflow-route",
+            workspace,
+            "workspace_status",
+        )
     return None
 
 
@@ -155,15 +180,27 @@ def _readiness_status() -> tuple[int, dict]:
         "upstream": UPSTREAM_BASE,
         "upstream_ready": False,
         "upstream_status": None,
+        "workspace": None,
+        "workspace_status": None,
         "check": None,
+        "readiness_semantics": None,
     }
     status = 503
     target = _readiness_target(UPSTREAM_BASE)
     if target is None:
-        payload["reason"] = "upstream_config_invalid"
+        upstream_path = urlsplit(UPSTREAM_BASE).path.rstrip("/")
+        payload["reason"] = (
+            "workspace_config_invalid"
+            if upstream_path == "/ai-gateway/mlflow/v1"
+            else "upstream_config_invalid"
+        )
     else:
-        target_url, check = target
-        payload["check"] = check
+        target_url, check, semantics, workspace, status_field = target
+        payload.update(
+            check=check,
+            readiness_semantics=semantics,
+            workspace=workspace,
+        )
         token = _resolve_current_token()
         if not token:
             payload["reason"] = "token_unavailable"
@@ -174,26 +211,19 @@ def _readiness_status() -> tuple[int, dict]:
                     headers={"Authorization": f"Bearer {token}"},
                     timeout=3,
                 )
-                payload["upstream_status"] = response.status_code
-                gateway_listing_unsupported = (
-                    check == "mlflow-models" and response.status_code == 400
-                )
-                if response.status_code == 200 or gateway_listing_unsupported:
-                    # The MLflow AI Gateway route returns 400 for unsupported
-                    # model listing after TLS, routing, and auth have succeeded.
-                    # This is a zero-inference readiness signal only for that
-                    # exact gateway check; workspace listings still require 200.
+                payload[status_field] = response.status_code
+                if response.status_code == 200:
                     payload["status"] = "ready"
                     payload["upstream_ready"] = True
-                    if gateway_listing_unsupported:
-                        payload["readiness_semantics"] = (
-                            "authenticated-route-listing-unsupported"
-                        )
                     status = 200
                 else:
-                    payload["reason"] = "upstream_status"
+                    payload["reason"] = status_field
             except requests.exceptions.RequestException:
-                payload["reason"] = "upstream_unreachable"
+                payload["reason"] = (
+                    "workspace_unreachable"
+                    if status_field == "workspace_status"
+                    else "upstream_unreachable"
+                )
 
     _HEALTH_CACHE.update(checked_at=now, status=status, payload=dict(payload))
     return status, payload

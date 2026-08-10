@@ -18,7 +18,7 @@ from pathlib import Path
 from urllib.request import urlopen, Request
 from urllib.error import URLError
 
-from utils import ensure_https, get_gateway_host
+from gateway_models import normalize_workspace
 from token_helper import resolve_databricks_token
 
 # The proxy exists solely for OpenCode — skip it when OpenCode is disabled.
@@ -69,21 +69,21 @@ pid_path = home / ".content-filter-proxy.pid"
 pid_path.unlink(missing_ok=True)
 
 # Databricks configuration
-gateway_host = get_gateway_host()
-host = ensure_https(os.environ.get("DATABRICKS_HOST", "").rstrip("/"))
+try:
+    host = normalize_workspace(os.environ.get("DATABRICKS_HOST", ""))
+except ValueError:
+    print("Warning: DATABRICKS_HOST is not a safe workspace origin, skipping proxy setup")
+    sys.exit(0)
 token = resolve_databricks_token() or ""
 
 if not token:
     print("Warning: no SP OAuth or PAT token available, skipping proxy setup")
     sys.exit(0)
 
-# Determine the upstream base URL
-if gateway_host:
-    upstream_base = f"{gateway_host}/mlflow/v1"
-    print(f"Content-filter proxy will forward to AI Gateway: {gateway_host}")
-else:
-    upstream_base = f"{host}/serving-endpoints"
-    print(f"Content-filter proxy will forward to: {host}/serving-endpoints")
+# OpenCode's OSS provider uses the workspace AI Gateway v2 MLflow dialect.
+# Never route through the legacy external ``*.ai-gateway.*`` hostname.
+upstream_base = f"{host}/ai-gateway/mlflow/v1"
+print(f"Content-filter proxy will forward to workspace AI Gateway: {upstream_base}")
 
 # Start proxy as a background process
 proxy_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "content_filter_proxy.py")
@@ -137,8 +137,10 @@ if ready:
     elapsed = time.time() - start
     print(f"Content-filter proxy ready on {PROXY_HOST}:{PROXY_PORT} ({elapsed:.1f}s)")
 else:
-    print(f"Warning: Proxy health check timed out after {HEALTH_TIMEOUT}s")
+    print(f"Error: Proxy health check timed out after {HEALTH_TIMEOUT}s")
     try:
         print(f"Logs: {log_path.read_text()[:1000]}")
     except Exception:
         pass
+    proc.terminate()
+    sys.exit(1)

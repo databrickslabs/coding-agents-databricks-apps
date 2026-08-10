@@ -155,7 +155,12 @@ def _healthy_payload():
         "upstream": "https://workspace.example.com/serving-endpoints",
         "upstream_ready": True,
         "upstream_status": 200,
+        "workspace": "https://workspace.example.com",
+        "workspace_status": None,
         "check": "workspace-serving-endpoints",
+        "readiness_semantics": (
+            "authenticated-workspace-serving-endpoints-listing"
+        ),
     }
 
 
@@ -167,45 +172,32 @@ def test_proxy_ready_accepts_exact_authenticated_readiness(monkeypatch):
     assert urlopen.call_args.kwargs["timeout"] == 5
 
 
-def test_proxy_ready_accepts_authenticated_mlflow_route_without_listing(monkeypatch):
+def test_proxy_ready_accepts_ucode_mlflow_foundation_readiness(monkeypatch):
     payload = {
         **_healthy_payload(),
-        "upstream": "https://gateway.example.com/mlflow/v1",
-        "upstream_status": 400,
-        "check": "mlflow-models",
-        "readiness_semantics": "authenticated-route-listing-unsupported",
+        "upstream": "https://workspace.example.com/ai-gateway/mlflow/v1",
+        "upstream_status": None,
+        "workspace": "https://workspace.example.com",
+        "workspace_status": 200,
+        "check": "workspace-foundation-models",
+        "readiness_semantics": (
+            "authenticated-workspace-foundation-models-for-mlflow-route"
+        ),
     }
     monkeypatch.setattr(oh, "urlopen", lambda *_args, **_kwargs: _HealthResponse(payload))
 
     assert oh._proxy_ready() is True
 
 
-@pytest.mark.parametrize(
-    ("upstream", "check", "semantics"),
-    [
-        (
-            "https://gateway.example.com/mlflow/v1",
-            "mlflow-models",
-            None,
-        ),
-        (
-            "https://workspace.example.com/serving-endpoints",
-            "workspace-serving-endpoints",
-            "authenticated-route-listing-unsupported",
-        ),
-    ],
-)
-def test_proxy_ready_rejects_unscoped_400_readiness(
-    monkeypatch, upstream, check, semantics
-):
+def test_proxy_ready_rejects_standalone_mlflow_400(monkeypatch):
     payload = {
         **_healthy_payload(),
-        "upstream": upstream,
+        "upstream": "https://gateway.example.com/mlflow/v1",
         "upstream_status": 400,
-        "check": check,
+        "workspace_status": None,
+        "check": "mlflow-models",
+        "readiness_semantics": "authenticated-route-listing-unsupported",
     }
-    if semantics is not None:
-        payload["readiness_semantics"] = semantics
     monkeypatch.setattr(oh, "urlopen", lambda *_args, **_kwargs: _HealthResponse(payload))
 
     assert oh._proxy_ready() is False
@@ -219,7 +211,12 @@ def test_proxy_ready_rejects_unscoped_400_readiness(
         ("status", "ok"),
         ("upstream_ready", False),
         ("upstream_status", 503),
-        ("check", "mlflow-models"),
+        ("workspace_status", 200),
+        ("check", "workspace-foundation-models"),
+        ("readiness_semantics", "forged-semantics"),
+        ("workspace", "http://workspace.example.com"),
+        ("workspace", "https://user@workspace.example.com"),
+        ("workspace", "https://workspace.example.com/path"),
         ("upstream", "http://workspace.example.com/serving-endpoints"),
         ("upstream", "https://workspace.example.com/unrelated"),
         ("upstream", "https://workspace.example.com/serving-endpoints?forged=1"),

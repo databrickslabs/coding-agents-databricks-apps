@@ -12,6 +12,7 @@ import subprocess
 import time
 from pathlib import Path
 
+<<<<<<< HEAD
 from cli_auth import _atomic_write_text
 from enterprise_config import deepwiki_mcp_url, exa_mcp_url, npm_env
 from gateway_models import (
@@ -28,22 +29,37 @@ from utils import (
     opencode_api_credential,
     version_in_range,
 )
+=======
+from enterprise_config import deepwiki_mcp_url, exa_mcp_url, npm_env
+from gateway_models import discover_model_catalog, opencode_base_urls, preferred_model
+from token_helper import resolve_databricks_token
+from utils import get_npm_version, opencode_api_credential
+>>>>>>> 7304e6c (fix: route Pi and OpenCode through workspace AI Gateway v2)
 
 if os.environ.get("ENABLE_OPENCODE", "true").strip().lower() in ("false", "0", "no"):
     print("ENABLE_OPENCODE=false — skipping OpenCode CLI setup")
     raise SystemExit(0)
 
+<<<<<<< HEAD
+=======
+CONTENT_FILTER_PROXY_URL = "http://127.0.0.1:4000"
+>>>>>>> 7304e6c (fix: route Pi and OpenCode through workspace AI Gateway v2)
 if not os.environ.get("HOME") or os.environ["HOME"] == "/":
     os.environ["HOME"] = "/app/python/source_code"
 home = Path(os.environ["HOME"])
 host = os.environ.get("DATABRICKS_HOST", "")
 token = resolve_databricks_token() or ""
+<<<<<<< HEAD
 requested_model = os.environ.get("ANTHROPIC_MODEL", "system.ai.claude-sonnet-5")
+=======
+requested_model = os.environ.get("ANTHROPIC_MODEL", "system.ai.claude-opus-5")
+>>>>>>> 7304e6c (fix: route Pi and OpenCode through workspace AI Gateway v2)
 
 # Install OpenCode and the OpenAI SDK used by Responses/MLflow providers.
 local_bin = home / ".local" / "bin"
 local_bin.mkdir(parents=True, exist_ok=True)
 opencode_bin = local_bin / "opencode"
+<<<<<<< HEAD
 # Omnigent's opencode-native harness pins a version *window* and reports the
 # host as `version-too-low` for anything outside it, which fails session launch
 # with "harness 'opencode-native' is not configured on host". Both ends matter:
@@ -84,6 +100,12 @@ else:
         version = None
     package = f"opencode-ai@{version}" if version else OPENCODE_SPEC
     print(f"Installing {package}")
+=======
+if not opencode_bin.exists():
+    npm_prefix = str(home / ".local")
+    version = get_npm_version("opencode-ai")
+    package = f"opencode-ai@{version}" if version else "opencode-ai@latest"
+>>>>>>> 7304e6c (fix: route Pi and OpenCode through workspace AI Gateway v2)
     for attempt in range(1, 4):
         result = subprocess.run(
             ["npm", "install", "-g", f"--prefix={npm_prefix}", package],
@@ -96,6 +118,7 @@ else:
         print(f"OpenCode install failed (attempt {attempt}/3, rc={result.returncode})")
         if attempt < 3:
             time.sleep(5)
+<<<<<<< HEAD
     installed = installed_cli_version(opencode_bin)
     if not version_in_range(installed, OPENCODE_MIN_VERSION, OPENCODE_MAX_VERSION_EXCLUSIVE):
         print(
@@ -105,6 +128,8 @@ else:
         )
     else:
         print(f"OpenCode {installed} installed")
+=======
+>>>>>>> 7304e6c (fix: route Pi and OpenCode through workspace AI Gateway v2)
     sdk_version = get_npm_version("@ai-sdk/openai")
     sdk_package = f"@ai-sdk/openai@{sdk_version}" if sdk_version else "@ai-sdk/openai"
     subprocess.run(
@@ -128,6 +153,7 @@ print(
     f"gemini={len(catalog['gemini'])}, oss={len(catalog['oss'])}"
 )
 
+<<<<<<< HEAD
 anthropic_specs = {spec["id"]: spec for spec in catalog.get("anthropic_specs") or []}
 
 # Mirrors ucode's opencode overlay.
@@ -245,16 +271,109 @@ config_path = config_dir / "opencode.json"
 _atomic_write_text(str(config_path), json.dumps(config, indent=2))
 config_path.chmod(0o600)
 
+=======
+providers = {
+    "databricks-anthropic": {
+        "npm": "@ai-sdk/anthropic",
+        "name": "Databricks Anthropic Gateway",
+        "options": {
+            "baseURL": base_urls["anthropic"],
+            "apiKey": "{env:DATABRICKS_TOKEN}",
+        },
+        "models": {
+            model: {"options": {"toolStreaming": False}}
+            for model in anthropic_models
+        },
+    }
+}
+if catalog["openai"]:
+    providers["databricks-openai"] = {
+        "npm": "@ai-sdk/openai",
+        "name": "Databricks Responses Gateway",
+        "options": {
+            "baseURL": base_urls["openai"],
+            "apiKey": "{env:DATABRICKS_TOKEN}",
+        },
+        "models": {
+            model: {
+                "limit": {"context": 272_000, "output": 128_000},
+                "options": {"useResponsesApi": True},
+            }
+            for model in catalog["openai"]
+        },
+    }
+if catalog["gemini"]:
+    providers["databricks-google"] = {
+        "npm": "@ai-sdk/google",
+        "name": "Databricks Gemini Gateway",
+        "options": {
+            "baseURL": base_urls["gemini"],
+            "apiKey": "{env:DATABRICKS_TOKEN}",
+        },
+        "models": {model: {} for model in catalog["gemini"]},
+    }
+if catalog["oss"]:
+    specs = {spec["id"]: spec for spec in catalog["oss_specs"]}
+    providers["databricks-oss"] = {
+        "npm": "@ai-sdk/openai",
+        "name": "Databricks MLflow Gateway (filtered)",
+        "options": {
+            "baseURL": CONTENT_FILTER_PROXY_URL,
+            "apiKey": "{env:DATABRICKS_TOKEN}",
+        },
+        "models": {
+            model: {
+                "limit": {
+                    "context": specs.get(model, {}).get("context_window") or 128_000,
+                    "output": specs.get(model, {}).get("max_tokens") or 8_192,
+                },
+                **(
+                    {"reasoning": True}
+                    if specs.get(model, {}).get("reasoning") is True
+                    else {}
+                ),
+            }
+            for model in catalog["oss"]
+        },
+    }
+
+mcp = {}
+if url := deepwiki_mcp_url():
+    mcp["deepwiki"] = {"type": "remote", "url": url, "enabled": True, "oauth": False}
+if url := exa_mcp_url():
+    mcp["exa"] = {"type": "remote", "url": url, "enabled": True}
+
+config = {
+    "$schema": "https://opencode.ai/config.json",
+    "provider": providers,
+    "mcp": mcp,
+    "model": f"databricks-anthropic/{active_model}",
+}
+config_dir = home / ".config" / "opencode"
+config_dir.mkdir(parents=True, exist_ok=True)
+config_path = config_dir / "opencode.json"
+config_path.write_text(json.dumps(config, indent=2))
+config_path.chmod(0o600)
+
+>>>>>>> 7304e6c (fix: route Pi and OpenCode through workspace AI Gateway v2)
 # Auth keys match provider names; cli_auth rotates every API credential entry.
 auth_dir = home / ".local" / "share" / "opencode"
 auth_dir.mkdir(parents=True, exist_ok=True)
 auth_path = auth_dir / "auth.json"
+<<<<<<< HEAD
 _atomic_write_text(
     str(auth_path),
     json.dumps(
         {name: opencode_api_credential(token) for name in providers},
         indent=2,
     ),
+=======
+auth_path.write_text(
+    json.dumps(
+        {name: opencode_api_credential(token) for name in providers},
+        indent=2,
+    )
+>>>>>>> 7304e6c (fix: route Pi and OpenCode through workspace AI Gateway v2)
 )
 auth_path.chmod(0o600)
 print(f"OpenCode configured: {config_path}")
