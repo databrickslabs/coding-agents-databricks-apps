@@ -25,7 +25,7 @@ CATALOG = {
 }
 
 
-def _seed_binary(home: Path, name: str, version: str = "1.18.11") -> None:
+def _seed_binary(home: Path, name: str, version: str = "1.17.20") -> None:
     """Seed a fake CLI that answers ``--version``.
 
     setup_opencode.py compares the installed version against Omnigent's floor,
@@ -170,7 +170,7 @@ def test_setup_opencode_upgrades_a_binary_below_the_omnigent_floor(monkeypatch, 
     Omnigent reports the host as `version-too-low` and refuses to launch an
     opencode-native session, which is invisible until a session fails.
     """
-    _seed_binary(tmp_path, "opencode", version="0.0.0-beta-202605152242")
+    _seed_binary(tmp_path, "opencode", version="1.18.11")  # newest stable, above the window
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("DATABRICKS_HOST", WORKSPACE)
     monkeypatch.setenv("DATABRICKS_TOKEN", "test-token")
@@ -192,7 +192,7 @@ def test_setup_opencode_upgrades_a_binary_below_the_omnigent_floor(monkeypatch, 
     assert opencode_installs, "an out-of-date opencode must trigger an install"
     spec = next(str(p) for p in opencode_installs[0] if "opencode-ai@" in str(p))
     # A resolved snapshot below the floor must not be requested verbatim.
-    assert spec == "opencode-ai@^1.17.7", spec
+    assert spec == "opencode-ai@~1.17.7", spec
 
 
 def test_setup_proxy_source_pins_workspace_mlflow_route():

@@ -1,6 +1,7 @@
 """Tests for get_npm_version() — dynamic npm version resolution for supply chain hardening."""
 
 import os
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -349,6 +350,31 @@ class TestVersionFloor:
     `version-too-low` when the CLI is older, which fails session launch — so the
     installer has to compare versions, not just check that a file exists.
     """
+
+    @pytest.mark.parametrize(
+        "actual,minimum,exclusive_max,expected",
+        [
+            # Omnigent accepts 1.17.x only: 1.18.x is refused like a too-old build.
+            ("1.17.7", "1.17.7", "1.18.0", True),
+            ("1.17.20", "1.17.7", "1.18.0", True),
+            ("1.18.11", "1.17.7", "1.18.0", False),
+            ("1.18.0", "1.17.7", "1.18.0", False),
+            ("1.17.6", "1.17.7", "1.18.0", False),
+            ("0.0.0-beta-202605152242", "1.17.7", "1.18.0", False),
+            (None, "1.17.7", "1.18.0", False),
+        ],
+    )
+    def test_version_in_range(self, actual, minimum, exclusive_max, expected):
+        from utils import version_in_range
+
+        assert version_in_range(actual, minimum, exclusive_max) is expected
+
+    def test_setup_opencode_requests_the_omnigent_window(self):
+        """`~1.17.7` is npm for >=1.17.7 <1.18.0 — the exact accepted window."""
+        source = (Path(__file__).parents[1] / "setup_opencode.py").read_text()
+        assert 'OPENCODE_SPEC = f"opencode-ai@~{OPENCODE_MIN_VERSION}"' in source
+        assert '"OPENCODE_MAX_VERSION_EXCLUSIVE", "1.18.0"' in source
+        assert "opencode-ai@^" not in source
 
     @pytest.mark.parametrize(
         "actual,minimum,expected",

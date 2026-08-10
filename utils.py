@@ -143,6 +143,31 @@ def version_at_least(actual, minimum):
     return actual_padded >= minimum_padded
 
 
+def version_below(actual, exclusive_maximum):
+    """Return True when ``actual`` is a release strictly below ``exclusive_maximum``.
+
+    An unparseable or missing ``actual`` is treated as out of range.
+    """
+    actual_tuple = release_tuple(actual)
+    maximum_tuple = release_tuple(exclusive_maximum)
+    if actual_tuple is None or maximum_tuple is None:
+        return False
+    width = max(len(actual_tuple), len(maximum_tuple))
+    actual_padded = actual_tuple + (0,) * (width - len(actual_tuple))
+    maximum_padded = maximum_tuple + (0,) * (width - len(maximum_tuple))
+    return actual_padded < maximum_padded
+
+
+def version_in_range(actual, minimum, exclusive_maximum):
+    """Return True when ``minimum <= actual < exclusive_maximum``.
+
+    Omnigent pins its native harnesses to a *window*, not a floor: an OpenCode
+    newer than the validated range is refused exactly like one that is too old,
+    so both ends have to be checked before installing.
+    """
+    return version_at_least(actual, minimum) and version_below(actual, exclusive_maximum)
+
+
 def installed_cli_version(binary):
     """Return ``<binary> --version``'s first version-looking token, or None."""
     try:
