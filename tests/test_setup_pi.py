@@ -70,6 +70,12 @@ class TestSetupPiConfig:
         assert ".ai-gateway." not in provider["baseUrl"]
         assert provider["compat"] == {"supportsEagerToolInputStreaming": False}
         assert [m["id"] for m in provider["models"]] == ["system.ai.claude-opus-5"]
+        # Limits and thinking come from the shared Claude version policy: opus 5
+        # is a >= 4.6 tier, so 1M/128k with adaptive thinking. Without
+        # forceAdaptiveThinking Pi sends `thinking: {type: "enabled"}` and the
+        # endpoint answers 400 "thinking.type.enabled is not supported".
+        assert provider["models"][0]["reasoning"] is True
+        assert provider["models"][0]["compat"] == {"forceAdaptiveThinking": True}
         assert provider["models"][0]["contextWindow"] == 1_000_000
         assert provider["models"][0]["maxTokens"] == 128_000
 

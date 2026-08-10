@@ -38,6 +38,22 @@ def _seed_binary(home: Path, name: str, version: str = "1.17.20") -> None:
     path.chmod(path.stat().st_mode | stat.S_IEXEC)
 
 
+CATALOG_WITH_SPECS = {
+    **CATALOG,
+    "anthropic_specs": [
+        {
+            "id": model,
+            "reasoning": False,
+            "image_input": True,
+            "long_context": False,
+            "context_window": 200_000,
+            "max_tokens": 64_000,
+        }
+        for model in CATALOG["anthropic"]
+    ],
+}
+
+
 def test_ucode_workspace_gateway_urls_never_use_external_gateway_host():
     assert gm.opencode_base_urls(WORKSPACE) == {
         "anthropic": WORKSPACE + "/ai-gateway/anthropic/v1",
@@ -117,7 +133,11 @@ def test_catalog_buckets_provider_dialects_with_native_precedence(monkeypatch):
         ],
     )
     catalog = gm.discover_model_catalog(WORKSPACE, "token")
-    assert catalog["anthropic"] == ["system.ai.claude-opus-5"]
+    # Both served opus versions reach the picker, newest first.
+    assert catalog["anthropic"] == [
+        "system.ai.claude-opus-5",
+        "system.ai.claude-opus-4-8",
+    ]
     assert catalog["openai"] == ["system.ai.gpt-5-5"]
     assert catalog["gemini"] == ["system.ai.gemini-3-flash"]
     assert catalog["oss"] == [
@@ -377,3 +397,224 @@ def test_app_yaml_enables_claude_pi_and_opencode():
     for toggle in ("ENABLE_CLAUDE", "ENABLE_PI", "ENABLE_OPENCODE"):
         block = source.split(f"name: {toggle}", 1)[1].split("value:", 1)[1]
         assert block.strip().startswith('"true"'), toggle
+
+
+def test_every_served_version_reaches_the_picker(monkeypatch):
+    """A picker listing one model per family cannot switch to an older opus.
+
+    The workspace serves opus-4-8/4-7/4-6 alongside opus-5; collapsing to the
+    newest per family silently removed them.
+    """
+    monkeypatch.delenv("ENABLE_FABLE_MODELS", raising=False)
+    ids = [
+        "system.ai.claude-opus-4-6",
+        "system.ai.claude-opus-4-8",
+        "system.ai.claude-opus-5",
+        "system.ai.claude-opus-4-7",
+        "system.ai.claude-sonnet-4-6",
+        "system.ai.claude-sonnet-5",
+        "system.ai.claude-haiku-4-5",
+        "system.ai.claude-fable-5",
+    ]
+    monkeypatch.setattr(gm, "list_model_services", lambda *_a, **_kw: ids)
+    monkeypatch.setattr(
+        gm,
+        "_get_json",
+        lambda *_a, **_kw: _fm_payload([(i, ["anthropic/v1/messages"]) for i in ids]),
+    )
+
+    picker = gm.discover_model_catalog(WORKSPACE, "tok")["anthropic"]
+
+    # Sonnet family first (the default tier), each family newest -> oldest.
+    assert picker == [
+        "system.ai.claude-sonnet-5",
+        "system.ai.claude-sonnet-4-6",
+        "system.ai.claude-opus-5",
+        "system.ai.claude-opus-4-8",
+        "system.ai.claude-opus-4-7",
+        "system.ai.claude-opus-4-6",
+        "system.ai.claude-haiku-4-5",
+    ]
+    assert gm.preferred_model("system.ai.claude-sonnet-5", picker) == "system.ai.claude-sonnet-5"
+
+
+def test_version_ordering_is_numeric_not_lexicographic():
+    """`4-10` is newer than `4-8`; a string sort gets that backwards."""
+    assert gm.version_key("system.ai.claude-opus-4-10") > gm.version_key(
+        "system.ai.claude-opus-4-8"
+    )
+    assert gm.version_key("system.ai.claude-opus-5") > gm.version_key(
+        "system.ai.claude-opus-4-8"
+    )
+    assert gm.version_key("system.ai.claude-opus-unversioned") == ()
+
+    ordered = gm.family_models(
+        "opus",
+        [
+            "system.ai.claude-opus-4-8",
+            "system.ai.claude-opus-4-10",
+            "system.ai.claude-opus-5",
+        ],
+    )
+    assert ordered == [
+        "system.ai.claude-opus-5",
+        "system.ai.claude-opus-4-10",
+        "system.ai.claude-opus-4-8",
+    ]
+
+
+def test_family_model_still_returns_the_newest_for_each_tier():
+    served = [
+        "system.ai.claude-opus-4-8",
+        "system.ai.claude-opus-5",
+        "system.ai.claude-sonnet-4-6",
+        "system.ai.claude-sonnet-5",
+    ]
+    assert gm.family_model("opus", served, fallback="x") == "system.ai.claude-opus-5"
+    assert gm.family_model("sonnet", served, fallback="x") == "system.ai.claude-sonnet-5"
+
+
+def test_claude_capabilities_follow_the_shared_version_policy():
+    """Ported from ucode: opus gained 1M at 4.6, sonnet at 4.5.
+
+    The gateway's own `long_context` / `anthropic_reasoning` flags disagree with
+    reality (it reports false for models that do serve these tiers), so the
+    version policy is authoritative and shared by every harness.
+    """
+    opus5 = gm.claude_model_capabilities("system.ai.claude-opus-5")
+    assert opus5["context_window"] == 1_000_000
+    assert opus5["max_tokens"] == 128_000
+    assert opus5["supports_1m"] is True
+    assert opus5["force_adaptive_thinking"] is True
+
+    sonnet46 = gm.claude_model_capabilities("system.ai.claude-sonnet-4-6")
+    assert sonnet46["context_window"] == 1_000_000
+    assert sonnet46["max_tokens"] == 64_000
+    assert sonnet46["force_adaptive_thinking"] is True
+
+    # Sonnet 4-5 has the 1M tier but not adaptive thinking.
+    sonnet45 = gm.claude_model_capabilities("system.ai.claude-sonnet-4-5")
+    assert sonnet45["supports_1m"] is True
+    assert sonnet45["force_adaptive_thinking"] is False
+
+    # Fable 5 is 1M by default, so it must not be given the [1m] suffix.
+    fable = gm.claude_model_capabilities("system.ai.claude-fable-5")
+    assert fable["context_window"] == 1_000_000
+    assert fable["supports_1m"] is False
+    assert fable["force_adaptive_thinking"] is True
+
+    for conservative in (
+        "system.ai.claude-opus-4-5",
+        "system.ai.claude-haiku-4-5",
+        "system.ai.claude-unknown-9",
+    ):
+        caps = gm.claude_model_capabilities(conservative)
+        assert caps == {
+            "context_window": 200_000,
+            "max_tokens": 64_000,
+            "supports_1m": False,
+            "force_adaptive_thinking": False,
+        }, conservative
+
+
+def test_pi_declares_adaptive_thinking_for_the_newer_tiers(monkeypatch, tmp_path):
+    """Without forceAdaptiveThinking Pi sends thinking.type=enabled.
+
+    The endpoint answers 400 "thinking.type.enabled is not supported for this
+    model" — hit live on opus-5.
+    """
+    _seed_binary(tmp_path, "pi")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("DATABRICKS_HOST", WORKSPACE)
+    monkeypatch.setenv("DATABRICKS_TOKEN", "test-token")
+    monkeypatch.setenv("PI_MODEL", "system.ai.claude-opus-5")
+    models = ["system.ai.claude-opus-5", "system.ai.claude-haiku-4-5"]
+    monkeypatch.setattr(
+        gm,
+        "discover_model_catalog",
+        lambda *_a, **_kw: {
+            "anthropic": models,
+            "anthropic_specs": gm.anthropic_specs(models, {}),
+            "openai": [],
+            "gemini": [],
+            "oss": [],
+            "oss_specs": [],
+        },
+    )
+    runpy.run_path(str(Path(__file__).parents[1] / "setup_pi.py"), run_name="__main__")
+
+    entries = {
+        m["id"]: m
+        for m in json.loads((tmp_path / ".pi/agent/models.json").read_text())["providers"][
+            "databricks-claude"
+        ]["models"]
+    }
+    opus = entries["system.ai.claude-opus-5"]
+    assert opus["reasoning"] is True
+    assert opus["compat"] == {"forceAdaptiveThinking": True}
+    assert opus["contextWindow"] == 1_000_000
+    assert opus["maxTokens"] == 128_000
+
+    # Haiku is conservative and must not claim adaptive thinking.
+    haiku = entries["system.ai.claude-haiku-4-5"]
+    assert "compat" not in haiku
+    assert haiku["contextWindow"] == 200_000
+
+
+def test_opencode_anthropic_provider_sends_an_explicit_bearer(monkeypatch, tmp_path):
+    """@ai-sdk/anthropic would send x-api-key, which the gateway 401s.
+
+    Verified against the live gateway: Bearer -> 400 (body validation only),
+    x-api-key -> 401 "Credential was not sent or was of an unsupported type for
+    this API" — the error seen in OpenCode.
+    """
+    _seed_binary(tmp_path, "opencode")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("DATABRICKS_HOST", WORKSPACE)
+    monkeypatch.setenv("DATABRICKS_TOKEN", "test-token")
+    monkeypatch.setattr(gm, "discover_model_catalog", lambda *_a, **_kw: CATALOG_WITH_SPECS)
+    runpy.run_path(str(Path(__file__).parents[1] / "setup_opencode.py"), run_name="__main__")
+
+    config = json.loads((tmp_path / ".config/opencode/opencode.json").read_text())
+    provider = config["provider"]["databricks-anthropic"]
+    assert provider["options"]["baseURL"] == WORKSPACE + "/ai-gateway/anthropic/v1"
+    assert provider["options"]["headers"]["Authorization"].startswith("Bearer ")
+    # UA must be per-model: opencode clobbers provider-level headers.
+    for overlay in provider["models"].values():
+        assert "User-Agent" in overlay["headers"]
+        assert overlay["options"] == {"toolStreaming": False}
+    assert ".ai-gateway." not in json.dumps(config)
+
+
+def test_cli_auth_rotates_the_opencode_provider_bearer(tmp_path, monkeypatch):
+    """Rotating only auth.json would strand the provider bearer."""
+    import cli_auth
+
+    config_dir = tmp_path / ".config" / "opencode"
+    config_dir.mkdir(parents=True)
+    config_path = config_dir / "opencode.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "provider": {
+                    "databricks-anthropic": {
+                        "options": {
+                            "apiKey": "old-token",
+                            "headers": {"Authorization": "Bearer old-token"},
+                        }
+                    },
+                    "templated": {"options": {"apiKey": "{env:DATABRICKS_TOKEN}"}},
+                }
+            }
+        )
+    )
+    monkeypatch.setattr(cli_auth, "_HOME", str(tmp_path))
+
+    cli_auth._update_opencode_provider_headers("new-token")
+
+    updated = json.loads(config_path.read_text())
+    options = updated["provider"]["databricks-anthropic"]["options"]
+    assert options["apiKey"] == "new-token"
+    assert options["headers"]["Authorization"] == "Bearer new-token"
+    # A `{env:...}` template resolves at launch and must be left alone.
+    assert updated["provider"]["templated"]["options"]["apiKey"] == "{env:DATABRICKS_TOKEN}"

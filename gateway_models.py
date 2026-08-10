@@ -41,6 +41,25 @@ OSS_OUTPUT_LIMITS = {
     "gemma-3-12b": 8_192,
 }
 _CONTEXT_RE = re.compile(r"context (?:length|window) of ([\d.,]+)\s*([MK])", re.I)
+_VERSION_TAIL_RE = re.compile(r"(\d+(?:-\d+)*)$")
+
+
+def version_key(model: str) -> tuple[int, ...]:
+    """Return a comparable version tuple from a model id's trailing digits.
+
+    ``claude-opus-5`` -> ``(5,)`` and ``claude-opus-4-8`` -> ``(4, 8)``, so a
+    plain string sort cannot put ``4-8`` above ``4-10``. Unversioned ids sort
+    lowest.
+    """
+    match = _VERSION_TAIL_RE.search(_canonical(model))
+    if not match:
+        return ()
+    return tuple(int(part) for part in match.group(1).split("-"))
+
+
+def _newest_first(models: list[str]) -> list[str]:
+    """Sort model ids newest version first, ties broken by id for determinism."""
+    return sorted(models, key=lambda model: (version_key(model), model), reverse=True)
 
 
 def normalize_workspace(workspace: str) -> str:
@@ -186,6 +205,7 @@ def fetch_foundation_models(workspace: str, token: str) -> dict[str, dict[str, A
             if not description and isinstance(fm.get("description"), str):
                 description = fm["description"]
         capabilities = endpoint.get("capabilities")
+        capabilities = capabilities if isinstance(capabilities, dict) else {}
         metadata.setdefault(
             _canonical(name),
             {
@@ -193,11 +213,90 @@ def fetch_foundation_models(workspace: str, token: str) -> dict[str, dict[str, A
                 "api_types": api_types,
                 "gateway_v2": v2,
                 "description": description,
-                "reasoning": isinstance(capabilities, dict)
-                and capabilities.get("openai_reasoning") is True,
+                "capabilities": capabilities,
+                "reasoning": capabilities.get("openai_reasoning") is True,
             },
         )
     return metadata
+
+
+# Shared Claude capability policy, ported from ucode's
+# `databricks.claude_model_capabilities` so every harness agrees. This is a
+# version policy, not a read of the gateway's `capabilities` flags: the gateway
+# reports `long_context: false` for models that do serve the opt-in 1M tier (and
+# `anthropic_reasoning: false` for models that do stream thinking), so trusting
+# those flags mis-configures the pickers.
+#
+# Opus gained the opt-in 1M window in 4.6; Sonnet in 4.5. Sonnet's 1M tiers keep
+# a conservative 64k output cap. Fable 5 is 1M by default, so it needs no `[1m]`
+# suffix. Opus 4.5, Haiku and unrecognised ids use the conservative fallback.
+_CLAUDE_MODEL_RE = re.compile(r"^claude-(fable|opus|sonnet|haiku)-(\d+)(?:-(\d+))?")
+_CLAUDE_FALLBACK = {
+    "context_window": 200_000,
+    "max_tokens": 64_000,
+    "supports_1m": False,
+    "force_adaptive_thinking": False,
+}
+
+
+def claude_model_capabilities(model_id: str) -> dict[str, Any]:
+    """Return the shared Claude capability policy for one model id."""
+    match = _CLAUDE_MODEL_RE.match(_canonical(model_id))
+    if not match:
+        return dict(_CLAUDE_FALLBACK)
+    family, major, minor = match.groups()
+    version = (int(major), int(minor or 0))
+    if family == "opus" and version >= (4, 6):
+        return {
+            "context_window": 1_000_000,
+            "max_tokens": 128_000,
+            "supports_1m": True,
+            "force_adaptive_thinking": True,
+        }
+    if family == "sonnet" and version >= (4, 6):
+        return {
+            "context_window": 1_000_000,
+            "max_tokens": 64_000,
+            "supports_1m": True,
+            "force_adaptive_thinking": True,
+        }
+    if family == "sonnet" and version >= (4, 5):
+        return {
+            "context_window": 1_000_000,
+            "max_tokens": 64_000,
+            "supports_1m": True,
+            "force_adaptive_thinking": False,
+        }
+    if family == "fable" and version >= (5, 0):
+        return {
+            "context_window": 1_000_000,
+            "max_tokens": 128_000,
+            "supports_1m": False,
+            "force_adaptive_thinking": True,
+        }
+    return dict(_CLAUDE_FALLBACK)
+
+
+def anthropic_specs(models: list[str], metadata: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return per-model specs for the anthropic dialect.
+
+    Token limits and thinking behaviour come from the shared version policy;
+    only ``image_input`` is read from the gateway, defaulting to true because
+    every current Claude service accepts images.
+    """
+    specs: list[dict[str, Any]] = []
+    for model in models:
+        entry = metadata.get(_canonical(model)) or {}
+        capabilities = entry.get("capabilities") or {}
+        policy = claude_model_capabilities(model)
+        specs.append(
+            {
+                "id": model,
+                "image_input": capabilities.get("image_input", True) is True,
+                **policy,
+            }
+        )
+    return specs
 
 
 def serves_api_type(metadata: dict[str, dict[str, Any]], model: str, api_type: str) -> bool:
@@ -254,37 +353,32 @@ def discover_model_catalog(workspace: str, token: str) -> dict[str, Any]:
     """
     ids = list_model_services(workspace, token)
     metadata = fetch_foundation_models(workspace, token)
+    # Every served version of each offered family, newest first — not just the
+    # newest per family. A picker that lists one model per family cannot switch
+    # to an older opus the workspace still serves, which is the whole point of
+    # having a picker.
+    servable_claude = [
+        model for model in ids if serves_api_type(metadata, model, "anthropic/v1/messages")
+    ]
     claude: list[str] = []
     for family in offered_families():
-        matches = sorted(
-            (
-                model
-                for model in ids
-                if f"claude-{family}-" in model
-                and serves_api_type(metadata, model, "anthropic/v1/messages")
-            ),
-            reverse=True,
-        )
-        if matches:
-            claude.append(matches[0])
-    openai = sorted(
-        (
+        claude.extend(family_models(family, servable_claude))
+    openai = _newest_first(
+        [
             model
             for model in ids
             if "gpt-" in model
             and "gpt-oss" not in model
             and serves_api_type(metadata, model, "openai/v1/responses")
-        ),
-        reverse=True,
+        ]
     )
-    gemini = sorted(
-        (
+    gemini = _newest_first(
+        [
             model
             for model in ids
             if "gemini-" in model
             and serves_api_type(metadata, model, "gemini/v1/generateContent")
-        ),
-        reverse=True,
+        ]
     )
     specs = discover_oss_specs(workspace, token)
     specs_by_id = {_canonical(spec["id"]): spec for spec in specs}
@@ -305,6 +399,7 @@ def discover_model_catalog(workspace: str, token: str) -> dict[str, Any]:
             normalized_specs.append({**spec, "id": model})
     return {
         "anthropic": claude,
+        "anthropic_specs": anthropic_specs(claude, metadata),
         "openai": openai,
         "gemini": gemini,
         "oss": oss,
@@ -322,6 +417,11 @@ def offered_families() -> tuple[str, ...]:
     return DEFAULT_FAMILY_ORDER
 
 
+def family_models(family: str, models: list[str]) -> list[str]:
+    """Return every model of ``family`` in ``models``, newest first."""
+    return _newest_first([model for model in models if f"claude-{family}-" in model])
+
+
 def family_model(family: str, models: list[str], *, fallback: str) -> str:
     """Return the newest discovered model of ``family``, else ``fallback``.
 
@@ -329,7 +429,7 @@ def family_model(family: str, models: list[str], *, fallback: str) -> str:
     slots): a tier with nothing served must fall back to a model the gateway
     does accept rather than to a name that 404s.
     """
-    matches = sorted((model for model in models if f"claude-{family}-" in model), reverse=True)
+    matches = family_models(family, models)
     return matches[0] if matches else fallback
 
 

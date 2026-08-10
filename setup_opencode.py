@@ -13,7 +13,12 @@ import time
 from pathlib import Path
 
 from enterprise_config import deepwiki_mcp_url, exa_mcp_url, npm_env
-from gateway_models import discover_model_catalog, opencode_base_urls, preferred_model
+from gateway_models import (
+    claude_model_capabilities,
+    discover_model_catalog,
+    opencode_base_urls,
+    preferred_model,
+)
 from token_helper import resolve_databricks_token
 from utils import (
     get_npm_version,
@@ -122,18 +127,52 @@ print(
     f"gemini={len(catalog['gemini'])}, oss={len(catalog['oss'])}"
 )
 
+anthropic_specs = {spec["id"]: spec for spec in catalog.get("anthropic_specs") or []}
+
+# Mirrors ucode's opencode overlay.
+#
+# Auth: `@ai-sdk/anthropic` sends the key as `x-api-key` (Anthropic native), and
+# the workspace AI Gateway only accepts `Authorization: Bearer` — it answers an
+# x-api-key request with 401 "Credential was not sent or was of an unsupported
+# type for this API" (verified: Bearer -> 400 body validation, x-api-key -> 401).
+# So the bearer is supplied explicitly. cli_auth rotates this alongside
+# auth.json so the two cannot drift.
+#
+# User-Agent has to live on each model entry: OpenCode injects its own UA after
+# the AI SDK merges provider headers, clobbering provider-level `headers`, while
+# per-model headers are merged afterwards and win.
+#
+# `toolStreaming: False` is per-model too (opencode reads per-call
+# providerOptions from `models.<m>.options`): @ai-sdk/anthropic sets
+# `eager_input_streaming: true` on tool definitions and the gateway's strict
+# validator rejects it. opencode's own auto-disable skips ids containing
+# "claude", which these `system.ai.claude-*` ids do not match on its check.
+auth_headers = {"Authorization": f"Bearer {token}"}
+ua_header = {"User-Agent": "coda/opencode"}
+
+
+def _anthropic_model_overlay(model: str) -> dict:
+    spec = anthropic_specs.get(model) or claude_model_capabilities(model)
+    return {
+        "headers": ua_header,
+        "options": {"toolStreaming": False},
+        "limit": {
+            "context": spec.get("context_window", 200_000),
+            "output": spec.get("max_tokens", 64_000),
+        },
+    }
+
+
 providers = {
     "databricks-anthropic": {
         "npm": "@ai-sdk/anthropic",
         "name": "Databricks Anthropic Gateway",
         "options": {
             "baseURL": base_urls["anthropic"],
-            "apiKey": "{env:DATABRICKS_TOKEN}",
+            "apiKey": token,
+            "headers": auth_headers,
         },
-        "models": {
-            model: {"options": {"toolStreaming": False}}
-            for model in anthropic_models
-        },
+        "models": {model: _anthropic_model_overlay(model) for model in anthropic_models},
     }
 }
 if catalog["openai"]:
