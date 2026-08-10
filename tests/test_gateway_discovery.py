@@ -199,6 +199,7 @@ class TestEndpointConstruction:
         if base_url is not None:
             assert base_url == "https://test.cloud.databricks.com/ai-gateway/anthropic"
 
+<<<<<<< HEAD
     def test_setup_claude_settings_are_private(self, tmp_path):
         import stat
 
@@ -214,6 +215,8 @@ class TestEndpointConstruction:
         assert stat.S_IMODE(settings.stat().st_mode) == 0o600
         assert stat.S_IMODE(claude_json.stat().st_mode) == 0o600
 
+=======
+>>>>>>> f064801 (feat: enable Claude Code on the workspace AI Gateway v2 route)
     def test_setup_claude_ignores_a_legacy_gateway_override(self, tmp_path):
         """A stale DATABRICKS_GATEWAY_HOST must not redirect model traffic."""
         result = self._run_setup(

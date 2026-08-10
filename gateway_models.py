@@ -322,6 +322,17 @@ def offered_families() -> tuple[str, ...]:
     return DEFAULT_FAMILY_ORDER
 
 
+def family_model(family: str, models: list[str], *, fallback: str) -> str:
+    """Return the newest discovered model of ``family``, else ``fallback``.
+
+    Used for the harness's per-tier defaults (Claude Code's opus/sonnet/haiku
+    slots): a tier with nothing served must fall back to a model the gateway
+    does accept rather than to a name that 404s.
+    """
+    matches = sorted((model for model in models if f"claude-{family}-" in model), reverse=True)
+    return matches[0] if matches else fallback
+
+
 def preferred_model(requested: str, models: list[str]) -> str:
     """Return the model to default to, preferring sonnet over opus."""
     if requested in models:

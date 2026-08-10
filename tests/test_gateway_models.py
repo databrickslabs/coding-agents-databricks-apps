@@ -202,12 +202,21 @@ def test_setup_proxy_source_pins_workspace_mlflow_route():
     assert "{gateway_host}/mlflow/v1" not in source
 
 
-def test_app_yaml_keeps_licensing_fence_and_system_ai_defaults():
+def test_app_yaml_enables_the_three_supported_harnesses_on_system_ai_defaults():
+    """The installed set is Claude Code, Pi and OpenCode.
+
+    Claude Code is Omnigent's default harness, so a participant who never opens
+    the picker must still land on a working agent. The harnesses this workspace
+    cannot serve (Hermes, Codex, Gemini) stay off, and every enabled harness
+    defaults to the same `system.ai` sonnet model.
+    """
     source = (Path(__file__).parents[1] / "app.yaml").read_text()
     assert source.count("value: system.ai.claude-sonnet-5") == 2
-    assert '- name: ENABLE_CLAUDE\n    value: "false"' in source
+    assert '- name: ENABLE_CLAUDE\n    value: "true"' in source
     assert '- name: ENABLE_PI\n    value: "true"' in source
     assert '- name: ENABLE_OPENCODE\n    value: "true"' in source
+    for disabled in ("ENABLE_HERMES", "ENABLE_CODEX", "ENABLE_GEMINI", "ENABLE_FABLE_MODELS"):
+        assert f'- name: {disabled}\n    value: "false"' in source, disabled
 
 
 def test_fable_is_withheld_from_pickers_by_default(monkeypatch):
@@ -330,3 +339,41 @@ def test_a_model_without_gateway_v2_is_dropped(monkeypatch):
     monkeypatch.setattr(gm, "_get_json", lambda *_a, **_kw: payload)
 
     assert gm.discover_model_catalog(WORKSPACE, "tok")["anthropic"] == []
+
+
+def test_setup_claude_uses_the_workspace_gateway_and_discovered_models():
+    """Claude Code must not keep the legacy gateway / serving-endpoints route.
+
+    The `*.ai-gateway.*` host and `/serving-endpoints/anthropic` cannot serve
+    `system.ai.*` model services, so enabling Claude on those routes 404s on the
+    first message.
+    """
+    source = (Path(__file__).parents[1] / "setup_claude.py").read_text()
+    assert "get_gateway_host" not in source
+    assert "discover_serving_endpoints" not in source
+    assert "pick_in_geo_model" not in source
+    assert 'pi_base_urls(databricks_host)["claude"]' in source
+    assert "discover_model_catalog" in source
+    assert '"ANTHROPIC_MODEL", "system.ai.claude-sonnet-5"' in source
+
+
+def test_family_model_picks_newest_and_falls_back():
+    served = [
+        "system.ai.claude-sonnet-5",
+        "system.ai.claude-sonnet-4-6",
+        "system.ai.claude-opus-5",
+    ]
+    assert gm.family_model("sonnet", served, fallback="x") == "system.ai.claude-sonnet-5"
+    assert gm.family_model("opus", served, fallback="x") == "system.ai.claude-opus-5"
+    # Nothing served for the tier -> the caller's usable fallback, not a 404 name.
+    assert gm.family_model("haiku", served, fallback="system.ai.claude-sonnet-5") == (
+        "system.ai.claude-sonnet-5"
+    )
+
+
+def test_app_yaml_enables_claude_pi_and_opencode():
+    """Claude Code is Omnigent's default harness, so it must be installed."""
+    source = (Path(__file__).parents[1] / "app.yaml").read_text()
+    for toggle in ("ENABLE_CLAUDE", "ENABLE_PI", "ENABLE_OPENCODE"):
+        block = source.split(f"name: {toggle}", 1)[1].split("value:", 1)[1]
+        assert block.strip().startswith('"true"'), toggle

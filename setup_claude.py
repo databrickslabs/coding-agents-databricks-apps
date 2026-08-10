@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 from claude_otel import apply_claude_otel_env
+<<<<<<< HEAD
 from cli_auth import _atomic_write_text
 from gateway_models import (
     claude_model_capabilities,
@@ -13,6 +14,9 @@ from gateway_models import (
     family_model,
     pi_base_urls,
 )
+=======
+from gateway_models import discover_model_catalog, family_model, pi_base_urls
+>>>>>>> f064801 (feat: enable Claude Code on the workspace AI Gateway v2 route)
 from token_helper import resolve_databricks_token
 from utils import add_1m_context_suffix, ensure_https
 from enterprise_config import deepwiki_mcp_url, exa_mcp_url
