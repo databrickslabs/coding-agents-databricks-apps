@@ -24,6 +24,7 @@ import sys
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
+from urllib.parse import urlsplit
 
 import requests
 from token_helper import resolve_databricks_token, resolve_sp_oauth_token
@@ -31,6 +32,10 @@ from token_helper import resolve_databricks_token, resolve_sp_oauth_token
 UPSTREAM_BASE = os.environ.get("PROXY_UPSTREAM_BASE", "")
 LISTEN_HOST = os.environ.get("PROXY_HOST", "127.0.0.1")
 LISTEN_PORT = int(os.environ.get("PROXY_PORT", "4000"))
+
+_HEALTH_SERVICE = "coda-content-filter-proxy"
+_HEALTH_CACHE_TTL = 3.0
+_HEALTH_CACHE: dict = {"checked_at": 0.0, "status": 503, "payload": None}
 
 
 def _trace_proxy_request(*, path, req, headers, resp_body, status, t_start):
@@ -78,12 +83,24 @@ if not _HOME or _HOME == "/":
 _DATABRICKSCFG_PATH = os.path.join(_HOME, ".databrickscfg")
 
 
-def _get_fresh_token() -> str | None:
-    """Read current token from ~/.databrickscfg (updated by PAT rotator).
+def _resolve_current_token() -> str | None:
+    """Resolve a current credential without falling back to a stale cache."""
+    token = resolve_sp_oauth_token()
+    if token:
+        return token
+    try:
+        config = configparser.ConfigParser()
+        config.read(_DATABRICKSCFG_PATH)
+        token = config.get("DEFAULT", "token", fallback=None)
+        if token:
+            return token
+    except Exception as e:
+        log.warning(f"Could not read fresh token from {_DATABRICKSCFG_PATH}: {e}")
+    return resolve_databricks_token()
 
-    Cache invalidates on file mtime change so a rotation produces a near-zero
-    window of stale tokens. The TTL is a backstop; mtime is authoritative.
-    """
+
+def _get_fresh_token() -> str | None:
+    """Read current token, with a stale fallback only for in-flight requests."""
     now = time.time()
     try:
         mtime = os.stat(_DATABRICKSCFG_PATH).st_mtime
@@ -98,33 +115,77 @@ def _get_fresh_token() -> str | None:
     if cache_hot:
         return _TOKEN_CACHE["token"]
 
-    token = resolve_sp_oauth_token()
+    token = _resolve_current_token()
     if token:
         _TOKEN_CACHE["token"] = token
         _TOKEN_CACHE["read_at"] = now
         _TOKEN_CACHE["mtime"] = mtime
         return token
 
-    try:
-        config = configparser.ConfigParser()
-        config.read(_DATABRICKSCFG_PATH)
-        token = config.get("DEFAULT", "token", fallback=None)
-        if token:
-            _TOKEN_CACHE["token"] = token
-            _TOKEN_CACHE["read_at"] = now
-            _TOKEN_CACHE["mtime"] = mtime
-            return token
-    except Exception as e:
-        log.warning(f"Could not read fresh token from {_DATABRICKSCFG_PATH}: {e}")
+    return _TOKEN_CACHE.get("token")  # stale is better than interrupting a request
 
-    token = resolve_databricks_token()
-    if token:
-        _TOKEN_CACHE["token"] = token
-        _TOKEN_CACHE["read_at"] = now
-        _TOKEN_CACHE["mtime"] = mtime
-        return token
 
-    return _TOKEN_CACHE.get("token")  # stale is better than nothing
+def _readiness_target(upstream: str) -> tuple[str, str] | None:
+    """Return the zero-inference listing endpoint for a supported upstream."""
+    parsed = urlsplit(upstream)
+    path = parsed.path.rstrip("/")
+    if parsed.scheme != "https" or not parsed.netloc or parsed.query or parsed.fragment:
+        return None
+    if path.endswith("/serving-endpoints"):
+        return (
+            f"{parsed.scheme}://{parsed.netloc}/api/2.0/serving-endpoints",
+            "workspace-serving-endpoints",
+        )
+    if path.endswith("/mlflow/v1"):
+        return (upstream.rstrip("/") + "/models", "mlflow-models")
+    return None
+
+
+def _readiness_status() -> tuple[int, dict]:
+    """Check proxy identity, current credentials, and upstream auth/liveness."""
+    now = time.monotonic()
+    cached = _HEALTH_CACHE.get("payload")
+    if cached is not None and now - _HEALTH_CACHE["checked_at"] < _HEALTH_CACHE_TTL:
+        return _HEALTH_CACHE["status"], dict(cached)
+
+    payload = {
+        "service": _HEALTH_SERVICE,
+        "schema": 1,
+        "status": "unready",
+        "upstream": UPSTREAM_BASE,
+        "upstream_ready": False,
+        "upstream_status": None,
+        "check": None,
+    }
+    status = 503
+    target = _readiness_target(UPSTREAM_BASE)
+    if target is None:
+        payload["reason"] = "upstream_config_invalid"
+    else:
+        target_url, check = target
+        payload["check"] = check
+        token = _resolve_current_token()
+        if not token:
+            payload["reason"] = "token_unavailable"
+        else:
+            try:
+                response = requests.get(
+                    target_url,
+                    headers={"Authorization": f"Bearer {token}"},
+                    timeout=3,
+                )
+                payload["upstream_status"] = response.status_code
+                if response.status_code == 200:
+                    payload["status"] = "ready"
+                    payload["upstream_ready"] = True
+                    status = 200
+                else:
+                    payload["reason"] = "upstream_status"
+            except requests.exceptions.RequestException:
+                payload["reason"] = "upstream_unreachable"
+
+    _HEALTH_CACHE.update(checked_at=now, status=status, payload=dict(payload))
+    return status, payload
 
 
 # Diagnostic logging — writes to stderr which goes to ~/.content-filter-proxy.log
@@ -941,10 +1002,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
             pass
 
     def do_GET(self):
-        """Health check endpoint."""
+        """Bounded zero-inference readiness endpoint."""
         if self.path == "/health":
-            body = json.dumps({"status": "ok", "upstream": UPSTREAM_BASE}).encode()
-            self.send_response(200)
+            status, payload = _readiness_status()
+            body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+            self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
@@ -969,6 +1031,6 @@ if __name__ == "__main__":
     server = ThreadedHTTPServer((LISTEN_HOST, LISTEN_PORT), ProxyHandler)
     print(f"Content-filter proxy listening on {LISTEN_HOST}:{LISTEN_PORT}")
     print(f"Forwarding to: {UPSTREAM_BASE}")
-    print(f"Fixes: empty text blocks, orphaned tool_results, tool name remapping, finish_reason")
+    print("Fixes: empty text blocks, orphaned tool_results, tool name remapping, finish_reason")
     sys.stdout.flush()
     server.serve_forever()

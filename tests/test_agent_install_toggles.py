@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -133,3 +134,72 @@ def test_supervisor_does_not_register_host_when_proxy_is_unhealthy(monkeypatch):
     assert status["host_launched"] is False
     assert status["running"] is False
     assert "proxy is unhealthy" in status["last_error"]
+
+
+class _HealthResponse:
+    def __init__(self, payload, status=200):
+        self.status = status
+        self._body = (
+            payload if isinstance(payload, bytes) else json.dumps(payload).encode()
+        )
+
+    def read(self, _limit):
+        return self._body
+
+
+def _healthy_payload():
+    return {
+        "service": "coda-content-filter-proxy",
+        "schema": 1,
+        "status": "ready",
+        "upstream": "https://workspace.example.com/serving-endpoints",
+        "upstream_ready": True,
+        "upstream_status": 200,
+        "check": "workspace-serving-endpoints",
+    }
+
+
+def test_proxy_ready_accepts_exact_authenticated_readiness(monkeypatch):
+    urlopen = mock.Mock(return_value=_HealthResponse(_healthy_payload()))
+    monkeypatch.setattr(oh, "urlopen", urlopen)
+
+    assert oh._proxy_ready() is True
+    assert urlopen.call_args.kwargs["timeout"] == 5
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("service", "forged-listener"),
+        ("schema", 2),
+        ("status", "ok"),
+        ("upstream_ready", False),
+        ("upstream_status", 503),
+        ("check", "mlflow-models"),
+        ("upstream", "http://workspace.example.com/serving-endpoints"),
+        ("upstream", "https://workspace.example.com/unrelated"),
+        ("upstream", "https://workspace.example.com/serving-endpoints?forged=1"),
+    ],
+)
+def test_proxy_ready_rejects_forged_or_unready_listener(
+    monkeypatch, field, value
+):
+    payload = _healthy_payload()
+    payload[field] = value
+    monkeypatch.setattr(oh, "urlopen", lambda *_args, **_kwargs: _HealthResponse(payload))
+
+    assert oh._proxy_ready() is False
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        _HealthResponse(b"not-json"),
+        _HealthResponse(b"x" * 4097),
+        _HealthResponse(_healthy_payload(), status=503),
+    ],
+)
+def test_proxy_ready_rejects_malformed_oversized_or_non_200(monkeypatch, response):
+    monkeypatch.setattr(oh, "urlopen", lambda *_args, **_kwargs: response)
+
+    assert oh._proxy_ready() is False

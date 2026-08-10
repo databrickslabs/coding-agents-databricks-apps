@@ -6,7 +6,6 @@ moment the rotator rewrites the file, otherwise the proxy serves revoked
 tokens to upstream for up to TTL seconds after each rotation.
 """
 
-import time
 from unittest import mock
 
 import pytest
@@ -359,3 +358,132 @@ def test_sanitize_tool_schemas_strips_exclusive_minimum_gemini_rejects():
     # Non-deny-set keys survive so the tool stays callable.
     assert seconds["type"] == "integer"
     assert label["type"] == "string"
+
+
+@pytest.fixture
+def readiness(monkeypatch):
+    import content_filter_proxy as cfp
+
+    monkeypatch.setattr(
+        cfp,
+        "_HEALTH_CACHE",
+        {"checked_at": 0.0, "status": 503, "payload": None},
+    )
+    monkeypatch.setattr(cfp, "_resolve_current_token", lambda: "fresh-token")
+    return cfp
+
+
+@pytest.mark.parametrize(
+    ("upstream", "target", "check"),
+    [
+        (
+            "https://workspace.example.com/serving-endpoints",
+            "https://workspace.example.com/api/2.0/serving-endpoints",
+            "workspace-serving-endpoints",
+        ),
+        (
+            "https://gateway.example.com/mlflow/v1",
+            "https://gateway.example.com/mlflow/v1/models",
+            "mlflow-models",
+        ),
+    ],
+)
+def test_readiness_requires_authenticated_listing_success(
+    readiness, monkeypatch, upstream, target, check
+):
+    monkeypatch.setattr(readiness, "UPSTREAM_BASE", upstream)
+    get = mock.Mock(return_value=mock.Mock(status_code=200))
+    monkeypatch.setattr(readiness.requests, "get", get)
+
+    status, payload = readiness._readiness_status()
+
+    assert status == 200
+    assert payload == {
+        "service": "coda-content-filter-proxy",
+        "schema": 1,
+        "status": "ready",
+        "upstream": upstream,
+        "upstream_ready": True,
+        "upstream_status": 200,
+        "check": check,
+    }
+    get.assert_called_once_with(
+        target,
+        headers={"Authorization": "Bearer fresh-token"},
+        timeout=3,
+    )
+
+
+def test_readiness_rejects_missing_current_token(readiness, monkeypatch):
+    monkeypatch.setattr(
+        readiness, "UPSTREAM_BASE", "https://workspace.example.com/serving-endpoints"
+    )
+    monkeypatch.setattr(readiness, "_resolve_current_token", lambda: None)
+    get = mock.Mock()
+    monkeypatch.setattr(readiness.requests, "get", get)
+
+    status, payload = readiness._readiness_status()
+
+    assert status == 503
+    assert payload["reason"] == "token_unavailable"
+    assert payload["upstream_ready"] is False
+    get.assert_not_called()
+
+
+@pytest.mark.parametrize("upstream_status", [401, 403, 404, 500, 503])
+def test_readiness_rejects_upstream_error_status(
+    readiness, monkeypatch, upstream_status
+):
+    monkeypatch.setattr(
+        readiness, "UPSTREAM_BASE", "https://workspace.example.com/serving-endpoints"
+    )
+    monkeypatch.setattr(
+        readiness.requests,
+        "get",
+        mock.Mock(return_value=mock.Mock(status_code=upstream_status)),
+    )
+
+    status, payload = readiness._readiness_status()
+
+    assert status == 503
+    assert payload["reason"] == "upstream_status"
+    assert payload["upstream_status"] == upstream_status
+
+
+def test_readiness_rejects_timeout(readiness, monkeypatch):
+    monkeypatch.setattr(
+        readiness, "UPSTREAM_BASE", "https://gateway.example.com/mlflow/v1"
+    )
+    monkeypatch.setattr(
+        readiness.requests,
+        "get",
+        mock.Mock(side_effect=readiness.requests.exceptions.Timeout()),
+    )
+
+    status, payload = readiness._readiness_status()
+
+    assert status == 503
+    assert payload["reason"] == "upstream_unreachable"
+
+
+@pytest.mark.parametrize(
+    "upstream",
+    [
+        "",
+        "http://workspace.example.com/serving-endpoints",
+        "https://workspace.example.com/wrong",
+        "https://workspace.example.com/serving-endpoints?forged=1",
+    ],
+)
+def test_readiness_rejects_unsupported_or_unsafe_upstream(
+    readiness, monkeypatch, upstream
+):
+    monkeypatch.setattr(readiness, "UPSTREAM_BASE", upstream)
+    get = mock.Mock()
+    monkeypatch.setattr(readiness.requests, "get", get)
+
+    status, payload = readiness._readiness_status()
+
+    assert status == 503
+    assert payload["reason"] == "upstream_config_invalid"
+    get.assert_not_called()
