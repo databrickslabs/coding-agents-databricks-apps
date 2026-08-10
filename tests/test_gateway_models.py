@@ -131,7 +131,7 @@ def test_setup_opencode_writes_ucode_provider_buckets(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("DATABRICKS_HOST", WORKSPACE)
     monkeypatch.setenv("DATABRICKS_TOKEN", "test-token")
-    monkeypatch.setenv("ANTHROPIC_MODEL", "system.ai.claude-opus-5")
+    monkeypatch.setenv("ANTHROPIC_MODEL", "system.ai.claude-opus-5")  # explicit request wins
     monkeypatch.setattr(gm, "discover_model_catalog", lambda *_: CATALOG)
     runpy.run_path(str(Path(__file__).parents[1] / "setup_opencode.py"), run_name="__main__")
 
@@ -204,7 +204,129 @@ def test_setup_proxy_source_pins_workspace_mlflow_route():
 
 def test_app_yaml_keeps_licensing_fence_and_system_ai_defaults():
     source = (Path(__file__).parents[1] / "app.yaml").read_text()
-    assert source.count("value: system.ai.claude-opus-5") == 2
+    assert source.count("value: system.ai.claude-sonnet-5") == 2
     assert '- name: ENABLE_CLAUDE\n    value: "false"' in source
     assert '- name: ENABLE_PI\n    value: "true"' in source
     assert '- name: ENABLE_OPENCODE\n    value: "true"' in source
+
+
+def test_fable_is_withheld_from_pickers_by_default(monkeypatch):
+    """`fable` is a preview family; a workshop picker must not offer it."""
+    monkeypatch.delenv("ENABLE_FABLE_MODELS", raising=False)
+    assert gm.offered_families() == ("sonnet", "opus", "haiku")
+
+    ids = [
+        "system.ai.claude-fable-2",
+        "system.ai.claude-opus-5",
+        "system.ai.claude-sonnet-5",
+    ]
+    monkeypatch.setattr(gm, "list_model_services", lambda *_a, **_kw: ids)
+    monkeypatch.setattr(gm, "discover_oss_specs", lambda *_a, **_kw: [])
+
+    catalog = gm.discover_model_catalog(WORKSPACE, "tok")
+
+    assert catalog["anthropic"] == ["system.ai.claude-sonnet-5", "system.ai.claude-opus-5"]
+    assert not any("fable" in model for model in catalog["anthropic"])
+
+
+def test_fable_is_available_when_explicitly_enabled(monkeypatch):
+    monkeypatch.setenv("ENABLE_FABLE_MODELS", "true")
+    assert gm.offered_families() == ("sonnet", "opus", "haiku", "fable")
+
+
+def test_default_model_is_sonnet_not_opus(monkeypatch):
+    """An unavailable request must fall back to sonnet, not opus."""
+    monkeypatch.delenv("ENABLE_FABLE_MODELS", raising=False)
+    models = ["system.ai.claude-opus-5", "system.ai.claude-sonnet-5", "system.ai.claude-haiku-4-5"]
+    assert gm.preferred_model("system.ai.claude-gone-9", models) == "system.ai.claude-sonnet-5"
+    # An explicit, available request still wins.
+    assert gm.preferred_model("system.ai.claude-opus-5", models) == "system.ai.claude-opus-5"
+
+
+def test_app_yaml_defaults_the_pickers_to_sonnet(monkeypatch):
+    source = (Path(__file__).parents[1] / "app.yaml").read_text()
+    assert "value: system.ai.claude-sonnet-5" in source
+    assert "value: system.ai.claude-opus-5" not in source
+    assert 'name: ENABLE_FABLE_MODELS' in source
+
+
+def _fm_payload(entries):
+    """Build a foundation-models listing payload from (name, api_types) pairs."""
+    return {
+        "endpoints": [
+            {
+                "name": name,
+                "config": {
+                    "served_entities": [
+                        {
+                            "foundation_model": {
+                                "ai_gateway_v2_supported": True,
+                                "api_types": list(api_types),
+                                "description": "context window of 200K tokens",
+                            }
+                        }
+                    ]
+                },
+            }
+            for name, api_types in entries
+        ]
+    }
+
+
+def test_picker_lists_only_models_the_gateway_serves_for_that_dialect(monkeypatch):
+    """Detection: ask the gateway what each model accepts, then populate the list.
+
+    A Claude model that the workspace does not serve over
+    `anthropic/v1/messages` must not reach the OpenCode/Pi picker — addressing
+    it surfaces as AI_APICallError / ENDPOINT_NOT_FOUND at first use.
+    """
+    monkeypatch.delenv("ENABLE_FABLE_MODELS", raising=False)
+    ids = [
+        "system.ai.claude-sonnet-5",
+        "system.ai.claude-opus-5",
+        "system.ai.gpt-5-3",
+        "system.ai.gemini-3-pro",
+    ]
+    monkeypatch.setattr(gm, "list_model_services", lambda *_a, **_kw: ids)
+    monkeypatch.setattr(
+        gm,
+        "_get_json",
+        lambda *_a, **_kw: _fm_payload(
+            [
+                ("system.ai.claude-sonnet-5", ["anthropic/v1/messages"]),
+                # Served, but only as chat-completions — not addressable by the
+                # anthropic-messages provider the picker is configured with.
+                ("system.ai.claude-opus-5", ["mlflow/v1/chat/completions"]),
+                ("system.ai.gpt-5-3", ["openai/v1/responses"]),
+                ("system.ai.gemini-3-pro", ["gemini/v1/generateContent"]),
+            ]
+        ),
+    )
+
+    catalog = gm.discover_model_catalog(WORKSPACE, "tok")
+
+    assert catalog["anthropic"] == ["system.ai.claude-sonnet-5"]
+    assert catalog["openai"] == ["system.ai.gpt-5-3"]
+    assert catalog["gemini"] == ["system.ai.gemini-3-pro"]
+
+
+def test_unknown_models_are_kept_so_a_picker_never_collapses(monkeypatch):
+    """Discovery failure must not silently reduce the picker to nothing."""
+    ids = ["system.ai.claude-sonnet-5", "system.ai.claude-opus-5"]
+    monkeypatch.setattr(gm, "list_model_services", lambda *_a, **_kw: ids)
+    monkeypatch.setattr(gm, "_get_json", lambda *_a, **_kw: None)
+
+    catalog = gm.discover_model_catalog(WORKSPACE, "tok")
+
+    assert catalog["anthropic"] == ["system.ai.claude-sonnet-5", "system.ai.claude-opus-5"]
+
+
+def test_a_model_without_gateway_v2_is_dropped(monkeypatch):
+    ids = ["system.ai.claude-sonnet-5"]
+    monkeypatch.setattr(gm, "list_model_services", lambda *_a, **_kw: ids)
+    payload = _fm_payload([("system.ai.claude-sonnet-5", ["anthropic/v1/messages"])])
+    entity = payload["endpoints"][0]["config"]["served_entities"][0]
+    entity["foundation_model"]["ai_gateway_v2_supported"] = False
+    monkeypatch.setattr(gm, "_get_json", lambda *_a, **_kw: payload)
+
+    assert gm.discover_model_catalog(WORKSPACE, "tok")["anthropic"] == []

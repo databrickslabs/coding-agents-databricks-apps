@@ -32,7 +32,7 @@ if not os.environ.get("HOME") or os.environ["HOME"] == "/":
 home = Path(os.environ["HOME"])
 host = os.environ.get("DATABRICKS_HOST", "")
 token = resolve_databricks_token() or ""
-requested_model = os.environ.get("ANTHROPIC_MODEL", "system.ai.claude-opus-5")
+requested_model = os.environ.get("ANTHROPIC_MODEL", "system.ai.claude-sonnet-5")
 
 # Install OpenCode and the OpenAI SDK used by Responses/MLflow providers.
 local_bin = home / ".local" / "bin"

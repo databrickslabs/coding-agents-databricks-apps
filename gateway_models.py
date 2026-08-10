@@ -6,6 +6,7 @@ URL builders. Harnesses use the workspace origin exclusively; the legacy
 """
 from __future__ import annotations
 
+import os
 import re
 from typing import Any
 from urllib.parse import urlencode, urlsplit
@@ -13,6 +14,12 @@ from urllib.parse import urlencode, urlsplit
 import requests
 
 ANTHROPIC_FAMILIES = ("fable", "opus", "sonnet", "haiku")
+# Families offered to harness pickers, in preference order. Sonnet leads: it is
+# the workshop default. `fable` is discovered but withheld unless explicitly
+# enabled — it is a preview family, and offering it in a picker invites
+# participants to select a model the workshop has not budgeted or validated.
+DEFAULT_FAMILY_ORDER = ("sonnet", "opus", "haiku")
+OPT_IN_FAMILIES = ("fable",)
 OSS_STATIC_FAMILIES = ("kimi-", "glm-")
 NATIVE_API_TYPES = {
     "anthropic/v1/messages",
@@ -144,26 +151,23 @@ def _context_window(description: str) -> int | None:
     return value if value > 0 else None
 
 
-def discover_oss_specs(workspace: str, token: str) -> list[dict[str, Any]]:
-    """Return chat-completions-only model capabilities from live metadata."""
+def fetch_foundation_models(workspace: str, token: str) -> dict[str, dict[str, Any]]:
+    """Return live per-endpoint gateway metadata, keyed by canonical model name.
+
+    One authenticated, zero-inference read of the workspace's foundation-model
+    listing. Each entry carries the ``api_types`` the AI Gateway will actually
+    accept for that model, which is what lets a picker list only the models a
+    given provider dialect can address.
+    """
     workspace = normalize_workspace(workspace)
-    payload = _get_json(
-        workspace + "/api/2.0/serving-endpoints:foundation-models", token
-    )
+    payload = _get_json(workspace + "/api/2.0/serving-endpoints:foundation-models", token)
     if not isinstance(payload, dict) or not isinstance(payload.get("endpoints"), list):
-        return []
-    specs: dict[str, dict[str, Any]] = {}
+        return {}
+    metadata: dict[str, dict[str, Any]] = {}
     for endpoint in payload["endpoints"]:
         if not isinstance(endpoint, dict) or not isinstance(endpoint.get("name"), str):
             continue
         name = endpoint["name"].strip()
-        canonical = _canonical(name)
-        if (
-            canonical.startswith(("claude-", "gemini-"))
-            or re.match(r"^gpt-\d(?:-|$)", canonical)
-            or any(marker in canonical for marker in NON_CHAT_MARKERS)
-        ):
-            continue
         config = endpoint.get("config")
         entities = config.get("served_entities") if isinstance(config, dict) else None
         if not isinstance(entities, list):
@@ -181,20 +185,60 @@ def discover_oss_specs(workspace: str, token: str) -> list[dict[str, Any]]:
                 api_types.update(value for value in raw_types if isinstance(value, str))
             if not description and isinstance(fm.get("description"), str):
                 description = fm["description"]
+        capabilities = endpoint.get("capabilities")
+        metadata.setdefault(
+            _canonical(name),
+            {
+                "id": name,
+                "api_types": api_types,
+                "gateway_v2": v2,
+                "description": description,
+                "reasoning": isinstance(capabilities, dict)
+                and capabilities.get("openai_reasoning") is True,
+            },
+        )
+    return metadata
+
+
+def serves_api_type(metadata: dict[str, dict[str, Any]], model: str, api_type: str) -> bool:
+    """Return True when the gateway advertises ``api_type`` for ``model``.
+
+    Unknown models are kept (True): the listing does not always enumerate every
+    model service, and silently collapsing a picker to nothing is worse than
+    offering a model the route may reject.
+    """
+    entry = metadata.get(_canonical(model))
+    if entry is None:
+        return True
+    if not entry["gateway_v2"]:
+        return False
+    return not entry["api_types"] or api_type in entry["api_types"]
+
+
+def discover_oss_specs(workspace: str, token: str) -> list[dict[str, Any]]:
+    """Return chat-completions-only model capabilities from live metadata."""
+    metadata = fetch_foundation_models(workspace, token)
+    specs: dict[str, dict[str, Any]] = {}
+    for canonical, entry in metadata.items():
         if (
-            not v2
+            canonical.startswith(("claude-", "gemini-"))
+            or re.match(r"^gpt-\d(?:-|$)", canonical)
+            or any(marker in canonical for marker in NON_CHAT_MARKERS)
+        ):
+            continue
+        api_types = entry["api_types"]
+        if (
+            not entry["gateway_v2"]
             or "mlflow/v1/chat/completions" not in api_types
             or api_types & NATIVE_API_TYPES
         ):
             continue
-        capabilities = endpoint.get("capabilities")
         specs.setdefault(
             canonical,
             {
-                "id": name,
-                "reasoning": isinstance(capabilities, dict)
-                and capabilities.get("openai_reasoning") is True,
-                "context_window": _context_window(description),
+                "id": entry["id"],
+                "reasoning": entry["reasoning"],
+                "context_window": _context_window(entry["description"]),
                 "max_tokens": OSS_OUTPUT_LIMITS.get(canonical),
             },
         )
@@ -202,18 +246,46 @@ def discover_oss_specs(workspace: str, token: str) -> list[dict[str, Any]]:
 
 
 def discover_model_catalog(workspace: str, token: str) -> dict[str, Any]:
-    """Bucket current model services using ucode's provider precedence."""
+    """Bucket current model services using ucode's provider precedence.
+
+    Each bucket is then filtered against the gateway's own advertised
+    ``api_types``, so a picker only offers models the provider dialect it is
+    configured with can actually address.
+    """
     ids = list_model_services(workspace, token)
+    metadata = fetch_foundation_models(workspace, token)
     claude: list[str] = []
-    for family in ANTHROPIC_FAMILIES:
-        matches = sorted((model for model in ids if f"claude-{family}-" in model), reverse=True)
+    for family in offered_families():
+        matches = sorted(
+            (
+                model
+                for model in ids
+                if f"claude-{family}-" in model
+                and serves_api_type(metadata, model, "anthropic/v1/messages")
+            ),
+            reverse=True,
+        )
         if matches:
             claude.append(matches[0])
     openai = sorted(
-        (model for model in ids if "gpt-" in model and "gpt-oss" not in model),
+        (
+            model
+            for model in ids
+            if "gpt-" in model
+            and "gpt-oss" not in model
+            and serves_api_type(metadata, model, "openai/v1/responses")
+        ),
         reverse=True,
     )
-    gemini = sorted((model for model in ids if "gemini-" in model), reverse=True)
+    gemini = sorted(
+        (
+            model
+            for model in ids
+            if "gemini-" in model
+            and serves_api_type(metadata, model, "gemini/v1/generateContent")
+        ),
+        reverse=True,
+    )
     specs = discover_oss_specs(workspace, token)
     specs_by_id = {_canonical(spec["id"]): spec for spec in specs}
     oss: list[str] = []
@@ -240,10 +312,21 @@ def discover_model_catalog(workspace: str, token: str) -> dict[str, Any]:
     }
 
 
+def offered_families() -> tuple[str, ...]:
+    """Return the Anthropic families a picker may show, preference-ordered.
+
+    ``ENABLE_FABLE_MODELS=true`` appends the opt-in preview families.
+    """
+    if os.environ.get("ENABLE_FABLE_MODELS", "false").strip().lower() in ("true", "1", "yes"):
+        return DEFAULT_FAMILY_ORDER + OPT_IN_FAMILIES
+    return DEFAULT_FAMILY_ORDER
+
+
 def preferred_model(requested: str, models: list[str]) -> str:
+    """Return the model to default to, preferring sonnet over opus."""
     if requested in models:
         return requested
-    for family in ("claude-opus-", "claude-sonnet-", "claude-haiku-"):
+    for family in (f"claude-{name}-" for name in offered_families()):
         match = next((model for model in models if family in model), None)
         if match:
             return match

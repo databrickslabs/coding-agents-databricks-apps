@@ -58,10 +58,14 @@ host = os.environ.get("DATABRICKS_HOST", "")
 # for per-request freshness below.
 token = resolve_databricks_token() or ""
 <<<<<<< HEAD
+<<<<<<< HEAD
 pi_model = os.environ.get("PI_MODEL", "system.ai.claude-sonnet-5")
 =======
 pi_model = os.environ.get("PI_MODEL", "system.ai.claude-opus-5")
 >>>>>>> 7304e6c (fix: route Pi and OpenCode through workspace AI Gateway v2)
+=======
+pi_model = os.environ.get("PI_MODEL", "system.ai.claude-sonnet-5")
+>>>>>>> 20747b7 (fix: default the pickers to sonnet and offer only models the gateway serves)
 
 PI_PACKAGE = "@earendil-works/pi-coding-agent"
 
