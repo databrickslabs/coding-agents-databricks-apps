@@ -18,6 +18,16 @@ import omnigents_host as oh
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
+# `_proxy_ready` pins the proxy's reported workspace to this container's own
+# DATABRICKS_HOST, so the readiness tests need a configured workspace that
+# matches `_healthy_payload`.
+WORKSPACE = "https://workspace.example.com"
+
+
+@pytest.fixture(autouse=True)
+def _configured_workspace(monkeypatch):
+    monkeypatch.setenv("DATABRICKS_HOST", WORKSPACE)
+
 
 def test_claude_setup_is_skipped_when_disabled(tmp_path):
     env = {
@@ -187,6 +197,39 @@ def test_proxy_ready_accepts_ucode_mlflow_foundation_readiness(monkeypatch):
     monkeypatch.setattr(oh, "urlopen", lambda *_args, **_kwargs: _HealthResponse(payload))
 
     assert oh._proxy_ready() is True
+
+
+def test_proxy_ready_rejects_another_workspaces_proxy(monkeypatch):
+    """A leftover proxy for a different workspace must not look ready.
+
+    It is internally consistent, so only comparing against the configured
+    DATABRICKS_HOST catches it — otherwise the restart is suppressed and
+    OpenCode's traffic (with an injected token) goes to the wrong workspace.
+    """
+    payload = {
+        **_healthy_payload(),
+        "upstream": "https://other.example.com/ai-gateway/mlflow/v1",
+        "upstream_status": None,
+        "workspace": "https://other.example.com",
+        "workspace_status": 200,
+        "check": "workspace-foundation-models",
+        "readiness_semantics": (
+            "authenticated-workspace-foundation-models-for-mlflow-route"
+        ),
+    }
+    monkeypatch.setattr(oh, "urlopen", lambda *_args, **_kwargs: _HealthResponse(payload))
+
+    assert oh._proxy_ready() is False
+
+
+@pytest.mark.parametrize("configured", ["", "http://workspace.example.com", "not a url"])
+def test_proxy_ready_requires_a_safe_configured_workspace(monkeypatch, configured):
+    monkeypatch.setenv("DATABRICKS_HOST", configured)
+    monkeypatch.setattr(
+        oh, "urlopen", lambda *_args, **_kwargs: _HealthResponse(_healthy_payload())
+    )
+
+    assert oh._proxy_ready() is False
 
 
 def test_proxy_ready_rejects_standalone_mlflow_400(monkeypatch):

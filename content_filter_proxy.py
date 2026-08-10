@@ -126,6 +126,23 @@ def _get_fresh_token() -> str | None:
     return _TOKEN_CACHE.get("token")  # stale is better than interrupting a request
 
 
+def log_upstream_error(response, request_path: str) -> None:
+    """Log an upstream failure as bounded metadata, never its body.
+
+    A gateway error body can echo the prompt, tool arguments, or completion it
+    rejected, and this log is tailed into the app logger, so only the status,
+    the request route, and non-content headers may be recorded.
+    """
+    headers = getattr(response, "headers", None) or {}
+    log.error(
+        "Upstream returned %s for %s (%s bytes, request-id=%s)",
+        getattr(response, "status_code", "unknown"),
+        request_path,
+        headers.get("content-length", "unknown"),
+        headers.get("x-request-id", "none"),
+    )
+
+
 def _readiness_target(upstream: str) -> tuple[str, str, str, str, str] | None:
     """Return the authenticated zero-inference readiness target and semantics."""
     parsed = urlsplit(upstream)
@@ -870,9 +887,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
                 timeout=300,
             )
 
-            # Log upstream errors
             if resp.status_code >= 400:
-                log.error(f"Upstream returned {resp.status_code}: {resp.text[:500]}")
+                log_upstream_error(resp, self.path)
 
             # --- Non-streaming response ---
             if not is_stream:

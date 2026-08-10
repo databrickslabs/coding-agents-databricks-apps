@@ -587,3 +587,29 @@ def test_readiness_rejects_unsupported_or_unsafe_upstream(
     assert status == 503
     assert payload["reason"] == "upstream_config_invalid"
     get.assert_not_called()
+
+
+def test_upstream_error_log_excludes_the_response_body(caplog):
+    """A rejected request must not leave the model transcript in the log.
+
+    Gateway error bodies echo the prompt or completion they rejected, and the
+    proxy log is tailed into the app logger, so only bounded metadata is safe.
+    """
+    import logging
+
+    from content_filter_proxy import log_upstream_error
+
+    response = mock.Mock(
+        status_code=400,
+        text='{"error":"rejected: SECRET_TRANSCRIPT_MARKER"}',
+        headers={"content-length": "44", "x-request-id": "req-123"},
+    )
+
+    with caplog.at_level(logging.ERROR, logger="content-filter-proxy"):
+        log_upstream_error(response, "/v1/chat/completions")
+
+    logged = caplog.text
+    assert "SECRET_TRANSCRIPT_MARKER" not in logged
+    assert "400" in logged
+    assert "/v1/chat/completions" in logged
+    assert "req-123" in logged
