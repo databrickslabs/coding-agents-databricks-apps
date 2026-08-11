@@ -498,7 +498,9 @@ def workspace_sync_auth():
     Two layers, matching the app's own auth layering:
 
     1. ``[DEFAULT]`` PAT in ``~/.databrickscfg`` — the pasted/rotated PAT path.
-       Ambient creds are stripped so the CLI falls through to the config file.
+       Pinned explicitly to ``DEFAULT``: an ambient
+       ``DATABRICKS_CONFIG_PROFILE`` (Apps sets it to the SP profile) would
+       otherwise silently steer the CLI at the wrong identity.
     2. Otherwise a named profile (``DATABRICKS_CONFIG_PROFILE``, default
        ``omnigents-host``) — the SP-broker path, where the on-disk profile holds
        only a host + ``auth_type = databricks-cli``. With
@@ -532,7 +534,7 @@ def workspace_sync_auth():
     if host and token:
         client = WorkspaceClient(host=host, token=token, auth_type="pat")
         client.current_user.me()  # fail fast on an expired PAT
-        return databrickscfg_only_env(), _init_telemetry(client)
+        return config_profile_env("DEFAULT"), _init_telemetry(client)
 
     profile = os.environ.get("DATABRICKS_CONFIG_PROFILE") or SYNC_FALLBACK_PROFILE
     env = config_profile_env(profile)

@@ -73,6 +73,7 @@ def _write_cfg(tmp_path, monkeypatch, body):
 
 def test_prefers_default_pat(tmp_path, monkeypatch, fake_sdk):
     calls, created = fake_sdk
+    monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "omnigents-host")
     _write_cfg(
         tmp_path,
         monkeypatch,
@@ -83,7 +84,8 @@ def test_prefers_default_pat(tmp_path, monkeypatch, fake_sdk):
 
     assert calls == ["pat"], "the PAT must be validated before a long CLI call"
     assert created[0].kwargs["auth_type"] == "pat"
-    # Ambient creds stripped so the CLI falls through to the config file.
+    # Pinned to DEFAULT: an ambient profile must not steer the CLI elsewhere.
+    assert env["DATABRICKS_CONFIG_PROFILE"] == "DEFAULT"
     assert "DATABRICKS_TOKEN" not in env
     assert "DATABRICKS_CLIENT_ID" not in env
 
