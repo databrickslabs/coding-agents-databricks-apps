@@ -216,8 +216,28 @@ import os
 import sys
 from urllib.request import urlopen
 
-REAL_CLI = {json.dumps(real_cli)}
+REAL_CLI_FALLBACK = {json.dumps(real_cli)}
 PROFILE = {json.dumps(SP_PROFILE)}
+
+
+def _real_cli():
+    """Resolve the CLI at call time so a boot race can't pin a stale binary.
+
+    The wrapper is written as soon as the SP broker is up, which can be BEFORE
+    install_databricks_cli.sh has finished putting the current CLI in
+    ~/.local/bin. Baking whatever existed at that moment (the image's much
+    older /usr/local/bin build) silently downgraded every CLI call for the life
+    of the container. That is not only missing flags: the old CLI ignores
+    `bundle.engine: direct`, so a Databricks Asset Bundle deploy runs through
+    Terraform instead \u2014 which drops an app's compute_size and needs egress to
+    releases.hashicorp.com.
+    """
+    preferred = os.path.join(
+        os.environ.get("HOME", "/app/python/source_code"), ".local", "bin", "databricks"
+    )
+    if os.path.isfile(preferred) and os.access(preferred, os.X_OK):
+        return preferred
+    return REAL_CLI_FALLBACK
 
 
 def _profile(args):
@@ -241,8 +261,15 @@ def _broker_token():
         return None
 
 
+def _config_path():
+    configured = os.environ.get("DATABRICKS_CONFIG_FILE", "").strip()
+    path = configured or os.path.join(
+        os.environ.get("HOME", "/app/python/source_code"), ".databrickscfg"
+    )
+    return os.path.abspath(path)
+
 def _profile_host():
-    path = os.path.expanduser("~/.databrickscfg")
+    path = _config_path()
     try:
         cfg = configparser.ConfigParser(interpolation=None)
         cfg.read(path)
@@ -256,7 +283,8 @@ profile = _profile(args) or os.environ.get("DATABRICKS_CONFIG_PROFILE")
 if args[:2] == ["auth", "token"] and _profile(args) == PROFILE:
     token = _broker_token()
     if not token:
-        os.execv(REAL_CLI, [REAL_CLI, *args])
+        real_cli = _real_cli()
+        os.execv(real_cli, [real_cli, *args])
     # Emit the FULL OAuth token shape the databricks-sdk CLI token source
     # (DatabricksCliTokenSource) requires: access_token + token_type + expiry.
     # ALWAYS emit JSON — NOT gated on `--output json`. The SDK builds the token
@@ -304,10 +332,24 @@ if profile == PROFILE:
         host = _profile_host()
         if host:
             env["DATABRICKS_HOST"] = host
-        env.pop("DATABRICKS_CONFIG_PROFILE", None)
-        os.execve(REAL_CLI, [REAL_CLI, *args], env)
+        # The wrapper is also safe when invoked directly, rather than only via
+        # _run_host_once's already-scrubbed environment. Keep the profile and
+        # all ambient app-auth selectors from shadowing the injected token.
+        for key in (
+            "DATABRICKS_CONFIG_PROFILE",
+            "DATABRICKS_CLIENT_ID",
+            "DATABRICKS_CLIENT_SECRET",
+            "DATABRICKS_WORKSPACE_ID",
+            "DATABRICKS_APP_NAME",
+            "DATABRICKS_APP_URL",
+            "DATABRICKS_AUTH_TYPE",
+        ):
+            env.pop(key, None)
+        real_cli = _real_cli()
+        os.execve(real_cli, [real_cli, *args], env)
 
-os.execv(REAL_CLI, [REAL_CLI, *args])
+_resolved_cli = _real_cli()
+os.execv(_resolved_cli, [_resolved_cli, *args])
 '''
     wrapper_path.write_text(source)
     wrapper_path.chmod(0o700)
