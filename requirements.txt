@@ -47,7 +47,7 @@ cryptography==49.0.0
     #   coda (pyproject.toml)
     #   google-auth
     #   pyjwt
-databricks-sdk==0.106.0
+databricks-sdk==0.123.0
     # via
     #   coda (pyproject.toml)
     #   mlflow-skinny
@@ -224,6 +224,7 @@ typing-inspection==0.4.2
 urllib3==2.7.0
     # via
     #   coda (pyproject.toml)
+    #   databricks-sdk
     #   requests
 uvicorn==0.46.0
     # via

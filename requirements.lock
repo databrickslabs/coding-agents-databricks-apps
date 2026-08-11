@@ -315,9 +315,9 @@ cryptography==49.0.0 \
     #   -r requirements.txt
     #   google-auth
     #   pyjwt
-databricks-sdk==0.106.0 \
-    --hash=sha256:6bbd492cb8593747aced037b9186f8632e9d553fc358e6f3d83b7e959851d9d3 \
-    --hash=sha256:db9de5566279ae80dfea0ecd37231e8968523ef984e83cbe4bd77e50c59aa6a5
+databricks-sdk==0.123.0 \
+    --hash=sha256:55ed566c48dcd25d8ea4ffec3f78236f63258078477e440529389c4bee95d80f \
+    --hash=sha256:787068ccf1c537736bc6387486c15d2ac02937c876c980b5b2b43230a98e4d35
     # via
     #   -r requirements.txt
     #   mlflow-skinny
@@ -1041,6 +1041,7 @@ urllib3==2.7.0 \
     --hash=sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897
     # via
     #   -r requirements.txt
+    #   databricks-sdk
     #   requests
 uvicorn==0.46.0 \
     --hash=sha256:bbebbcbed972d162afca128605223022bedd345b7bc7855ce66deb31487a9048 \

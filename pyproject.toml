@@ -8,7 +8,11 @@ dependencies = [
     "flask-socketio>=5.0",
     "simple-websocket>=1.0",
     "claude-agent-sdk",
-    "databricks-sdk>=0.106.0",
+    # Floor tracks the newest release the `exclude-newer` cooldown below allows.
+    # 0.124.0 / 0.125.0 / 0.126.0 existed at bump time but were published inside
+    # the cooldown window, so taking them would mean bypassing the supply-chain
+    # wait. Raise this once they age out.
+    "databricks-sdk>=0.123.0",
     "mlflow-skinny==3.14.0",
     "requests",
     # GHSA-g6cj-pr64-35w5 / CVE-2026-69247 — cryptography >= 44.0.0, < 50.0.0
@@ -56,7 +60,7 @@ dependencies = [
     # to bump it to 9.0.0 (PR #3) and broke every deploy — explicit ceiling so
     # the bot won't try again until upstream widens its caps.
     "importlib-metadata<8.8",
-    # Upper bound is forced by databricks-sdk: 0.106.0 declares
+    # Upper bound is forced by databricks-sdk: 0.123.0 still declares
     # `protobuf!=5.26.*,...,<7.0,>=4.25.8`. Dependabot tried to bump to
     # protobuf 7.34.1 (PR #60) and broke `pip install -r requirements.txt`.
     # Explicit ceiling so the bot won't try again until databricks-sdk lifts
