@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 """Sync a project directory to Databricks Workspace."""
-import configparser
 import sys
 import subprocess
 from pathlib import Path
@@ -15,33 +14,6 @@ except ImportError:
     sys.exit(0)
 
 
-def _read_databrickscfg():
-    """Read host and token from ~/.databrickscfg [DEFAULT] profile."""
-    cfg_path = Path.home() / ".databrickscfg"
-    if not cfg_path.exists():
-        return None, None
-    parser = configparser.ConfigParser()
-    parser.read(cfg_path)
-    return (
-        parser.get("DEFAULT", "host", fallback=None),
-        parser.get("DEFAULT", "token", fallback=None),
-    )
-
-
-def get_user_email():
-    """Get current user's email from Databricks token."""
-    host, token = _read_databrickscfg()
-    if not host or not token:
-        raise RuntimeError("~/.databrickscfg missing host or token")
-    w = WorkspaceClient(host=host, token=token, auth_type="pat")
-    try:
-        from telemetry import set_product_info
-        set_product_info(w)
-    except Exception:
-        pass
-    return w.current_user.me().user_name
-
-
 def sync_project(project_path: Path):
     """Sync project to user's Workspace."""
     project_path = project_path.resolve()
@@ -53,13 +25,13 @@ def sync_project(project_path: Path):
         return
 
     try:
-        get_user_email()  # validates ~/.databrickscfg auth + inits telemetry
-        from utils import databrickscfg_only_env, workspace_sync_dest
+        from utils import workspace_sync_auth, workspace_sync_dest
 
         workspace_dest = workspace_sync_dest(project_path.name)
 
-        # Strip ambient creds so the CLI falls through to ~/.databrickscfg
-        sync_env = databrickscfg_only_env()
+        # Validates auth (PAT profile, else the SP-broker profile) + inits
+        # telemetry, and returns the env the CLI must run with.
+        sync_env, _ = workspace_sync_auth()
 
         result = subprocess.run(
             ["databricks", "sync", str(project_path), workspace_dest, "--watch=false"],

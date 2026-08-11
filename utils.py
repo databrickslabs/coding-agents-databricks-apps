@@ -485,6 +485,62 @@ def resolve_mlflow_experiment_id(host: str, token: str, experiment_name: str) ->
         return None
 
 
+SYNC_FALLBACK_PROFILE = "omnigents-host"
+
+
+def workspace_sync_auth():
+    """Resolve auth for the workspace sync/restore round-trip.
+
+    Returns ``(env, client)``: the environment the ``databricks`` CLI should run
+    with, and an authenticated ``WorkspaceClient`` (used to validate the creds
+    and init telemetry before a long CLI call).
+
+    Two layers, matching the app's own auth layering:
+
+    1. ``[DEFAULT]`` PAT in ``~/.databrickscfg`` — the pasted/rotated PAT path.
+       Ambient creds are stripped so the CLI falls through to the config file.
+    2. Otherwise a named profile (``DATABRICKS_CONFIG_PROFILE``, default
+       ``omnigents-host``) — the SP-broker path, where the on-disk profile holds
+       only a host + ``auth_type = databricks-cli``. With
+       ``ENABLE_SP_APIKEYHELPER=true`` no PAT is ever written, so this is the
+       normal case; requiring a PAT here silently disabled every backup.
+
+    Raises if neither layer can authenticate — callers must treat that as "this
+    commit is NOT backed up".
+    """
+    import configparser
+
+    from databricks.sdk import WorkspaceClient
+
+    def _init_telemetry(client):
+        try:
+            from telemetry import set_product_info
+
+            set_product_info(client)
+        except Exception:
+            pass  # Telemetry must never break sync/restore
+        return client
+
+    cfg_path = Path.home() / ".databrickscfg"
+    host = token = None
+    if cfg_path.exists():
+        parser = configparser.ConfigParser()
+        parser.read(cfg_path)
+        host = parser.get("DEFAULT", "host", fallback=None)
+        token = parser.get("DEFAULT", "token", fallback=None)
+
+    if host and token:
+        client = WorkspaceClient(host=host, token=token, auth_type="pat")
+        client.current_user.me()  # fail fast on an expired PAT
+        return databrickscfg_only_env(), _init_telemetry(client)
+
+    profile = os.environ.get("DATABRICKS_CONFIG_PROFILE") or SYNC_FALLBACK_PROFILE
+    env = config_profile_env(profile)
+    client = WorkspaceClient(profile=profile)
+    client.current_user.me()
+    return env, _init_telemetry(client)
+
+
 def workspace_sync_dest(repo_name: str) -> str:
     """Databricks Workspace path a repo syncs to / restores from.
 
