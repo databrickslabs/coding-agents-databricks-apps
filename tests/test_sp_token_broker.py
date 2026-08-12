@@ -201,3 +201,247 @@ def test_databricks_wrapper_falls_back_when_no_installed_cli(tmp_path):
     )
 
     assert "BAKED ARGS=version" in result.stdout
+
+
+# --- Deploy-from-Omnigent auth path (bundle deploy without a PAT) ------------
+#
+# These cover the failure that made Databricks Asset Bundle deploys look
+# impossible from an Omnigent runner: the Go CLI honours neither
+# `databricks_cli_path` (a Python-SDK Config field) nor an injected
+# DATABRICKS_TOKEN once a named profile is selected, and Omnigent's native
+# harness terminals unset DATABRICKS_CONFIG_PROFILE outright.
+
+
+def _echo_cli(path):
+    path.write_text(
+        "#!/bin/sh\n"
+        "printf 'TOKEN=%s HOST=%s PROFILE=%s ARGS=%s\\n' "
+        "\"$DATABRICKS_TOKEN\" \"$DATABRICKS_HOST\" "
+        "\"$DATABRICKS_CONFIG_PROFILE\" \"$*\"\n"
+    )
+    path.chmod(0o700)
+    return path
+
+
+def _host_only_cfg(tmp_path, extra=""):
+    cfg = tmp_path / ".databrickscfg"
+    cfg.write_text(
+        "[omnigents-host]\n"
+        "host = https://workspace.example\n"
+        "auth_type = databricks-cli\n"
+        "databricks_cli_path = /nonexistent/databricks\n" + extra
+    )
+    return cfg
+
+
+def _wrapper_env(tmp_path, server, **overrides):
+    env = dict(
+        os.environ,
+        HOME=str(tmp_path),
+        CODA_SP_TOKEN_BROKER_URL=broker.broker_url(server),
+    )
+    for key in (
+        "DATABRICKS_CONFIG_PROFILE",
+        "DATABRICKS_TOKEN",
+        "DATABRICKS_HOST",
+        "DATABRICKS_CLIENT_ID",
+        "DATABRICKS_CLIENT_SECRET",
+        "DATABRICKS_CONFIG_FILE",
+        "CODA_BROKER_ALLOW_AUTH_LOGIN",
+    ):
+        env.pop(key, None)
+    env.update(overrides)
+    return env
+
+
+@pytest.mark.parametrize(
+    "selector",
+    [
+        ["--profile", "omnigents-host"],
+        ["--profile=omnigents-host"],
+        ["-p", "omnigents-host"],
+        ["-p=omnigents-host"],
+    ],
+)
+def test_databricks_wrapper_strips_explicit_broker_profile_flag(tmp_path, selector):
+    """`databricks bundle deploy --profile omnigents-host` must authenticate.
+
+    Regression: the flag survived into the real CLI, which then read
+    `auth_type = databricks-cli` from the profile, ignored the injected
+    DATABRICKS_TOKEN, and failed with "cache: no cached credentials; run
+    `databricks auth login` to sign in".
+    """
+    server = broker.start_sp_token_broker(lambda: "flag-token", port=0)
+    try:
+        real_cli = _echo_cli(tmp_path / "real-databricks")
+        _host_only_cfg(tmp_path)
+        wrapper = write_databricks_token_wrapper(tmp_path / "bin", str(real_cli))
+        result = subprocess.run(
+            [str(wrapper), "bundle", "deploy", "-t", "dev", *selector],
+            env=_wrapper_env(tmp_path, server),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert "TOKEN=flag-token" in result.stdout
+        assert "HOST=https://workspace.example" in result.stdout
+        assert "ARGS=bundle deploy -t dev" in result.stdout
+        assert "omnigents-host" not in result.stdout.split("ARGS=")[1]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_databricks_wrapper_brokers_when_no_profile_is_selected(tmp_path):
+    """Omnigent runners unset DATABRICKS_CONFIG_PROFILE; deploys must still work."""
+    server = broker.start_sp_token_broker(lambda: "implicit-token", port=0)
+    try:
+        real_cli = _echo_cli(tmp_path / "real-databricks")
+        _host_only_cfg(tmp_path)
+        wrapper = write_databricks_token_wrapper(tmp_path / "bin", str(real_cli))
+        result = subprocess.run(
+            [str(wrapper), "bundle", "validate", "--strict", "-t", "dev"],
+            env=_wrapper_env(tmp_path, server),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert "TOKEN=implicit-token" in result.stdout
+        assert "HOST=https://workspace.example" in result.stdout
+        assert "ARGS=bundle validate --strict -t dev" in result.stdout
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_databricks_wrapper_leaves_pat_identity_alone(tmp_path):
+    """A [DEFAULT] PAT keeps winning: no silent switch to the app SP identity.
+
+    The PAT bootstrap (`/api/configure-pat`, `/api/inject-pat`, `pat_rotator`)
+    is the human-identity path. Bare `databricks` calls must keep resolving it,
+    or an injected-PAT fleet would start deploying as the service principal.
+    """
+    server = broker.start_sp_token_broker(lambda: "must-not-be-used", port=0)
+    try:
+        real_cli = _echo_cli(tmp_path / "real-databricks")
+        _host_only_cfg(tmp_path, extra="\n[DEFAULT]\nhost = https://workspace.example\ntoken = dapi-human-pat\n")
+        wrapper = write_databricks_token_wrapper(tmp_path / "bin", str(real_cli))
+        result = subprocess.run(
+            [str(wrapper), "current-user", "me"],
+            env=_wrapper_env(tmp_path, server),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert "TOKEN= " in result.stdout  # no injection; real CLI reads the file
+        assert "must-not-be-used" not in result.stdout
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_databricks_wrapper_leaves_ambient_env_credentials_alone(tmp_path):
+    server = broker.start_sp_token_broker(lambda: "must-not-be-used", port=0)
+    try:
+        real_cli = _echo_cli(tmp_path / "real-databricks")
+        _host_only_cfg(tmp_path)
+        wrapper = write_databricks_token_wrapper(tmp_path / "bin", str(real_cli))
+        result = subprocess.run(
+            [str(wrapper), "current-user", "me"],
+            env=_wrapper_env(tmp_path, server, DATABRICKS_TOKEN="ambient-pat"),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert "TOKEN=ambient-pat" in result.stdout
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_databricks_auth_login_is_a_no_op_with_guidance(tmp_path):
+    """`auth login` can never succeed here; it must not hang an agent."""
+    server = broker.start_sp_token_broker(lambda: "login-probe-token", port=0)
+    try:
+        real_cli = tmp_path / "real-databricks"
+        real_cli.write_text("#!/bin/sh\necho REAL_LOGIN_RAN\nexit 7\n")
+        real_cli.chmod(0o700)
+        _host_only_cfg(tmp_path)
+        wrapper = write_databricks_token_wrapper(tmp_path / "bin", str(real_cli))
+        result = subprocess.run(
+            [str(wrapper), "auth", "login"],
+            env=_wrapper_env(tmp_path, server),
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0
+        assert "REAL_LOGIN_RAN" not in result.stdout
+        assert "already has" in result.stderr
+        assert "bundle deploy" in result.stderr
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize(
+    "extra_args,env_overrides",
+    [
+        # Omnigent's _run_databricks_browser_login passes the ?o= org selector.
+        (["--host", "https://workspace.example/?o=12345"], {}),
+        # Another workspace entirely.
+        (["--host", "https://other.workspace.example"], {}),
+        # A different profile is an explicit request for the real flow.
+        (["--profile", "some-other-profile"], {}),
+        # Operator escape hatch.
+        ([], {"CODA_BROKER_ALLOW_AUTH_LOGIN": "1"}),
+    ],
+)
+def test_databricks_auth_login_passthrough_cases(tmp_path, extra_args, env_overrides):
+    """The no-op is narrow: Omnigent's own login flow must reach the real CLI."""
+    server = broker.start_sp_token_broker(lambda: "login-probe-token", port=0)
+    try:
+        real_cli = tmp_path / "real-databricks"
+        real_cli.write_text("#!/bin/sh\necho REAL_LOGIN_RAN\nexit 7\n")
+        real_cli.chmod(0o700)
+        _host_only_cfg(tmp_path)
+        wrapper = write_databricks_token_wrapper(tmp_path / "bin", str(real_cli))
+        result = subprocess.run(
+            [str(wrapper), "auth", "login", *extra_args],
+            env=_wrapper_env(tmp_path, server, **env_overrides),
+            capture_output=True,
+            text=True,
+        )
+        assert "REAL_LOGIN_RAN" in result.stdout
+        assert result.returncode == 7
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_omnigent_sdk_token_contract_is_unchanged_by_profile_stripping(tmp_path):
+    """`auth token --profile omnigents-host` still returns the SDK JSON shape.
+
+    This is the contract omnigent's resolve_databricks_workspace / pi model
+    catalog depends on; the profile-stripping fix must not touch it.
+    """
+    server = broker.start_sp_token_broker(lambda: "sdk-token", port=0)
+    try:
+        real_cli = tmp_path / "real-databricks"
+        real_cli.write_text("#!/bin/sh\necho REAL_CLI_RAN\nexit 9\n")
+        real_cli.chmod(0o700)
+        _host_only_cfg(tmp_path)
+        wrapper = write_databricks_token_wrapper(tmp_path / "bin", str(real_cli))
+        result = subprocess.run(
+            [str(wrapper), "auth", "token", "--profile", "omnigents-host"],
+            env=_wrapper_env(tmp_path, server),
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        payload = json.loads(result.stdout)
+        assert payload["access_token"] == "sdk-token"
+        assert payload["token_type"] == "Bearer"
+        datetime.datetime.strptime(payload["expiry"], "%Y-%m-%dT%H:%M:%SZ")
+    finally:
+        server.shutdown()
+        server.server_close()
