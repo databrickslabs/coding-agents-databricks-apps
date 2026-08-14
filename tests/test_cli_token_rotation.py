@@ -260,6 +260,26 @@ class TestUpdateOpenCode:
         assert config["provider"]["external-openai"] == external
         assert "external-openai" not in result.failed
 
+    def test_malformed_managed_provider_options_fail_closed(self, isolated_home):
+        from cli_auth import update_cli_tokens
+
+        config_dir = isolated_home / ".config" / "opencode"
+        config_dir.mkdir(parents=True)
+        malformed = {
+            "provider": {
+                "databricks": {
+                    "options": {"apiKey": 42, "headers": []}
+                }
+            }
+        }
+        path = config_dir / "opencode.json"
+        path.write_text(json.dumps(malformed))
+
+        result = update_cli_tokens("new-token")
+
+        assert result.failed == ("opencode_provider",)
+        assert json.loads(path.read_text()) == malformed
+
     def test_skips_missing_file(self, isolated_home):
         from cli_auth import update_cli_tokens
         update_cli_tokens("new-token")

@@ -2336,7 +2336,9 @@ def _bootstrap_pat(token):
             return False, {"error": "Invalid token"}, 400
         user = resp.json().get("userName", "unknown")
     except Exception as e:
-        return False, {"error": f"Token validation failed: {e}"}, 400
+        return False, {
+            "error": f"Token validation failed ({type(e).__name__})"
+        }, 400
 
     # Immediately mint a controlled short-lived token from the supplied PAT.
     # This gives us a token ID we own — all future rotations can revoke the old one.
@@ -2344,12 +2346,23 @@ def _bootstrap_pat(token):
     pat_rotator._current_token = token
     pat_rotator._current_token_id = None
     rotated = pat_rotator._rotate_once()
-    if rotated:
-        token = pat_rotator.token  # use the newly minted token from here on
-        # Revoke only the bootstrap PAT — leave other user PATs intact (#98)
-        pat_rotator.revoke_bootstrap_token()
+    minted_token = (
+        pat_rotator.token if pat_rotator._current_token_id is not None else None
+    )
+    if minted_token:
+        # A mint can succeed while one credential target reports degraded.
+        # Keep the minted token authoritative and retain the bootstrap PAT for
+        # recovery; never overwrite the new .databrickscfg with the bootstrap.
+        token = minted_token
+        if rotated:
+            # Revoke only after every credential target accepted the new token.
+            pat_rotator.revoke_bootstrap_token()
+        else:
+            logger.warning(
+                "Bootstrap PAT retained because minted-token persistence degraded"
+            )
     else:
-        # Rotation failed — fall back to supplied token (still valid)
+        # Mint failed — fall back to the supplied token (still valid).
         pat_rotator._write_databrickscfg(token)
     pat_rotator.start()
 

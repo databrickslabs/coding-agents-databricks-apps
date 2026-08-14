@@ -241,15 +241,27 @@ def _update_opencode_provider_headers(token):
         options = provider.get("options") if isinstance(provider, dict) else None
         if not isinstance(options, dict):
             raise ValueError(f"OpenCode provider options missing for {provider_id}")
-        api_key = options.get("apiKey")
+        if "apiKey" not in options or not isinstance(options["apiKey"], str):
+            raise ValueError(f"OpenCode provider apiKey invalid for {provider_id}")
+        headers = options.get("headers")
+        if headers is not None and not isinstance(headers, dict):
+            raise ValueError(f"OpenCode provider headers invalid for {provider_id}")
         if (
-            isinstance(api_key, str)
-            and not api_key.startswith("{")
+            isinstance(headers, dict)
+            and "Authorization" in headers
+            and not isinstance(headers["Authorization"], str)
+        ):
+            raise ValueError(
+                f"OpenCode Authorization header invalid for {provider_id}"
+            )
+
+        api_key = options["apiKey"]
+        if (
+            not api_key.startswith("{")
             and api_key != token
         ):
             options["apiKey"] = token
             changed = True
-        headers = options.get("headers")
         expected = f"Bearer {token}"
         if (
             isinstance(headers, dict)

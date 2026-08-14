@@ -98,6 +98,48 @@ class TestPATStatusAccessible:
         assert resp.status_code == 400
 
 
+class TestBootstrapPATDegradedRefresh:
+    def test_minted_token_remains_authoritative_when_refresh_degrades(self):
+        with mock.patch("app.initialize_app"):
+            import app as app_module
+
+        original_token = os.environ.get("DATABRICKS_TOKEN")
+        original_current = app_module.pat_rotator._current_token
+        original_id = app_module.pat_rotator._current_token_id
+        original_status = app_module.setup_state["status"]
+        validation = mock.Mock(status_code=200)
+        validation.json.return_value = {"userName": "owner@example.com"}
+
+        def degraded_rotation():
+            app_module.pat_rotator._current_token = "dapi-minted"
+            app_module.pat_rotator._current_token_id = "tid-minted"
+            return False
+
+        try:
+            app_module.setup_state["status"] = "complete"
+            with mock.patch.object(app_module.requests, "get", return_value=validation), \
+                 mock.patch.object(app_module.pat_rotator, "_rotate_once", side_effect=degraded_rotation), \
+                 mock.patch.object(app_module.pat_rotator, "_write_databrickscfg") as write_cfg, \
+                 mock.patch.object(app_module.pat_rotator, "revoke_bootstrap_token") as revoke, \
+                 mock.patch.object(app_module.pat_rotator, "start"), \
+                 mock.patch.object(app_module, "_configure_all_cli_auth") as configure:
+                ok, payload, status = app_module._bootstrap_pat("dapi-bootstrap")
+
+            assert (ok, status) == (True, 200)
+            assert "token" not in payload
+            configure.assert_called_once_with("dapi-minted")
+            write_cfg.assert_not_called()
+            revoke.assert_not_called()
+        finally:
+            app_module.pat_rotator._current_token = original_current
+            app_module.pat_rotator._current_token_id = original_id
+            app_module.setup_state["status"] = original_status
+            if original_token is None:
+                os.environ.pop("DATABRICKS_TOKEN", None)
+            else:
+                os.environ["DATABRICKS_TOKEN"] = original_token
+
+
 class TestInjectPATEndpoint:
     """Programmatic PAT injection for multi-CoDA provisioning."""
 
