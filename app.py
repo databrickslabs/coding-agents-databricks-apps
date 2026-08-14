@@ -375,12 +375,16 @@ _TERMINAL_ENV_ALLOWLIST = frozenset({
     BROKER_URL_ENV,
 })
 _TERMINAL_ENV_PREFIX_ALLOWLIST = ("LC_", "ENABLE_")
-_TERMINAL_PROXY_VARS = frozenset({
+_TERMINAL_URL_VARS = frozenset({
     "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
+    "NPM_REGISTRY", "npm_config_registry", "GITHUB_API_BASE",
+    "GITHUB_RELEASE_MIRROR", "CLAUDE_INSTALLER_URL", "HERMES_PIP_URL",
+    "DEEPWIKI_MCP_URL", "EXA_MCP_URL", BROKER_URL_ENV,
 })
 _CREDENTIAL_SHAPED_ENV_PATTERN = re.compile(
-    r"TOKEN|SECRET|PASSWORD|CREDENTIALS?|API[_-]?KEY|PRIVATE[_-]?KEY"
-    r"|CLIENT[_-]?ID|(?:^|_)KEY(?:_|$)",
+    r"TOKEN|SECRET|PASSWORD|PASSPHRASE|CREDENTIALS?|BEARER|AUTH|SESSION"
+    r"|COOKIE|SIGNING|SALT|API[_-]?KEY|PRIVATE[_-]?KEY|CLIENT[_-]?ID"
+    r"|(?:^|_)(?:KEY|PAT|PWD)(?:_|$)",
     re.IGNORECASE,
 )
 _TERMINAL_CREDENTIAL_EXCEPTIONS = frozenset({
@@ -408,22 +412,24 @@ def _build_terminal_shell_env(base_env: dict) -> dict:
 
     # Proxy variables are required in enterprise deployments, but URLs with
     # embedded userinfo are credentials rather than safe network configuration.
-    for key in _TERMINAL_PROXY_VARS:
+    for key in _TERMINAL_URL_VARS:
         value = shell_env.get(key, "").strip()
         if not value:
             continue
         try:
             parsed = urlsplit(value)
         except ValueError:
-            shell_env.pop(key, None)
-            continue
+            parsed = None
         if (
-            parsed.scheme not in ("http", "https")
+            parsed is None
+            or parsed.scheme not in ("http", "https")
             or parsed.hostname is None
             or parsed.username is not None
             or parsed.password is not None
         ):
             shell_env.pop(key, None)
+            # Name only: URL values can contain the credential being excluded.
+            logger.warning("Browser terminal dropped unsafe URL variable %s", key)
 
     # Defence in depth: even a future explicit allowlist addition cannot expose
     # a credential-shaped variable without a separately reviewed exception.

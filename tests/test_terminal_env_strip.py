@@ -150,6 +150,38 @@ class TestTerminalEnvStrip:
         assert "HTTPS_PROXY" not in env
         assert "https_proxy" not in env
 
+    @pytest.mark.parametrize("key", [
+        "NPM_REGISTRY",
+        "npm_config_registry",
+        "GITHUB_API_BASE",
+        "GITHUB_RELEASE_MIRROR",
+        "CLAUDE_INSTALLER_URL",
+        "HERMES_PIP_URL",
+        "DEEPWIKI_MCP_URL",
+        "EXA_MCP_URL",
+    ])
+    def test_drops_allowlisted_urls_with_embedded_credentials(self, key):
+        env = _build_terminal_shell_env()({
+            "HOME": "/app",
+            key: "https://svc:PASS_SENTINEL@service.example/path",
+        })
+        assert key not in env
+        assert "PASS_SENTINEL" not in repr(env)
+
+    def test_unsafe_url_drop_is_observable_without_logging_value(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="app"):
+            env = _build_terminal_shell_env()({
+                "HOME": "/app",
+                "HTTPS_PROXY": "proxy.example:8080",
+            })
+
+        assert "HTTPS_PROXY" not in env
+        combined = " ".join(caplog.messages)
+        assert "HTTPS_PROXY" in combined
+        assert "proxy.example:8080" not in combined
+
     def test_does_not_mutate_input(self):
         """Caller's env dict (typically os.environ) must not be modified."""
         build = _build_terminal_shell_env()
@@ -173,6 +205,9 @@ class TestTerminalEnvStrip:
         "ENABLE_CLIENT_ID",
         "LC_APIKEY",
         "ENABLE_PRIVATEKEY",
+        "LC_GH_PAT",
+        "ENABLE_NPM_AUTH",
+        "LC_SESSION_COOKIE",
     ])
     def test_pattern_match_strips_all_credential_shapes(self, key):
         """A new credential-shaped variable cannot leak by default."""
