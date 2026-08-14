@@ -379,10 +379,15 @@ _TERMINAL_PROXY_VARS = frozenset({
     "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
 })
 _CREDENTIAL_SHAPED_ENV_PATTERN = re.compile(
-    r"(?:^|_)(?:TOKEN|SECRET|PASSWORD|CREDENTIALS?|KEY)(?:_|$)",
+    r"TOKEN|SECRET|PASSWORD|CREDENTIALS?|API[_-]?KEY|PRIVATE[_-]?KEY"
+    r"|CLIENT[_-]?ID|(?:^|_)KEY(?:_|$)",
     re.IGNORECASE,
 )
-_TERMINAL_CREDENTIAL_EXCEPTIONS = frozenset({BROKER_URL_ENV})
+_TERMINAL_CREDENTIAL_EXCEPTIONS = frozenset({
+    BROKER_URL_ENV,
+    # Boolean feature flag; contains APIKEY but never credential material.
+    "ENABLE_SP_APIKEYHELPER",
+})
 
 
 def _build_terminal_shell_env(base_env: dict) -> dict:
@@ -412,7 +417,12 @@ def _build_terminal_shell_env(base_env: dict) -> dict:
         except ValueError:
             shell_env.pop(key, None)
             continue
-        if parsed.username is not None or parsed.password is not None:
+        if (
+            parsed.scheme not in ("http", "https")
+            or parsed.hostname is None
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
             shell_env.pop(key, None)
 
     # Defence in depth: even a future explicit allowlist addition cannot expose
@@ -2430,10 +2440,9 @@ def create_session():
         data = request.get_json(silent=True)
         label = data.get("label", "") if isinstance(data, dict) else ""
         master_fd, slave_fd = pty.openpty()
-        # Set up environment for the shell — strips PAT, SP creds, registry
-        # tokens, the workshop challenge-repo token, and other secrets that
-        # must not be readable from the user's terminal. See
-        # _build_terminal_shell_env docstring for the full list.
+        # Build the browser PTY's deny-by-default inherited environment. The
+        # explicit allowlist retains required shell/broker/feature plumbing;
+        # ambient credentials and unknown variables never enter Popen(env=...).
         shell_env = _build_terminal_shell_env(os.environ)
         # Ensure HOME is set correctly
         if not shell_env.get("HOME") or shell_env["HOME"] == "/":

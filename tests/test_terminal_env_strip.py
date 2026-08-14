@@ -8,6 +8,8 @@ since the full create_session path is hard to unit-test (PTY + Popen).
 
 from __future__ import annotations
 
+from unittest import mock
+
 import pytest
 
 
@@ -134,12 +136,16 @@ class TestTerminalEnvStrip:
         assert env["CODA_VENV_PYTHON"] == "/app/.venv/bin/python"
         assert "MY_CUSTOM_VAR" not in env
 
-    def test_drops_proxy_urls_with_embedded_credentials(self):
+    @pytest.mark.parametrize("proxy", [
+        "http://svc:password@proxy.example:8080",
+        "svc:password@proxy.example:8080",
+    ])
+    def test_drops_proxy_urls_with_embedded_credentials(self, proxy):
         build = _build_terminal_shell_env()
         env = build({
             "HOME": "/app",
-            "HTTPS_PROXY": "http://svc:password@proxy.example:8080",
-            "https_proxy": "http://svc:password@proxy.example:8080",
+            "HTTPS_PROXY": proxy,
+            "https_proxy": proxy,
         })
         assert "HTTPS_PROXY" not in env
         assert "https_proxy" not in env
@@ -163,6 +169,10 @@ class TestTerminalEnvStrip:
         "FUTURE_SERVICE_KEY",
         "FUTURE_SERVICE_API_KEY",
         "FUTURE_SERVICE_CREDENTIAL",
+        "FUTURE_CLIENT_ID",
+        "ENABLE_CLIENT_ID",
+        "LC_APIKEY",
+        "ENABLE_PRIVATEKEY",
     ])
     def test_pattern_match_strips_all_credential_shapes(self, key):
         """A new credential-shaped variable cannot leak by default."""
@@ -182,4 +192,54 @@ class TestTerminalEnvStrip:
 
         assert env[app.BROKER_URL_ENV] == broker_url
         assert "UNREVIEWED_ACCESS_TOKEN" not in env
-        assert app._TERMINAL_CREDENTIAL_EXCEPTIONS == frozenset({app.BROKER_URL_ENV})
+        assert app._TERMINAL_CREDENTIAL_EXCEPTIONS == frozenset({
+            app.BROKER_URL_ENV,
+            "ENABLE_SP_APIKEYHELPER",
+        })
+
+    def test_session_launch_uses_sanitized_env(self, tmp_path, monkeypatch):
+        """The actual PTY Popen sink must receive the deny-by-default env."""
+        import app
+
+        broker_url = "http://127.0.0.1:12345/token/" + "a" * 43
+        broker_bin = tmp_path / ".coda-broker-bin"
+        broker_bin.mkdir()
+        for key, value in {
+            "HOME": str(tmp_path),
+            "PATH": "/usr/bin",
+            "ENABLE_SP_APIKEYHELPER": "true",
+            app.BROKER_URL_ENV: broker_url,
+            "GH_TOKEN": "GH_LEAK_SENTINEL",
+            "CODA_BOOTSTRAP_SECRET": "BOOTSTRAP_LEAK_SENTINEL",
+            "DATABRICKS_CLIENT_SECRET": "CLIENT_LEAK_SENTINEL",
+            "FUTURE_SERVICE_TOKEN": "FUTURE_LEAK_SENTINEL",
+        }.items():
+            monkeypatch.setenv(key, value)
+
+        proc = mock.Mock(pid=99999)
+        with mock.patch.object(app, "check_authorization", return_value=(True, "owner")), \
+             mock.patch("pty.openpty", return_value=(10, 11)), \
+             mock.patch("subprocess.Popen", return_value=proc) as popen, \
+             mock.patch("os.close"), \
+             mock.patch("threading.Thread") as thread:
+            thread.return_value.start = mock.Mock()
+            response = app.app.test_client().post("/api/session", json={"label": "env-boundary"})
+
+        assert response.status_code == 200
+        session_id = response.get_json()["session_id"]
+        try:
+            launched_env = popen.call_args.kwargs["env"]
+            serialized = repr(launched_env)
+            assert launched_env[app.BROKER_URL_ENV] == broker_url
+            assert launched_env["DATABRICKS_CONFIG_PROFILE"] == "omnigents-host"
+            assert launched_env["PATH"].split(":")[0] == str(broker_bin)
+            for sentinel in (
+                "GH_LEAK_SENTINEL",
+                "BOOTSTRAP_LEAK_SENTINEL",
+                "CLIENT_LEAK_SENTINEL",
+                "FUTURE_LEAK_SENTINEL",
+            ):
+                assert sentinel not in serialized
+        finally:
+            with app.sessions_lock:
+                app.sessions.pop(session_id, None)
