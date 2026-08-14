@@ -16,6 +16,8 @@ import requests
 
 logger = logging.getLogger(__name__)
 
+CONTENT_FILTER_PROXY_URL = "http://127.0.0.1:4000"
+
 
 def discover_serving_endpoints(host: str, token: str, timeout: float = 5.0) -> set[str]:
     """Return the set of READY serving-endpoint names at the workspace.

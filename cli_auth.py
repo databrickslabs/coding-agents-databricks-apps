@@ -19,7 +19,11 @@ import logging
 from dataclasses import dataclass
 
 from claude_otel import refresh_claude_otel_token
-from utils import OPENCODE_AUTH_KEY_FIELD, is_opencode_api_credential
+from utils import (
+    CONTENT_FILTER_PROXY_URL,
+    OPENCODE_AUTH_KEY_FIELD,
+    is_opencode_api_credential,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -333,7 +337,7 @@ def _update_hermes(token):
                 trusted_by_indent.pop(known_indent, None)
         if stripped.startswith("base_url:"):
             base_url = stripped.split(":", 1)[1].strip().strip("'\"").rstrip("/")
-            trusted = base_url == "http://127.0.0.1:4000"
+            trusted = base_url == CONTENT_FILTER_PROXY_URL
             trusted_by_indent[indent] = trusted
             if trusted:
                 trusted_blocks += 1

@@ -25,7 +25,13 @@ import os
 import subprocess
 from pathlib import Path
 
-from utils import adapt_instructions_file, ensure_https, get_gateway_host
+from cli_auth import _atomic_write_text
+from utils import (
+    CONTENT_FILTER_PROXY_URL,
+    adapt_instructions_file,
+    ensure_https,
+    get_gateway_host,
+)
 
 # Opt-out: allow operators to disable Hermes bundling without removing the file.
 if os.environ.get("ENABLE_HERMES", "true").strip().lower() in ("false", "0", "no"):
@@ -132,7 +138,7 @@ else:
     auth_token = token
     print(f"Hermes will route via content-filter proxy -> {host}/serving-endpoints")
 
-base_url = "http://127.0.0.1:4000"
+base_url = CONTENT_FILTER_PROXY_URL
 
 # 4. Write ~/.hermes/config.yaml
 config_path = hermes_home / "config.yaml"
@@ -218,7 +224,7 @@ if config_path.exists():
         should_write = False
 
 if should_write:
-    config_path.write_text("\n".join(lines))
+    _atomic_write_text(str(config_path), "\n".join(lines))
     # 0o600 — the file contains the plaintext PAT in `api_key:`. Without an
     # explicit chmod the file inherits umask-derived perms (often 0o644 on
     # container filesystems) which makes the token world-readable for any

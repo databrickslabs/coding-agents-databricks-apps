@@ -18,6 +18,7 @@ import json
 import subprocess
 from pathlib import Path
 
+from cli_auth import _atomic_write_text
 from utils import adapt_instructions_file, ensure_https, get_gateway_host, get_npm_version
 
 # Opt-out: allow operators to disable Gemini bundling without removing the file.
@@ -134,7 +135,7 @@ GEMINI_API_KEY={auth_token}
 """
 
 env_path = gemini_dir / ".env"
-env_path.write_text(env_content)
+_atomic_write_text(str(env_path), env_content)
 env_path.chmod(0o600)
 print(f"Gemini CLI env configured: {env_path}")
 

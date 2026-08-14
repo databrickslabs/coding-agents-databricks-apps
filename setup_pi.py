@@ -1,14 +1,12 @@
 #!/usr/bin/env python
 """Configure the Pi coding agent (@earendil-works/pi-coding-agent) for Databricks.
 
-Pi is Anthropic-wire-compatible: it authenticates to the same Databricks AI
-Gateway `/anthropic` route CoDA already uses for Claude Code, with the same
-service-principal token. So this is not a new gateway integration — it writes a
-Pi-shaped config over the existing, proven auth path.
+Pi uses the same workspace AI Gateway provider dialects and model-services
+catalog as ucode: Anthropic, Responses, Gemini, and MLflow chat completions.
+No harness route uses the legacy external ``*.ai-gateway.*`` hostname.
 
-Config file: ~/.pi/agent/models.json (JSON). We configure ONLY the
-`databricks-claude` provider (Pi's optional openai/gemini providers are left
-out). Token freshness: `apiKey` is written as a `!command` that reads the
+Config file: ~/.pi/agent/models.json (JSON). Token freshness: every provider's
+`apiKey` is a `!command` that reads the
 current token from ~/.databrickscfg. Pi resolves `!`-prefixed values as shell
 commands *fresh per request* (docs/models.md: "shell commands are resolved at
 request time"), so a long-running pi always sends a live token and survives PAT
@@ -25,13 +23,13 @@ import json
 import subprocess
 from pathlib import Path
 
-from utils import (
-    adapt_instructions_file,
-    discover_serving_endpoints,
-    ensure_https,
-    get_gateway_host,
-    get_npm_version,
-    pick_in_geo_model,
+from cli_auth import _atomic_write_text
+from utils import adapt_instructions_file, get_npm_version
+from gateway_models import (
+    claude_model_capabilities,
+    discover_model_catalog,
+    pi_base_urls,
+    preferred_model,
 )
 from token_helper import resolve_databricks_token
 
@@ -54,7 +52,7 @@ host = os.environ.get("DATABRICKS_HOST", "")
 # then user PAT. This token is only used during setup; Pi writes a helper command
 # for per-request freshness below.
 token = resolve_databricks_token() or ""
-pi_model = os.environ.get("PI_MODEL", "databricks-claude-opus-4-8")
+pi_model = os.environ.get("PI_MODEL", "system.ai.claude-sonnet-5")
 
 PI_PACKAGE = "@earendil-works/pi-coding-agent"
 
@@ -105,73 +103,16 @@ if not host or not token:
     print("Pi CLI installed — config will be set after PAT setup")
     exit(0)
 
-# Strip trailing slash and ensure https:// prefix
-host = ensure_https(host.rstrip("/"))
-
-gateway_host = get_gateway_host()
-gateway_token = token if gateway_host else ""
-if gateway_host and not gateway_token:
-    print("Warning: AI Gateway resolved but DATABRICKS_TOKEN missing, falling back to DATABRICKS_HOST")
-    gateway_host = ""
-
-if gateway_host:
-    base_url = f"{gateway_host}/anthropic"
-    auth_token = gateway_token
-    print(f"Using Databricks AI Gateway: {gateway_host}")
-else:
-    base_url = f"{host}/serving-endpoints/anthropic"
-    auth_token = token
-    print(f"Using Databricks Host: {host}")
-
-# spec-D (D-R3): when OSS tracing is on, route Pi through the content-filter proxy
-# (127.0.0.1:4000) like OpenCode/Hermes, so the proxy emits a trace span per Pi
-# request. The proxy forwards to the real upstream via PROXY_UPSTREAM_BASE. Off by
-# default → Pi keeps going direct to the gateway (no behaviour change).
-if os.environ.get("MLFLOW_OSS_TRACKING_ENABLED", "false").lower() == "true":
-    proxy_port = os.environ.get("PROXY_PORT", "4000")
-    print(f"Pi routed via content-filter proxy (127.0.0.1:{proxy_port}) for tracing; "
-          f"upstream={base_url}")
-    os.environ.setdefault("PROXY_UPSTREAM_BASE", base_url)
-    base_url = f"http://127.0.0.1:{proxy_port}"
-
-# Validate the requested model against what's actually served in this geo, the
-# same way setup_claude.py does — Pi hits the identical /anthropic route, so the
-# same model chain applies. Avoids writing a model the workspace's Geo
-# Designated Services policy doesn't serve.
-available = discover_serving_endpoints(host, token)
-if available:
-    print(f"Discovered {len(available)} READY serving endpoints at workspace")
-
-# Keep the whole compatible Claude picker, not just the selected default. Pi's
-# old config wrote one model, so Ctrl+P / --model could not switch even though
-# the Gateway served other Claude models. When endpoint discovery is available,
-# filter this list to READY endpoints; when discovery is unavailable, preserve
-# the known candidate list rather than silently collapsing the picker to one
-# model. The live verifier reports parity separately instead of treating that
-# fallback as proof of availability.
-pi_candidates = [
-    pi_model,
-    "databricks-claude-haiku-4-5",
-    "databricks-claude-opus-4-8",
-    "databricks-claude-opus-4-7",
-    "databricks-claude-opus-4-6",
-    "databricks-claude-sonnet-4-6",
-    "databricks-claude-sonnet-4-5",
-]
-# Preserve order while removing duplicate PI_MODEL entries.
-pi_candidates = list(dict.fromkeys(pi_candidates))
-if available:
-    served_candidates = [m for m in pi_candidates if m in available]
-    model_picker = served_candidates or [pi_model]
-else:
-    model_picker = pi_candidates
-active_model = pick_in_geo_model(
-    pi_candidates,
-    available,
-    fallback=pi_model,
+base_urls = pi_base_urls(host)
+catalog = discover_model_catalog(host, token)
+claude_models = catalog["anthropic"] or [pi_model]
+active_model = preferred_model(pi_model, claude_models)
+print(f"Using workspace AI Gateway: {base_urls['claude']}")
+print(
+    "Discovered model-services: "
+    f"claude={len(catalog['anthropic'])}, openai={len(catalog['openai'])}, "
+    f"gemini={len(catalog['gemini'])}, oss={len(catalog['oss'])}"
 )
-if available and active_model != pi_model:
-    print(f"PI_MODEL={pi_model} not served at this workspace, using {active_model}")
 
 # 3. Write ~/.pi/agent/models.json (the databricks-claude provider only).
 # Read-merge-write so a re-run preserves keys we don't own.
@@ -202,25 +143,96 @@ api_key_command = helper_command(helper_path)
 
 config["model"] = f"databricks-claude/{active_model}"
 config.setdefault("providers", {})
+for owned_provider in (
+    "databricks-claude",
+    "databricks-openai",
+    "databricks-gemini",
+    "databricks-mlflow",
+):
+    config["providers"].pop(owned_provider, None)
+# Mirrors ucode's `_pi_claude_model_entry`. Databricks model ids don't match
+# Pi's built-in Anthropic ids, so a bare entry silently inherits Pi's 128k/4k
+# defaults — the limits have to be explicit. Newer Claude tiers need
+# `forceAdaptiveThinking`: without it Pi sends `thinking: {type: "enabled"}` and
+# the endpoint answers 400 "thinking.type.enabled is not supported for this
+# model" (seen live on opus-5).
+_claude_specs = {spec["id"]: spec for spec in (catalog.get("anthropic_specs") or [])}
+
+
+def _pi_model_entry(model: str) -> dict:
+    # The version policy is local, so a discovery outage must not silently
+    # change limits or drop adaptive thinking.
+    spec = _claude_specs.get(model) or {**claude_model_capabilities(model), "image_input": True}
+    entry = {
+        "id": model,
+        "reasoning": True,
+        "input": ["text", "image"] if spec.get("image_input", True) else ["text"],
+        "contextWindow": spec.get("context_window") or 200_000,
+        "maxTokens": spec.get("max_tokens") or 64_000,
+    }
+    if spec.get("force_adaptive_thinking"):
+        entry["compat"] = {"forceAdaptiveThinking": True}
+    return entry
+
+
 config["providers"]["databricks-claude"] = {
-    "baseUrl": base_url,
+    "baseUrl": base_urls["claude"],
     "api": "anthropic-messages",
     "apiKey": api_key_command,
     "authHeader": True,
     "compat": {"supportsEagerToolInputStreaming": False},
-    # contextWindow is explicit: Pi defaults a custom provider's model to 131072
-    # (128K) when absent. The Databricks FMAPI-served Claude model has a ~1.05M
-    # total-token context window (per Databricks Foundation Model APIs supported-
-    # models docs), so the 128K default badly under-uses it. Set the real window.
-    # NB: the FMAPI *rate* limits are separate (e.g. ~200k input tokens/minute on
-    # the default tier) — that's throughput, not context, and is not fixed here.
-    "models": [
-        {"id": model, "contextWindow": 1000000}
-        for model in model_picker
-    ],
+    "models": [_pi_model_entry(model) for model in claude_models],
 }
+if catalog["openai"]:
+    config["providers"]["databricks-openai"] = {
+        "baseUrl": base_urls["openai"],
+        "api": "openai-responses",
+        "apiKey": api_key_command,
+        "authHeader": True,
+        "models": [
+            {
+                "id": model,
+                "contextWindow": 272_000,
+                "maxTokens": 128_000,
+                "reasoning": True,
+                "input": ["text", "image"],
+                "thinkingLevelMap": {"off": None},
+            }
+            for model in catalog["openai"]
+        ],
+    }
+if catalog["gemini"]:
+    config["providers"]["databricks-gemini"] = {
+        "baseUrl": base_urls["gemini"],
+        "api": "google-generative-ai",
+        "apiKey": api_key_command,
+        "authHeader": True,
+        "models": [{"id": model} for model in catalog["gemini"]],
+    }
+if catalog["oss"]:
+    specs = {spec["id"]: spec for spec in catalog["oss_specs"]}
+    config["providers"]["databricks-mlflow"] = {
+        "baseUrl": base_urls["oss"],
+        "api": "openai-completions",
+        "apiKey": api_key_command,
+        "authHeader": True,
+        "compat": {"supportsStore": False, "supportsStrictMode": False},
+        "models": [
+            {
+                "id": model,
+                **(
+                    {"reasoning": True}
+                    if specs.get(model, {}).get("reasoning") is True
+                    else {}
+                ),
+                "contextWindow": specs.get(model, {}).get("context_window") or 128_000,
+                "maxTokens": specs.get(model, {}).get("max_tokens") or 8_192,
+            }
+            for model in catalog["oss"]
+        ],
+    }
 
-models_path.write_text(json.dumps(config, indent=2))
+_atomic_write_text(str(models_path), json.dumps(config, indent=2))
 models_path.chmod(0o600)
 print(f"Pi configured: {models_path}")
 
@@ -247,6 +259,6 @@ adapt_instructions_file(
 
 print("\nPi CLI ready! Usage:")
 print("  pi                                        # Start Pi")
-print(f"\nEndpoint: {base_url}")
+print(f"\nEndpoint: {base_urls['claude']}")
 print(f"Model: databricks-claude/{active_model}")
 print("Auth: Bearer token (Databricks)")

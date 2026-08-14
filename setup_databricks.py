@@ -78,4 +78,4 @@ if result.returncode == 0:
     except json.JSONDecodeError:
         print("Databricks CLI configured (couldn't parse user)")
 else:
-    print(f"Warning: CLI config may have issues: {result.stderr}")
+    print(f"Warning: CLI config validation failed (exit={result.returncode})")
