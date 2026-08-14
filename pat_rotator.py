@@ -301,10 +301,9 @@ class PATRotator:
         """Revoke only the bootstrap PAT after the first rotation.
 
         Called once after the bootstrap PAT is replaced by a controlled
-        short-lived token.  Lists all tokens, identifies the bootstrap
-        as the most-recently-created token without a "coda-auto-rotated"
-        comment, and revokes only that one.  Other user PATs (notebooks,
-        CI, etc.) are left untouched.
+        short-lived token. Lists all tokens and revokes an untagged bootstrap
+        PAT only when it is the sole non-CoDA candidate. Ambiguous user PATs
+        (notebooks, CI, etc.) fail closed and are left untouched.
         """
         current_id = self._current_token_id
         token = self._current_token
@@ -328,7 +327,7 @@ class PATRotator:
 
         token_infos = resp.json().get("token_infos", [])
 
-        # Find the bootstrap PAT: newest non-coda token that isn't the current one
+        # Find an unambiguous bootstrap PAT that isn't the current one.
         # A CoDA-rotated token's comment starts with "coda-auto-rotated"
         # (optionally ":<instance>"). The bootstrap PAT never has that prefix,
         # so exclude any coda-tagged token — including ones minted by *other*
@@ -341,9 +340,16 @@ class PATRotator:
         if not candidates:
             logger.info("Bootstrap cleanup: no bootstrap token candidate found")
             return
+        if len(candidates) != 1:
+            logger.warning(
+                "Bootstrap cleanup skipped: %s untagged PAT candidates are ambiguous",
+                len(candidates),
+            )
+            return
 
-        # The bootstrap PAT is the most recently created candidate
-        bootstrap = max(candidates, key=lambda t: t.get("creation_time", 0))
+        # Revoke only when the bootstrap PAT is uniquely identifiable. Guessing
+        # by creation time can destroy an unrelated notebook/CI PAT.
+        bootstrap = candidates[0]
         tid = bootstrap.get("token_id")
         comment = bootstrap.get("comment", "(no comment)")
 

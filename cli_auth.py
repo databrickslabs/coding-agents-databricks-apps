@@ -17,6 +17,7 @@ import tempfile
 import threading
 import logging
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 from claude_otel import refresh_claude_otel_token
 from utils import (
@@ -32,6 +33,7 @@ if not _HOME or _HOME == "/":
     _HOME = "/app/python/source_code"
 
 _CLI_REFRESH_LOCK = threading.Lock()
+_CONTENT_FILTER_PROXY = urlsplit(CONTENT_FILTER_PROXY_URL)
 _CODA_OPENCODE_REQUIRED_AUTH_HEADER_IDS = frozenset({
     "databricks",
     "databricks-anthropic",
@@ -336,8 +338,27 @@ def _update_hermes(token):
             if known_indent > indent or stripped.startswith("-"):
                 trusted_by_indent.pop(known_indent, None)
         if stripped.startswith("base_url:"):
-            base_url = stripped.split(":", 1)[1].strip().strip("'\"").rstrip("/")
-            trusted = base_url == CONTENT_FILTER_PROXY_URL
+            base_url = (
+                stripped.split(":", 1)[1]
+                .split(" #", 1)[0]
+                .strip()
+                .strip("'\"")
+                .rstrip("/")
+            )
+            try:
+                parsed = urlsplit(base_url)
+                trusted = (
+                    parsed.scheme == _CONTENT_FILTER_PROXY.scheme
+                    and parsed.hostname in (_CONTENT_FILTER_PROXY.hostname, "localhost")
+                    and parsed.port == _CONTENT_FILTER_PROXY.port
+                    and parsed.path in ("", "/")
+                    and parsed.username is None
+                    and parsed.password is None
+                    and not parsed.query
+                    and not parsed.fragment
+                )
+            except ValueError:
+                trusted = False
             trusted_by_indent[indent] = trusted
             if trusted:
                 trusted_blocks += 1

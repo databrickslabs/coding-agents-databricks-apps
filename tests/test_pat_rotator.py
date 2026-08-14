@@ -564,6 +564,25 @@ class TestInstanceNaming:
         assert mock_post.call_count == 1
         assert mock_post.call_args[1]["json"]["token_id"] == "tid-bootstrap"
 
+    @mock.patch("pat_rotator.requests.get")
+    @mock.patch("pat_rotator.requests.post")
+    def test_bootstrap_cleanup_skips_ambiguous_user_pats(self, mock_post, mock_get):
+        """Never guess which untagged PAT is the bootstrap credential."""
+        list_resp = mock.MagicMock(status_code=200)
+        list_resp.json.return_value = {"token_infos": [
+            {"token_id": "tid-current", "comment": "coda-auto-rotated:me"},
+            {"token_id": "tid-bootstrap", "comment": "bootstrap"},
+            {"token_id": "tid-user", "comment": "notebook PAT"},
+        ]}
+        mock_get.return_value = list_resp
+        rotator = _make_rotator(instance_name="me")
+        rotator._current_token = "dapi-current"
+        rotator._current_token_id = "tid-current"
+
+        rotator.revoke_bootstrap_token()
+
+        mock_post.assert_not_called()
+
 
 class TestConfiguredCLIRefresh:
     @mock.patch("pat_rotator.requests.post")

@@ -392,6 +392,27 @@ class TestUpdateHermes:
         assert "# api_key: this-is-a-comment-not-a-value" in content
         assert "    api_key: should-not-change" in content
 
+    @pytest.mark.parametrize("proxy_url", [
+        "http://localhost:4000",
+        "http://127.0.0.1:4000  # local proxy",
+    ])
+    def test_recognizes_safe_loopback_proxy_variants(
+        self, isolated_home, proxy_url
+    ):
+        from cli_auth import update_cli_tokens
+
+        hermes_dir = isolated_home / ".hermes"
+        hermes_dir.mkdir()
+        path = hermes_dir / "config.yaml"
+        path.write_text(
+            f"model:\n  base_url: {proxy_url}\n  api_key: old-token\n"
+        )
+
+        result = update_cli_tokens("new-token")
+
+        assert result.ok is True
+        assert "api_key: new-token" in path.read_text()
+
     def test_preserves_external_provider_key(self, isolated_home):
         from cli_auth import update_cli_tokens
 
