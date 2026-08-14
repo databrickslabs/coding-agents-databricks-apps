@@ -65,7 +65,7 @@ class PATRotator:
 
     def __init__(self, host=None, rotation_interval=DEFAULT_ROTATION_INTERVAL,
                  token_lifetime=DEFAULT_TOKEN_LIFETIME,
-                 session_count_fn=None, instance_name=None):
+                 session_count_fn=None, instance_name=None, cli_refresh_fn=None):
         self._host = ensure_https(host or os.environ.get("DATABRICKS_HOST", ""))
         # Name of this CoDA instance, used to tag auto-rotated PATs so multiple
         # CoDAs sharing a workspace/identity produce attributable token names.
@@ -75,10 +75,12 @@ class PATRotator:
         self._rotation_interval = rotation_interval
         self._token_lifetime = token_lifetime
         self._session_count_fn = session_count_fn or (lambda: 0)
+        self._cli_refresh_fn = cli_refresh_fn
         self._current_token = os.environ.get("DATABRICKS_TOKEN", "").strip() or None
         self._current_token_id = None
         self._last_rotation_time = None
         self._lock = threading.Lock()
+        self._rotation_lock = threading.Lock()
         self._thread = None
         self._stop_event = threading.Event()
         self._databrickscfg_path = os.path.join(
@@ -175,10 +177,22 @@ class PATRotator:
                     )
                 self._rotate_once()
             except Exception as e:
-                logger.error(f"PAT rotation failed unexpectedly: {e}")
+                logger.error(
+                    "PAT rotation failed unexpectedly (%s)", type(e).__name__
+                )
 
     def _rotate_once(self):
-        """Mint new PAT, persist, revoke old. Returns True on success."""
+        """Serialize rotation attempts so only one token can mint at a time."""
+        if not self._rotation_lock.acquire(blocking=False):
+            logger.warning("PAT rotation skipped: another rotation is in progress")
+            return False
+        try:
+            return self._rotate_once_serialized()
+        finally:
+            self._rotation_lock.release()
+
+    def _rotate_once_serialized(self):
+        """Mint new PAT, persist, refresh all CLIs, then revoke the old PAT."""
         if not self._current_token:
             return False
 
@@ -196,11 +210,13 @@ class PATRotator:
                 timeout=30
             )
         except requests.RequestException as e:
-            logger.error(f"PAT rotation: create request failed: {e}")
+            logger.error(
+                "PAT rotation: create request failed (%s)", type(e).__name__
+            )
             return False
 
         if resp.status_code != 200:
-            logger.error(f"PAT rotation: create failed ({resp.status_code}): {resp.text}")
+            logger.error("PAT rotation: create failed (%s)", resp.status_code)
             return False
 
         data = resp.json()
@@ -214,11 +230,16 @@ class PATRotator:
             self._current_token = new_token
             self._current_token_id = new_token_id
             self._last_rotation_time = time.time()
-        self._persist_token(new_token)
+        config_ok, refresh_result = self._persist_token(new_token)
+        refresh_ok = bool(
+            refresh_result is not None and getattr(refresh_result, "ok", True)
+        )
+        persistence_ok = config_ok and refresh_ok
         app_state.set_last_rotation(new_token_id, self._last_rotation_time)
 
-        # 3. Revoke old token (best-effort — expires naturally anyway)
-        if old_token_id:
+        # 3. Revoke old token only after every credential target accepted the
+        # new token. On a partial failure, retain the old token for recovery.
+        if old_token_id and persistence_ok:
             try:
                 resp = requests.post(
                     f"{self._host}/api/2.0/token/delete",
@@ -235,21 +256,41 @@ class PATRotator:
                                    f"but old token revocation failed ({resp.status_code}). "
                                    f"Old token (id={old_token_id}) will expire naturally in {self._token_lifetime}s.")
             except requests.RequestException as e:
-                logger.warning(f"INFO: PAT rotation complete — new token active (id={new_token_id}), "
-                               f"old token revocation request failed: {e}. "
-                               f"Old token (id={old_token_id}) will expire naturally in {self._token_lifetime}s.")
-        else:
+                logger.warning(
+                    "INFO: PAT rotation complete — new token active (id=%s), "
+                    "old token revocation request failed (%s). Old token "
+                    "(id=%s) will expire naturally in %ss.",
+                    new_token_id,
+                    type(e).__name__,
+                    old_token_id,
+                    self._token_lifetime,
+                )
+        elif old_token_id:
+            logger.warning(
+                "PAT rotation incomplete — new token active (id=%s), but old "
+                "token (id=%s) retained because credential refresh degraded.",
+                new_token_id,
+                old_token_id,
+            )
+        elif persistence_ok:
             logger.info(f"INFO: PAT rotation complete — new token (id={new_token_id}, "
                         f"expires in {self._token_lifetime}s). First rotation — no old token to revoke.")
+        else:
+            logger.warning(
+                "PAT rotation incomplete — first minted token active (id=%s), "
+                "but credential refresh degraded.",
+                new_token_id,
+            )
 
-        # Telemetry: track PAT rotation events (import here to avoid circular deps)
-        try:
-            from telemetry import log_telemetry
-            log_telemetry("event", "pat_rotation")
-        except Exception:
-            pass  # Telemetry must never break rotation
+        # Telemetry records only fully persisted rotations.
+        if persistence_ok:
+            try:
+                from telemetry import log_telemetry
+                log_telemetry("event", "pat_rotation")
+            except Exception:
+                pass  # Telemetry must never break rotation
 
-        return True
+        return persistence_ok
 
     def revoke_bootstrap_token(self):
         """Revoke only the bootstrap PAT after the first rotation.
@@ -314,12 +355,35 @@ class PATRotator:
             logger.warning(f"Bootstrap cleanup: revoke request failed: {e}")
 
     def _persist_token(self, token):
-        """Write rotated token to all persistence layers."""
+        """Write the token and run the bounded configured-CLI refresh path."""
         os.environ["DATABRICKS_TOKEN"] = token
-        self._write_databrickscfg(token)
-        from cli_auth import update_cli_tokens
-        update_cli_tokens(token)
-        logger.info("PAT rotated: all CLIs updated")
+        config_ok = self._write_databrickscfg(token)
+        if self._cli_refresh_fn is None:
+            from cli_auth import update_cli_tokens
+            refresh = update_cli_tokens
+        else:
+            refresh = self._cli_refresh_fn
+
+        try:
+            result = refresh(token)
+        except Exception as error:
+            logger.warning(
+                "PAT rotation CLI refresh failed (%s)", type(error).__name__
+            )
+            return config_ok, None
+
+        failed = tuple(getattr(result, "failed", ()))
+        refresh_ok = bool(getattr(result, "ok", True))
+        if config_ok and refresh_ok:
+            logger.info("PAT rotated: configured CLI auth refresh complete")
+        else:
+            logger.warning(
+                "PAT rotated with degraded credential persistence: "
+                "databrickscfg=%s failed_clis=%s",
+                "ok" if config_ok else "failed",
+                ",".join(failed) if failed else "unknown",
+            )
+        return config_ok, result
 
     def _write_databrickscfg(self, token):
         """Write token to ~/.databrickscfg for CLI/SDK tools.
@@ -341,11 +405,16 @@ class PATRotator:
         preserved = self._read_non_default_sections()
         content = default_block + preserved
         try:
-            with open(self._databrickscfg_path, "w") as f:
-                f.write(content)
+            from cli_auth import _atomic_write_text
+
+            _atomic_write_text(self._databrickscfg_path, content)
             os.chmod(self._databrickscfg_path, 0o600)
+            return True
         except OSError as e:
-            logger.warning(f"Could not write .databrickscfg: {e}")
+            logger.warning(
+                "Could not write .databrickscfg (%s)", type(e).__name__
+            )
+            return False
 
     def _read_non_default_sections(self):
         """Preserve co-owned ~/.databrickscfg sections across a DEFAULT rewrite.

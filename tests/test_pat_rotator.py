@@ -17,6 +17,17 @@ import pytest
 # Helpers
 # ---------------------------------------------------------------------------
 
+@pytest.fixture(autouse=True)
+def _restore_process_token_after_test():
+    """Rotation mutates os.environ; keep test order from leaking auth state."""
+    original = os.environ.get("DATABRICKS_TOKEN")
+    yield
+    if original is None:
+        os.environ.pop("DATABRICKS_TOKEN", None)
+    else:
+        os.environ["DATABRICKS_TOKEN"] = original
+
+
 def _mock_create_response(token_value="dapi-new-token-abc", token_id="tid-new-123",
                           status_code=200):
     """Build a mock requests.Response for token/create."""
@@ -549,3 +560,124 @@ class TestInstanceNaming:
         # Exactly one delete, targeting the non-coda bootstrap token
         assert mock_post.call_count == 1
         assert mock_post.call_args[1]["json"]["token_id"] == "tid-bootstrap"
+
+
+class TestConfiguredCLIRefresh:
+    @mock.patch("pat_rotator.requests.post")
+    def test_successful_rotation_refreshes_cli_auth_once(self, mock_post, tmp_path):
+        from types import SimpleNamespace
+
+        refresh = mock.Mock(return_value=SimpleNamespace(ok=True, failed=()))
+        mock_post.return_value = _mock_create_response("dapi-new", "tid-new")
+        rotator = _make_rotator(cli_refresh_fn=refresh)
+        rotator._current_token = "dapi-old"
+        rotator._current_token_id = None
+        rotator._databrickscfg_path = str(tmp_path / ".databrickscfg")
+
+        assert rotator._rotate_once() is True
+
+        refresh.assert_called_once_with("dapi-new")
+
+    @mock.patch("pat_rotator.requests.post")
+    def test_failed_mint_does_not_refresh_cli_auth(self, mock_post):
+        refresh = mock.Mock()
+        mock_post.return_value = _mock_create_response(status_code=500)
+        rotator = _make_rotator(cli_refresh_fn=refresh)
+        rotator._current_token = "dapi-old"
+
+        assert rotator._rotate_once() is False
+
+        refresh.assert_not_called()
+
+    @mock.patch("pat_rotator.requests.post")
+    def test_partial_refresh_failure_is_observable_without_token(
+        self, mock_post, tmp_path, caplog
+    ):
+        import logging
+        from types import SimpleNamespace
+
+        token = "dapi-DO-NOT-LOG"
+        refresh = mock.Mock(
+            return_value=SimpleNamespace(ok=False, failed=("opencode",))
+        )
+        mock_post.return_value = _mock_create_response(token, "tid-new")
+        rotator = _make_rotator(cli_refresh_fn=refresh)
+        rotator._current_token = "dapi-old"
+        rotator._current_token_id = "tid-old"
+        rotator._databrickscfg_path = str(tmp_path / ".databrickscfg")
+
+        with caplog.at_level(logging.WARNING, logger="pat_rotator"):
+            assert rotator._rotate_once() is False
+
+        combined = " ".join(caplog.messages)
+        assert "opencode" in combined
+        assert "retained" in combined
+        assert token not in combined
+        assert mock_post.call_count == 1  # old token is retained, not revoked
+
+    @mock.patch("pat_rotator.requests.post")
+    def test_rotation_refresh_never_uses_process_arguments(
+        self, mock_post, tmp_path
+    ):
+        from types import SimpleNamespace
+
+        refresh = mock.Mock(return_value=SimpleNamespace(ok=True, failed=()))
+        mock_post.return_value = _mock_create_response("dapi-new", "tid-new")
+        rotator = _make_rotator(cli_refresh_fn=refresh)
+        rotator._current_token = "dapi-old"
+        rotator._current_token_id = None
+        rotator._databrickscfg_path = str(tmp_path / ".databrickscfg")
+
+        with mock.patch("subprocess.run") as run:
+            assert rotator._rotate_once() is True
+
+        run.assert_not_called()
+
+    def test_databrickscfg_failure_preserves_valid_file(self, tmp_path, monkeypatch):
+        import cli_auth
+
+        path = tmp_path / ".databrickscfg"
+        original = "[DEFAULT]\nhost = https://old\ntoken = old-token\n"
+        path.write_text(original)
+        rotator = _make_rotator()
+        rotator._databrickscfg_path = str(path)
+        monkeypatch.setattr(
+            cli_auth.os,
+            "replace",
+            lambda *_args: (_ for _ in ()).throw(OSError("replace failed")),
+        )
+
+        assert rotator._write_databrickscfg("new-token") is False
+        assert path.read_text() == original
+        assert list(tmp_path.glob("..databrickscfg.*")) == []
+
+    def test_concurrent_rotation_attempt_is_bounded(self, tmp_path):
+        entered = threading.Event()
+        release = threading.Event()
+        calls = []
+
+        def create(*_args, **_kwargs):
+            calls.append("create")
+            entered.set()
+            assert release.wait(2)
+            return _mock_create_response("dapi-new", "tid-new")
+
+        refresh = mock.Mock(return_value=mock.Mock(ok=True, failed=()))
+        rotator = _make_rotator(cli_refresh_fn=refresh)
+        rotator._current_token = "dapi-old"
+        rotator._current_token_id = None
+        rotator._databrickscfg_path = str(tmp_path / ".databrickscfg")
+        results = []
+
+        with mock.patch("pat_rotator.requests.post", side_effect=create):
+            first = threading.Thread(target=lambda: results.append(rotator._rotate_once()))
+            first.start()
+            assert entered.wait(1)
+            results.append(rotator._rotate_once())
+            release.set()
+            first.join(2)
+
+        assert not first.is_alive()
+        assert sorted(results) == [False, True]
+        assert calls == ["create"]
+        refresh.assert_called_once_with("dapi-new")
