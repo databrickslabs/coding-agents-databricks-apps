@@ -394,6 +394,30 @@ _TERMINAL_CREDENTIAL_EXCEPTIONS = frozenset({
 })
 
 
+def _terminal_url_is_safe(key: str, value: str) -> bool:
+    """Reject URL userinfo/malformed ports while accepting Hermes specs."""
+    candidate = value
+    if key == "HERMES_PIP_URL":
+        if not enterprise_config._HERMES_SPEC_RE.match(value):
+            return False
+        direct_url = re.search(r"git\+(https?://\S+)", value)
+        if direct_url is None:
+            return True  # Internal-index package spec, e.g. hermes-agent==1.2.3
+        candidate = direct_url.group(1)
+
+    try:
+        parsed = urlsplit(candidate)
+        parsed.port  # Trigger urllib validation for non-numeric/out-of-range ports.
+    except ValueError:
+        return False
+    return (
+        parsed.scheme in ("http", "https")
+        and parsed.hostname is not None
+        and parsed.username is None
+        and parsed.password is None
+    )
+
+
 def _build_terminal_shell_env(base_env: dict) -> dict:
     """Build a deny-by-default environment for a browser terminal PTY.
 
@@ -412,24 +436,21 @@ def _build_terminal_shell_env(base_env: dict) -> dict:
 
     # Proxy variables are required in enterprise deployments, but URLs with
     # embedded userinfo are credentials rather than safe network configuration.
-    for key in _TERMINAL_URL_VARS:
+    url_keys = {
+        key
+        for key in shell_env
+        if key in _TERMINAL_URL_VARS or key.upper().endswith(("_URL", "_URI"))
+    }
+    for key in url_keys:
         value = shell_env.get(key, "").strip()
         if not value:
             continue
-        try:
-            parsed = urlsplit(value)
-        except ValueError:
-            parsed = None
-        if (
-            parsed is None
-            or parsed.scheme not in ("http", "https")
-            or parsed.hostname is None
-            or parsed.username is not None
-            or parsed.password is not None
-        ):
+        if not _terminal_url_is_safe(key, value):
             shell_env.pop(key, None)
             # Name only: URL values can contain the credential being excluded.
             logger.warning("Browser terminal dropped unsafe URL variable %s", key)
+        else:
+            shell_env[key] = value
 
     # Defence in depth: even a future explicit allowlist addition cannot expose
     # a credential-shaped variable without a separately reviewed exception.

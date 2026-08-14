@@ -168,6 +168,37 @@ class TestTerminalEnvStrip:
         assert key not in env
         assert "PASS_SENTINEL" not in repr(env)
 
+    @pytest.mark.parametrize("value", [
+        "hermes-agent==1.2.3",
+        "hermes-agent @ git+https://git.example/hermes-agent.git@abc123",
+    ])
+    def test_preserves_safe_hermes_package_specs(self, value):
+        env = _build_terminal_shell_env()({"HOME": "/app", "HERMES_PIP_URL": value})
+        assert env["HERMES_PIP_URL"] == value
+
+    def test_drops_credentialed_hermes_package_url(self):
+        value = "hermes-agent @ git+https://svc:PASS_SENTINEL@git.example/repo.git@abc"
+        env = _build_terminal_shell_env()({"HOME": "/app", "HERMES_PIP_URL": value})
+        assert "HERMES_PIP_URL" not in env
+        assert "PASS_SENTINEL" not in repr(env)
+
+    @pytest.mark.parametrize("key", ["ENABLE_MIRROR_URL", "LC_PROXY_URL"])
+    def test_drops_credentialed_dynamic_prefix_urls(self, key):
+        env = _build_terminal_shell_env()({
+            "HOME": "/app",
+            key: "https://svc:PASS_SENTINEL@service.example/path",
+        })
+        assert key not in env
+        assert "PASS_SENTINEL" not in repr(env)
+
+    @pytest.mark.parametrize("value", [
+        "http://proxy.example:notaport",
+        "http://proxy.example:99999",
+    ])
+    def test_drops_urls_with_invalid_ports(self, value):
+        env = _build_terminal_shell_env()({"HOME": "/app", "HTTPS_PROXY": value})
+        assert "HTTPS_PROXY" not in env
+
     def test_unsafe_url_drop_is_observable_without_logging_value(self, caplog):
         import logging
 
