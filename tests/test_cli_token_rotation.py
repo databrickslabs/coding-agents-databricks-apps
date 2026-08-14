@@ -304,7 +304,7 @@ class TestUpdateHermes:
 
 
 class TestAllCLIsUpdated:
-    def test_all_five_updated_in_one_call(self, isolated_home):
+    def test_all_configured_clis_updated_in_one_call(self, isolated_home):
         from cli_auth import update_cli_tokens
 
         # Set up all config files
@@ -329,6 +329,18 @@ class TestAllCLIsUpdated:
         (oc_dir / "auth.json").write_text(
             json.dumps({"databricks": {"type": "api", "key": "old"}})
         )
+        oc_config_dir = isolated_home / ".config" / "opencode"
+        oc_config_dir.mkdir(parents=True)
+        (oc_config_dir / "opencode.json").write_text(json.dumps({
+            "provider": {
+                "databricks": {
+                    "options": {
+                        "apiKey": "old",
+                        "headers": {"Authorization": "Bearer old"},
+                    }
+                }
+            }
+        }))
 
         gemini_dir = isolated_home / ".gemini"
         gemini_dir.mkdir()
@@ -347,6 +359,11 @@ class TestAllCLIsUpdated:
         assert json.loads((pi_dir / "models.json").read_text())["providers"]["databricks-claude"]["apiKey"] == "rotated-token"
         assert "OPENAI_API_KEY=rotated-token" in (codex_dir / ".env").read_text()
         assert json.loads((oc_dir / "auth.json").read_text())["databricks"]["key"] == "rotated-token"
+        opencode_provider = json.loads(
+            (oc_config_dir / "opencode.json").read_text()
+        )["provider"]["databricks"]["options"]
+        assert opencode_provider["apiKey"] == "rotated-token"
+        assert opencode_provider["headers"]["Authorization"] == "Bearer rotated-token"
         assert "GEMINI_API_KEY=rotated-token" in (gemini_dir / ".env").read_text()
         hermes_content = (hermes_dir / "config.yaml").read_text()
         assert hermes_content.count("api_key: rotated-token") == 2
@@ -414,3 +431,163 @@ class TestMissingConfigsAreQuiet:
             update_cli_tokens("some-token")
 
         assert [r.message for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+
+class TestRefreshOrchestration:
+    def test_returns_per_cli_success_report(self, monkeypatch):
+        import cli_auth
+
+        for name in (
+            "_update_claude", "_update_pi", "_update_codex", "_update_opencode",
+            "_update_opencode_provider_headers", "_update_gemini", "_update_hermes",
+        ):
+            monkeypatch.setattr(cli_auth, name, lambda _token: True)
+
+        result = cli_auth.update_cli_tokens("rotated-token")
+
+        assert result.ok is True
+        assert result.failed == ()
+        assert "rotated-token" not in repr(result)
+        assert result.updated == (
+            "claude", "pi", "codex", "opencode", "opencode_provider",
+            "gemini", "hermes",
+        )
+
+    def test_partial_failure_is_bounded_observable_and_continues(
+        self, monkeypatch, caplog
+    ):
+        import logging
+        import cli_auth
+
+        calls = []
+
+        def succeed(name):
+            return lambda _token: calls.append(name) or True
+
+        for name, function_name in (
+            ("claude", "_update_claude"),
+            ("pi", "_update_pi"),
+            ("codex", "_update_codex"),
+            ("opencode_provider", "_update_opencode_provider_headers"),
+            ("gemini", "_update_gemini"),
+            ("hermes", "_update_hermes"),
+        ):
+            monkeypatch.setattr(cli_auth, function_name, succeed(name))
+
+        token = "dapi-DO-NOT-LOG"
+        monkeypatch.setattr(
+            cli_auth,
+            "_update_opencode",
+            lambda _token: (_ for _ in ()).throw(RuntimeError(f"bad {token}")),
+        )
+
+        with caplog.at_level(logging.WARNING, logger="cli_auth"):
+            result = cli_auth.update_cli_tokens(token)
+
+        assert result.ok is False
+        assert result.failed == ("opencode",)
+        assert "opencode_provider" in calls
+        assert "hermes" in calls
+        assert "opencode" in " ".join(caplog.messages)
+        assert token not in " ".join(caplog.messages)
+
+    def test_concurrent_refreshes_are_serialized(self, monkeypatch):
+        import threading
+        import time
+        import cli_auth
+
+        entered = threading.Event()
+        release = threading.Event()
+        state_lock = threading.Lock()
+        active = 0
+        max_active = 0
+
+        def blocking(_token):
+            nonlocal active, max_active
+            with state_lock:
+                active += 1
+                max_active = max(max_active, active)
+            entered.set()
+            assert release.wait(2)
+            with state_lock:
+                active -= 1
+            return False
+
+        monkeypatch.setattr(cli_auth, "_update_claude", blocking)
+        for name in (
+            "_update_pi", "_update_codex", "_update_opencode",
+            "_update_opencode_provider_headers", "_update_gemini", "_update_hermes",
+        ):
+            monkeypatch.setattr(cli_auth, name, lambda _token: False)
+
+        results = []
+        first = threading.Thread(
+            target=lambda: results.append(cli_auth.update_cli_tokens("same-token"))
+        )
+        second = threading.Thread(
+            target=lambda: results.append(cli_auth.update_cli_tokens("same-token"))
+        )
+        first.start()
+        assert entered.wait(1)
+        second.start()
+        time.sleep(0.05)
+        release.set()
+        first.join(2)
+        second.join(2)
+
+        assert not first.is_alive() and not second.is_alive()
+        assert max_active == 1
+        assert len(results) == 2
+        assert all(result.ok for result in results)
+
+    def test_refresh_lock_timeout_is_reported(self):
+        import cli_auth
+
+        assert cli_auth._CLI_REFRESH_LOCK.acquire(timeout=1)
+        try:
+            result = cli_auth.update_cli_tokens("token", lock_timeout=0)
+        finally:
+            cli_auth._CLI_REFRESH_LOCK.release()
+
+        assert result.ok is False
+        assert result.failed == ("refresh_lock",)
+
+    def test_idempotent_refresh_does_not_rewrite_unchanged_file(
+        self, isolated_home
+    ):
+        import cli_auth
+
+        claude_dir = isolated_home / ".claude"
+        claude_dir.mkdir()
+        path = claude_dir / "settings.json"
+        path.write_text(json.dumps({"env": {"ANTHROPIC_AUTH_TOKEN": "same-token"}}))
+        cli_auth.update_cli_tokens("same-token")
+
+        with mock.patch.object(
+            cli_auth, "_atomic_write_text", wraps=cli_auth._atomic_write_text
+        ) as write:
+            result = cli_auth.update_cli_tokens("same-token")
+
+        assert result.ok is True
+        write.assert_not_called()
+
+    def test_atomic_failure_preserves_valid_file_and_cleans_temp(
+        self, isolated_home, monkeypatch
+    ):
+        import cli_auth
+
+        claude_dir = isolated_home / ".claude"
+        claude_dir.mkdir()
+        path = claude_dir / "settings.json"
+        original = json.dumps({"env": {"ANTHROPIC_AUTH_TOKEN": "old-token"}})
+        path.write_text(original)
+        monkeypatch.setattr(
+            cli_auth.os, "replace", lambda *_args: (_ for _ in ()).throw(OSError("replace failed"))
+        )
+
+        result = cli_auth.update_cli_tokens("new-token")
+
+        assert result.ok is False
+        assert result.failed == ("claude",)
+        assert path.read_text() == original
+        assert list(claude_dir.glob(".settings.json.*")) == []
