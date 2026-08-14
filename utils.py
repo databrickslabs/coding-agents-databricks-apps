@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import os
 import re
 import subprocess
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -425,6 +427,22 @@ def config_profile_env(profile: str, base_env: dict | None = None) -> dict:
     for key in _PROFILE_SHADOWING_ENV_VARS:
         env.pop(key, None)
     return env
+
+
+@contextmanager
+def databrickscfg_update_lock(path: str | Path):
+    """Serialize read-modify-write ownership of co-managed profile sections."""
+    config_path = Path(path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = Path(f"{config_path}.lock")
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        os.chmod(lock_path, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
 
 
 def read_non_default_databrickscfg_sections(path: str | Path) -> str:

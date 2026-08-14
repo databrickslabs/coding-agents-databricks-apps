@@ -28,6 +28,10 @@ if not _HOME or _HOME == "/":
     _HOME = "/app/python/source_code"
 
 _CLI_REFRESH_LOCK = threading.Lock()
+_CODA_OPENCODE_REQUIRED_AUTH_HEADER_IDS = frozenset({
+    "databricks",
+    "databricks-anthropic",
+})
 _CODA_OPENCODE_PROVIDER_IDS = frozenset({
     "databricks",  # legacy pre-gateway provider id
     "databricks-anthropic",
@@ -180,9 +184,13 @@ def _update_pi(token):
     provider = config.get("providers", {}).get("databricks-claude")
     if provider is None:
         return False
-    if not isinstance(provider, dict) or "apiKey" not in provider:
-        raise ValueError("Pi credential field is missing")
-    if str(provider["apiKey"]).startswith("!") or provider["apiKey"] == token:
+    if (
+        not isinstance(provider, dict)
+        or "apiKey" not in provider
+        or not isinstance(provider["apiKey"], str)
+    ):
+        raise ValueError("Pi credential field is missing or invalid")
+    if provider["apiKey"].startswith("!") or provider["apiKey"] == token:
         return False
     provider["apiKey"] = token
     _atomic_write_text(path, json.dumps(config, indent=2))
@@ -247,6 +255,16 @@ def _update_opencode_provider_headers(token):
         if headers is not None and not isinstance(headers, dict):
             raise ValueError(f"OpenCode provider headers invalid for {provider_id}")
         if (
+            provider_id in _CODA_OPENCODE_REQUIRED_AUTH_HEADER_IDS
+            and (
+                not isinstance(headers, dict)
+                or not isinstance(headers.get("Authorization"), str)
+            )
+        ):
+            raise ValueError(
+                f"OpenCode Authorization header missing for {provider_id}"
+            )
+        if (
             isinstance(headers, dict)
             and "Authorization" in headers
             and not isinstance(headers["Authorization"], str)
@@ -263,10 +281,13 @@ def _update_opencode_provider_headers(token):
             options["apiKey"] = token
             changed = True
         expected = f"Bearer {token}"
+        authorization = (
+            headers.get("Authorization") if isinstance(headers, dict) else None
+        )
         if (
-            isinstance(headers, dict)
-            and isinstance(headers.get("Authorization"), str)
-            and headers["Authorization"] != expected
+            isinstance(authorization, str)
+            and "{env:" not in authorization
+            and authorization != expected
         ):
             headers["Authorization"] = expected
             changed = True
@@ -285,17 +306,48 @@ def _update_gemini(token):
 
 
 def _update_hermes(token):
-    """Update api_key lines in ~/.hermes/config.yaml."""
+    """Refresh only CoDA's local-proxy Hermes provider blocks.
+
+    Hand-edited configs may contain external providers with unrelated API keys.
+    A key is CoDA-owned only when the same-indentation block declares the local
+    content-filter proxy as its ``base_url``.
+    """
     path = os.path.join(_HOME, ".hermes", "config.yaml")
     if not os.path.exists(path):
         return False
     _ensure_private(path)
     with open(path) as f:
         content = f.read()
-    pattern = re.compile(r"^(  api_key: ).*$", flags=re.MULTILINE)
-    if not pattern.search(content):
-        raise ValueError("Hermes credential field is missing")
-    new_content = pattern.sub(lambda match: match.group(1) + token, content)
+
+    lines = content.splitlines(keepends=True)
+    trusted_by_indent = {}
+    trusted_blocks = 0
+    refreshed_keys = 0
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        for known_indent in tuple(trusted_by_indent):
+            if known_indent > indent or stripped.startswith("-"):
+                trusted_by_indent.pop(known_indent, None)
+        if stripped.startswith("base_url:"):
+            base_url = stripped.split(":", 1)[1].strip().strip("'\"").rstrip("/")
+            trusted = base_url == "http://127.0.0.1:4000"
+            trusted_by_indent[indent] = trusted
+            if trusted:
+                trusted_blocks += 1
+            continue
+        if stripped.startswith("api_key:") and trusted_by_indent.get(indent):
+            newline = "\n" if line.endswith("\n") else ""
+            lines[index] = f"{' ' * indent}api_key: {token}{newline}"
+            refreshed_keys += 1
+
+    if not trusted_blocks:
+        return False
+    if refreshed_keys != trusted_blocks:
+        raise ValueError("Hermes managed credential field is missing")
+    new_content = "".join(lines)
     if new_content == content:
         return False
     _atomic_write_text(path, new_content)

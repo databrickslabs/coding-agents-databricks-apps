@@ -179,7 +179,7 @@ else:
     existing = {}
 existing["hasCompletedOnboarding"] = True
 existing["mcpServers"] = mcp_servers  # ours wins — these are the agent CLIs we manage
-claude_json_path.write_text(json.dumps(existing, indent=2))
+_atomic_write_text(str(claude_json_path), json.dumps(existing, indent=2))
 
 print(f"Onboarding skipped + MCPs configured ({len(mcp_servers)} servers): {claude_json_path}")
 

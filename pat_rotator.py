@@ -14,7 +14,11 @@ import logging
 import requests
 
 import app_state
-from utils import ensure_https, read_non_default_databrickscfg_sections
+from utils import (
+    databrickscfg_update_lock,
+    ensure_https,
+    read_non_default_databrickscfg_sections,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -407,13 +411,14 @@ class PATRotator:
             f"host = {self._host}\n"
             f"token = {token}\n"
         )
-        preserved = self._read_non_default_sections()
-        content = default_block + preserved
         try:
             from cli_auth import _atomic_write_text
 
-            _atomic_write_text(self._databrickscfg_path, content)
-            os.chmod(self._databrickscfg_path, 0o600)
+            with databrickscfg_update_lock(self._databrickscfg_path):
+                preserved = self._read_non_default_sections()
+                content = default_block + preserved
+                _atomic_write_text(self._databrickscfg_path, content)
+                os.chmod(self._databrickscfg_path, 0o600)
             return True
         except OSError as e:
             logger.warning(

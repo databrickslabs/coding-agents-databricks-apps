@@ -209,8 +209,10 @@ class TestEndpointConstruction:
         )
         assert result.returncode == 0, f"stderr: {result.stderr}"
         settings = tmp_path / ".claude" / "settings.json"
-        assert settings.exists()
+        claude_json = tmp_path / ".claude.json"
+        assert settings.exists() and claude_json.exists()
         assert stat.S_IMODE(settings.stat().st_mode) == 0o600
+        assert stat.S_IMODE(claude_json.stat().st_mode) == 0o600
 
     def test_setup_claude_ignores_a_legacy_gateway_override(self, tmp_path):
         """A stale DATABRICKS_GATEWAY_HOST must not redirect model traffic."""

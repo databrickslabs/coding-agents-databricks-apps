@@ -123,6 +123,20 @@ class TestUpdatePi:
         result = json.loads((pi_dir / "models.json").read_text())
         assert result["providers"]["databricks-claude"]["apiKey"] == cmd
 
+    def test_non_string_api_key_fails_closed(self, isolated_home):
+        from cli_auth import update_cli_tokens
+
+        pi_dir = isolated_home / ".pi" / "agent"
+        pi_dir.mkdir(parents=True)
+        path = pi_dir / "models.json"
+        path.write_text(json.dumps({
+            "providers": {"databricks-claude": {"apiKey": {"command": "/helper"}}}
+        }))
+
+        result = update_cli_tokens("new-token")
+
+        assert result.failed == ("pi",)
+
     def test_skips_missing_file(self, isolated_home):
         from cli_auth import update_cli_tokens
         update_cli_tokens("new-token")
@@ -260,6 +274,24 @@ class TestUpdateOpenCode:
         assert config["provider"]["external-openai"] == external
         assert "external-openai" not in result.failed
 
+    def test_anthropic_provider_requires_authorization_header(self, isolated_home):
+        from cli_auth import update_cli_tokens
+
+        config_dir = isolated_home / ".config" / "opencode"
+        config_dir.mkdir(parents=True)
+        path = config_dir / "opencode.json"
+        path.write_text(json.dumps({
+            "provider": {
+                "databricks-anthropic": {
+                    "options": {"apiKey": "old", "headers": {}}
+                }
+            }
+        }))
+
+        result = update_cli_tokens("new-token")
+
+        assert result.failed == ("opencode_provider",)
+
     def test_malformed_managed_provider_options_fail_closed(self, isolated_home):
         from cli_auth import update_cli_tokens
 
@@ -346,6 +378,7 @@ class TestUpdateHermes:
         config = (
             "# api_key: this-is-a-comment-not-a-value\n"
             "model:\n"
+            "  base_url: http://127.0.0.1:4000\n"
             "  api_key: old-token\n"
             "deep:\n"
             "    api_key: should-not-change\n"
@@ -358,6 +391,30 @@ class TestUpdateHermes:
         assert "  api_key: new-token" in content
         assert "# api_key: this-is-a-comment-not-a-value" in content
         assert "    api_key: should-not-change" in content
+
+    def test_preserves_external_provider_key(self, isolated_home):
+        from cli_auth import update_cli_tokens
+
+        hermes_dir = isolated_home / ".hermes"
+        hermes_dir.mkdir()
+        path = hermes_dir / "config.yaml"
+        path.write_text(
+            "model:\n"
+            "  provider: custom\n"
+            "  base_url: http://127.0.0.1:4000\n"
+            "  api_key: old-databricks\n"
+            "fallback_providers:\n"
+            "- provider: openai\n"
+            "  base_url: https://api.openai.com/v1\n"
+            "  api_key: EXTERNAL-KEY-SENTINEL\n"
+        )
+
+        result = update_cli_tokens("new-databricks")
+
+        content = path.read_text()
+        assert result.ok is True
+        assert "api_key: new-databricks" in content
+        assert "api_key: EXTERNAL-KEY-SENTINEL" in content
 
     def test_skips_missing_file(self, isolated_home):
         from cli_auth import update_cli_tokens
@@ -410,7 +467,13 @@ class TestAllCLIsUpdated:
         hermes_dir = isolated_home / ".hermes"
         hermes_dir.mkdir()
         (hermes_dir / "config.yaml").write_text(
-            "model:\n  api_key: old\nfallback_providers:\n- provider: custom\n  api_key: old\n"
+            "model:\n"
+            "  base_url: http://127.0.0.1:4000\n"
+            "  api_key: old\n"
+            "fallback_providers:\n"
+            "- provider: custom\n"
+            "  base_url: http://127.0.0.1:4000\n"
+            "  api_key: old\n"
         )
 
         # One call updates all
@@ -471,7 +534,11 @@ class TestAtomicWrites:
         hermes_dir = isolated_home / ".hermes"
         hermes_dir.mkdir()
         cfg = hermes_dir / "config.yaml"
-        cfg.write_text("model:\n  api_key: old\n")
+        cfg.write_text(
+            "model:\n"
+            "  base_url: http://127.0.0.1:4000\n"
+            "  api_key: old\n"
+        )
         cfg.chmod(0o600)
 
         update_cli_tokens("rotated-token")
@@ -662,7 +729,11 @@ class TestRefreshOrchestration:
         if target == "hermes":
             path = isolated_home / ".hermes" / "config.yaml"
             path.parent.mkdir()
-            path.write_text("model:\n    api_key: old-token\n")
+            path.write_text(
+                "model:\n"
+                "  base_url: http://127.0.0.1:4000\n"
+                "    api_key: old-token\n"
+            )
         else:
             directory = ".codex" if target == "codex" else ".gemini"
             path = isolated_home / directory / ".env"
@@ -697,7 +768,11 @@ class TestRefreshOrchestration:
         codex.write_text("OPENAI_API_KEY=old\n")
         hermes = isolated_home / ".hermes" / "config.yaml"
         hermes.parent.mkdir()
-        hermes.write_text("model:\n  api_key: old\n")
+        hermes.write_text(
+            "model:\n"
+            "  base_url: http://127.0.0.1:4000\n"
+            "  api_key: old\n"
+        )
 
         result = cli_auth.update_cli_tokens(token)
 
