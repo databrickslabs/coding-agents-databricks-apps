@@ -637,7 +637,11 @@ class TestConfiguredCLIRefresh:
         run.assert_not_called()
 
     @mock.patch("pat_rotator.requests.post")
-    def test_unattested_refresh_result_retains_old_token(self, mock_post, tmp_path):
+    def test_unattested_refresh_result_retains_old_token(
+        self, mock_post, tmp_path, caplog
+    ):
+        import logging
+
         refresh = mock.Mock(return_value=object())
         mock_post.return_value = _mock_create_response("dapi-new", "tid-new")
         rotator = _make_rotator(cli_refresh_fn=refresh)
@@ -645,8 +649,11 @@ class TestConfiguredCLIRefresh:
         rotator._current_token_id = "tid-old"
         rotator._databrickscfg_path = str(tmp_path / ".databrickscfg")
 
-        assert rotator._rotate_once() is False
+        with caplog.at_level(logging.INFO, logger="pat_rotator"):
+            assert rotator._rotate_once() is False
+
         assert mock_post.call_count == 1
+        assert "configured CLI auth refresh complete" not in " ".join(caplog.messages)
 
     def test_databrickscfg_failure_preserves_valid_file(self, tmp_path, monkeypatch):
         import cli_auth

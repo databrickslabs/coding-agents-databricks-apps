@@ -378,7 +378,7 @@ class PATRotator:
             return config_ok, None
 
         failed = tuple(getattr(result, "failed", ()))
-        refresh_ok = bool(getattr(result, "ok", True))
+        refresh_ok = getattr(result, "ok", False) is True
         if config_ok and refresh_ok:
             logger.info("PAT rotated: configured CLI auth refresh complete")
         else:

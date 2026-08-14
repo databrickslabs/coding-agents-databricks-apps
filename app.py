@@ -880,9 +880,9 @@ def _configure_all_cli_auth(token):
     if apply_claude_otel_env(settings, token, databricks_host):
         logger.info("Claude Code OTEL export configured")
 
-    with open(settings_path, "w") as f:
-        json.dump(settings, f, indent=2)
+    from cli_auth import _atomic_write_text
 
+    _atomic_write_text(settings_path, json.dumps(settings, indent=2))
     logger.info(f"Claude CLI auth configured: {settings_path}")
 
     # 2. Configure Databricks CLI (~/.databrickscfg) — already called by

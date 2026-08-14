@@ -71,12 +71,24 @@ def _atomic_write_text(path, content):
         # loose mode; mkstemp starts at 0600 and we pin it explicitly.
         os.chmod(tmp, 0o600)
         os.replace(tmp, path)
+        directory_fd = os.open(
+            directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        )
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     except Exception:
         try:
             os.unlink(tmp)
         except OSError:
             pass
         raise
+
+
+def _ensure_private(path):
+    """Every existing file touched by the refresh path carries credentials."""
+    os.chmod(path, 0o600)
 
 
 def update_cli_tokens(token, *, lock_timeout=5.0):
@@ -134,6 +146,7 @@ def _update_claude(token):
     path = os.path.join(_HOME, ".claude", "settings.json")
     if not os.path.exists(path):
         return False
+    _ensure_private(path)
     with open(path) as f:
         settings = json.load(f)
     original = copy.deepcopy(settings)
@@ -161,6 +174,7 @@ def _update_pi(token):
     path = os.path.join(_HOME, ".pi", "agent", "models.json")
     if not os.path.exists(path):
         return False
+    _ensure_private(path)
     with open(path) as f:
         config = json.load(f)
     provider = config.get("providers", {}).get("databricks-claude")
@@ -187,6 +201,7 @@ def _update_opencode(token):
     path = os.path.join(_HOME, ".local", "share", "opencode", "auth.json")
     if not os.path.exists(path):
         return False
+    _ensure_private(path)
     with open(path) as f:
         auth = json.load(f)
     changed = False
@@ -211,6 +226,7 @@ def _update_opencode_provider_headers(token):
     path = os.path.join(_HOME, ".config", "opencode", "opencode.json")
     if not os.path.exists(path):
         return False
+    _ensure_private(path)
     with open(path) as f:
         config = json.load(f)
     providers = config.get("provider")
@@ -261,6 +277,7 @@ def _update_hermes(token):
     path = os.path.join(_HOME, ".hermes", "config.yaml")
     if not os.path.exists(path):
         return False
+    _ensure_private(path)
     with open(path) as f:
         content = f.read()
     pattern = re.compile(r"^(  api_key: ).*$", flags=re.MULTILINE)
@@ -277,6 +294,7 @@ def _replace_dotenv_key(path, key, value):
     """Replace a KEY=value line in a dotenv file."""
     if not os.path.exists(path):
         return False
+    _ensure_private(path)
     with open(path) as f:
         content = f.read()
     pattern = re.compile(rf"^{re.escape(key)}=.*$", flags=re.MULTILINE)

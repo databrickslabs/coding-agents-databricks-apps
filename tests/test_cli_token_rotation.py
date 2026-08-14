@@ -214,10 +214,11 @@ class TestUpdateOpenCode:
         auth_dir.mkdir(parents=True)
         (auth_dir / "auth.json").write_text(json.dumps({"databricks": {"api_key": "old"}}))
 
-        update_cli_tokens("new-token")
+        refresh = update_cli_tokens("new-token")
 
         result = json.loads((auth_dir / "auth.json").read_text())
         assert result["databricks"] == {"api_key": "old"}
+        assert refresh.failed == ("opencode",)
 
     def test_preserves_external_provider_credentials(self, isolated_home):
         from cli_auth import update_cli_tokens
@@ -684,7 +685,7 @@ class TestRefreshOrchestration:
         assert f"OPENAI_API_KEY={token}" in codex.read_text()
         assert f"api_key: {token}" in hermes.read_text()
 
-    def test_atomic_write_fsyncs_before_replace(self, isolated_home):
+    def test_atomic_write_fsyncs_file_and_parent_directory(self, isolated_home):
         import cli_auth
 
         path = isolated_home / "config.json"
@@ -692,11 +693,46 @@ class TestRefreshOrchestration:
         with mock.patch.object(cli_auth.os, "fsync") as fsync:
             cli_auth._atomic_write_text(str(path), "new")
 
-        fsync.assert_called_once()
+        assert fsync.call_count == 2
         assert path.read_text() == "new"
+
+    def test_no_change_refresh_still_tightens_mode(self, isolated_home):
+        import stat
+        import cli_auth
+
+        path = isolated_home / ".claude" / "settings.json"
+        path.parent.mkdir()
+        path.write_text(json.dumps({"apiKeyHelper": "/helper", "env": {}}))
+        path.chmod(0o644)
+
+        result = cli_auth.update_cli_tokens("unused-token")
+
+        assert result.ok is True
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 class TestPostSetupRefreshLogging:
+    def test_bootstrap_writes_claude_settings_mode_600(
+        self, tmp_path, monkeypatch
+    ):
+        import stat
+        import app
+        import utils
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("DATABRICKS_HOST", "https://workspace.example")
+        monkeypatch.setattr(utils, "resolve_and_cache_gateway", lambda: None)
+        monkeypatch.setattr(app, "get_gateway_host", lambda: "https://gateway.example")
+        monkeypatch.setattr(app, "apply_claude_otel_env", lambda *_args: False)
+        monkeypatch.setattr(app.pat_rotator, "_write_databrickscfg", lambda _token: True)
+        monkeypatch.setattr(app, "_venv_python", lambda: "/usr/bin/python3")
+        completed = mock.Mock(returncode=0, stdout="", stderr="")
+        with mock.patch.object(app.subprocess, "run", return_value=completed):
+            app._configure_all_cli_auth("dapi-bootstrap-test")
+
+        settings = tmp_path / ".claude" / "settings.json"
+        assert stat.S_IMODE(settings.stat().st_mode) == 0o600
+
     def test_exception_message_cannot_leak_token(self, monkeypatch, caplog):
         import logging
         import app
