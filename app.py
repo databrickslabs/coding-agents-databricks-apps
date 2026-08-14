@@ -903,9 +903,31 @@ def _configure_all_cli_auth(token):
             if result.returncode == 0:
                 logger.info(f"CLI config updated: {script}")
             else:
-                logger.warning(f"CLI config failed: {script}: {result.stderr[:200]}")
+                logger.warning(
+                    "CLI config failed: %s (exit=%s)", script, result.returncode
+                )
         except Exception as e:
-            logger.warning(f"CLI config error: {script}: {e}")
+            logger.warning("CLI config error: %s (%s)", script, type(e).__name__)
+
+
+def _refresh_cli_auth_after_setup(token):
+    """Reconcile setup/rotation races without exposing token-bearing errors."""
+    try:
+        from cli_auth import update_cli_tokens
+
+        result = update_cli_tokens(token)
+    except Exception as error:
+        logger.warning("Post-setup token sync failed (%s)", type(error).__name__)
+        return False
+    if getattr(result, "ok", False) is not True:
+        failed = tuple(getattr(result, "failed", ()))
+        logger.warning(
+            "Post-setup token sync incomplete: failed=%s",
+            ",".join(failed) if failed else "unknown",
+        )
+        return False
+    logger.info("Post-setup token sync: CLI configs hold the current token")
+    return True
 
 
 def run_setup():
@@ -1014,12 +1036,7 @@ def run_setup():
     # rotation's update_cli_tokens() call silently skips missing config files).
     current_token = os.environ.get("DATABRICKS_TOKEN", "")
     if current_token:
-        try:
-            from cli_auth import update_cli_tokens
-            update_cli_tokens(current_token)
-            logger.info("Post-setup token sync: all CLI configs updated with current token")
-        except Exception as e:
-            logger.warning(f"Post-setup token sync failed: {e}")
+        _refresh_cli_auth_after_setup(current_token)
 
     with setup_lock:
         any_error = any(s["status"] == "error" for s in setup_state["steps"])

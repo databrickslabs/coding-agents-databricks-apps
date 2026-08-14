@@ -59,6 +59,9 @@ def _make_rotator(**kwargs):
         rotation_interval=1,
         token_lifetime=7200,
         session_count_fn=lambda: 1,  # default: pretend 1 active session
+        # PAT unit tests isolate rotation mechanics from real user CLI files.
+        # Dedicated integration tests below assert the refresh seam.
+        cli_refresh_fn=lambda _token: mock.Mock(ok=True, failed=()),
     )
     defaults.update(kwargs)
     return PATRotator(**defaults)
@@ -632,6 +635,18 @@ class TestConfiguredCLIRefresh:
             assert rotator._rotate_once() is True
 
         run.assert_not_called()
+
+    @mock.patch("pat_rotator.requests.post")
+    def test_unattested_refresh_result_retains_old_token(self, mock_post, tmp_path):
+        refresh = mock.Mock(return_value=object())
+        mock_post.return_value = _mock_create_response("dapi-new", "tid-new")
+        rotator = _make_rotator(cli_refresh_fn=refresh)
+        rotator._current_token = "dapi-old"
+        rotator._current_token_id = "tid-old"
+        rotator._databrickscfg_path = str(tmp_path / ".databrickscfg")
+
+        assert rotator._rotate_once() is False
+        assert mock_post.call_count == 1
 
     def test_databrickscfg_failure_preserves_valid_file(self, tmp_path, monkeypatch):
         import cli_auth

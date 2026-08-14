@@ -13,7 +13,6 @@ import copy
 import json
 import os
 import re
-import stat
 import tempfile
 import threading
 import logging
@@ -29,6 +28,13 @@ if not _HOME or _HOME == "/":
     _HOME = "/app/python/source_code"
 
 _CLI_REFRESH_LOCK = threading.Lock()
+_CODA_OPENCODE_PROVIDER_IDS = frozenset({
+    "databricks",  # legacy pre-gateway provider id
+    "databricks-anthropic",
+    "databricks-openai",
+    "databricks-google",
+    "databricks-oss",
+})
 
 
 @dataclass(frozen=True)
@@ -59,13 +65,11 @@ def _atomic_write_text(path, content):
     try:
         with os.fdopen(fd, "w") as f:
             f.write(content)
-        # os.replace() installs the *tmp* file's inode, so it also installs the
-        # tmp file's permissions. Preserve an existing restrictive mode; a new
-        # mkstemp file is already 0600.
-        try:
-            os.chmod(tmp, stat.S_IMODE(os.stat(path).st_mode))
-        except OSError:
-            pass  # target missing/unreadable — callers guard on existence
+            f.flush()
+            os.fsync(f.fileno())
+        # Every target stores a live credential. Never inherit a pre-existing
+        # loose mode; mkstemp starts at 0600 and we pin it explicitly.
+        os.chmod(tmp, 0o600)
         os.replace(tmp, path)
     except Exception:
         try:
@@ -136,9 +140,16 @@ def _update_claude(token):
     env = settings.get("env")
     # apiKeyHelper mode has no static ANTHROPIC_AUTH_TOKEN. OTEL headers are a
     # separate credential surface and still refresh when present.
-    if isinstance(env, dict) and "ANTHROPIC_AUTH_TOKEN" in env:
+    has_static = isinstance(env, dict) and "ANTHROPIC_AUTH_TOKEN" in env
+    has_otel = isinstance(env, dict) and any(
+        key.startswith("OTEL_EXPORTER_OTLP_") and key.endswith("_HEADERS")
+        for key in env
+    )
+    if has_static:
         env["ANTHROPIC_AUTH_TOKEN"] = token
     refresh_claude_otel_token(settings, token)
+    if not settings.get("apiKeyHelper") and not has_static and not has_otel:
+        raise ValueError("Claude credential field is missing")
     if settings == original:
         return False
     _atomic_write_text(path, json.dumps(settings, indent=2))
@@ -153,12 +164,11 @@ def _update_pi(token):
     with open(path) as f:
         config = json.load(f)
     provider = config.get("providers", {}).get("databricks-claude")
-    if not (
-        isinstance(provider, dict)
-        and "apiKey" in provider
-        and not str(provider["apiKey"]).startswith("!")
-        and provider["apiKey"] != token
-    ):
+    if provider is None:
+        return False
+    if not isinstance(provider, dict) or "apiKey" not in provider:
+        raise ValueError("Pi credential field is missing")
+    if str(provider["apiKey"]).startswith("!") or provider["apiKey"] == token:
         return False
     provider["apiKey"] = token
     _atomic_write_text(path, json.dumps(config, indent=2))
@@ -180,11 +190,14 @@ def _update_opencode(token):
     with open(path) as f:
         auth = json.load(f)
     changed = False
-    for provider in auth.values():
-        if (
-            is_opencode_api_credential(provider)
-            and provider.get(OPENCODE_AUTH_KEY_FIELD) != token
-        ):
+    managed_ids = _CODA_OPENCODE_PROVIDER_IDS.intersection(auth)
+    if not managed_ids:
+        return False
+    for provider_id in managed_ids:
+        provider = auth[provider_id]
+        if not is_opencode_api_credential(provider):
+            raise ValueError(f"OpenCode credential shape is invalid for {provider_id}")
+        if provider.get(OPENCODE_AUTH_KEY_FIELD) != token:
             provider[OPENCODE_AUTH_KEY_FIELD] = token
             changed = True
     if not changed:
@@ -204,10 +217,14 @@ def _update_opencode_provider_headers(token):
     if not isinstance(providers, dict):
         return False
     changed = False
-    for provider in providers.values():
+    managed_ids = _CODA_OPENCODE_PROVIDER_IDS.intersection(providers)
+    if not managed_ids:
+        return False
+    for provider_id in managed_ids:
+        provider = providers[provider_id]
         options = provider.get("options") if isinstance(provider, dict) else None
         if not isinstance(options, dict):
-            continue
+            raise ValueError(f"OpenCode provider options missing for {provider_id}")
         api_key = options.get("apiKey")
         if (
             isinstance(api_key, str)
@@ -246,9 +263,10 @@ def _update_hermes(token):
         return False
     with open(path) as f:
         content = f.read()
-    new_content = re.sub(
-        r"^(  api_key: ).*$", rf"\g<1>{token}", content, flags=re.MULTILINE
-    )
+    pattern = re.compile(r"^(  api_key: ).*$", flags=re.MULTILINE)
+    if not pattern.search(content):
+        raise ValueError("Hermes credential field is missing")
+    new_content = pattern.sub(lambda match: match.group(1) + token, content)
     if new_content == content:
         return False
     _atomic_write_text(path, new_content)
@@ -261,9 +279,10 @@ def _replace_dotenv_key(path, key, value):
         return False
     with open(path) as f:
         content = f.read()
-    new_content = re.sub(
-        rf"^{re.escape(key)}=.*$", f"{key}={value}", content, flags=re.MULTILINE
-    )
+    pattern = re.compile(rf"^{re.escape(key)}=.*$", flags=re.MULTILINE)
+    if not pattern.search(content):
+        raise ValueError(f"{key} credential field is missing")
+    new_content = pattern.sub(lambda _match: f"{key}={value}", content)
     if new_content == content:
         return False
     _atomic_write_text(path, new_content)

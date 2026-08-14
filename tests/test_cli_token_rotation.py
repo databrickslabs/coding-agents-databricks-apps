@@ -219,6 +219,46 @@ class TestUpdateOpenCode:
         result = json.loads((auth_dir / "auth.json").read_text())
         assert result["databricks"] == {"api_key": "old"}
 
+    def test_preserves_external_provider_credentials(self, isolated_home):
+        from cli_auth import update_cli_tokens
+
+        auth_dir = isolated_home / ".local" / "share" / "opencode"
+        auth_dir.mkdir(parents=True)
+        (auth_dir / "auth.json").write_text(json.dumps({
+            "databricks-anthropic": {"type": "api", "key": "old-db"},
+            "external-openai": {"type": "api", "key": "external-secret"},
+        }))
+        config_dir = isolated_home / ".config" / "opencode"
+        config_dir.mkdir(parents=True)
+        external = {
+            "options": {
+                "baseURL": "https://external.example/v1",
+                "apiKey": "external-api-key",
+                "headers": {"Authorization": "Bearer external-auth"},
+            }
+        }
+        (config_dir / "opencode.json").write_text(json.dumps({
+            "provider": {
+                "databricks-anthropic": {
+                    "options": {
+                        "baseURL": "https://workspace/anthropic",
+                        "apiKey": "old-db",
+                        "headers": {"Authorization": "Bearer old-db"},
+                    }
+                },
+                "external-openai": external,
+            }
+        }))
+
+        result = update_cli_tokens("new-db-token")
+
+        auth = json.loads((auth_dir / "auth.json").read_text())
+        assert auth["databricks-anthropic"]["key"] == "new-db-token"
+        assert auth["external-openai"]["key"] == "external-secret"
+        config = json.loads((config_dir / "opencode.json").read_text())
+        assert config["provider"]["external-openai"] == external
+        assert "external-openai" not in result.failed
+
     def test_skips_missing_file(self, isolated_home):
         from cli_auth import update_cli_tokens
         update_cli_tokens("new-token")
@@ -591,3 +631,86 @@ class TestRefreshOrchestration:
         assert result.failed == ("claude",)
         assert path.read_text() == original
         assert list(claude_dir.glob(".settings.json.*")) == []
+
+    @pytest.mark.parametrize("target", ["hermes", "codex", "gemini"])
+    def test_present_but_unrecognized_config_is_failure(
+        self, isolated_home, target
+    ):
+        import cli_auth
+
+        if target == "hermes":
+            path = isolated_home / ".hermes" / "config.yaml"
+            path.parent.mkdir()
+            path.write_text("model:\n    api_key: old-token\n")
+        else:
+            directory = ".codex" if target == "codex" else ".gemini"
+            path = isolated_home / directory / ".env"
+            path.parent.mkdir()
+            path.write_text("OTHER=value\n")
+
+        result = cli_auth.update_cli_tokens("new-token")
+
+        assert target in result.failed
+        assert result.ok is False
+
+    def test_refresh_tightens_loose_file_mode(self, isolated_home):
+        import stat
+        import cli_auth
+
+        path = isolated_home / ".claude" / "settings.json"
+        path.parent.mkdir()
+        path.write_text(json.dumps({"env": {"ANTHROPIC_AUTH_TOKEN": "old"}}))
+        path.chmod(0o644)
+
+        result = cli_auth.update_cli_tokens("new")
+
+        assert result.ok is True
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+    def test_backslashes_are_literal_in_dotenv_and_yaml_tokens(self, isolated_home):
+        import cli_auth
+
+        token = r"dapi-a\1b\g<1>"
+        codex = isolated_home / ".codex" / ".env"
+        codex.parent.mkdir()
+        codex.write_text("OPENAI_API_KEY=old\n")
+        hermes = isolated_home / ".hermes" / "config.yaml"
+        hermes.parent.mkdir()
+        hermes.write_text("model:\n  api_key: old\n")
+
+        result = cli_auth.update_cli_tokens(token)
+
+        assert result.ok is True
+        assert f"OPENAI_API_KEY={token}" in codex.read_text()
+        assert f"api_key: {token}" in hermes.read_text()
+
+    def test_atomic_write_fsyncs_before_replace(self, isolated_home):
+        import cli_auth
+
+        path = isolated_home / "config.json"
+        path.write_text("old")
+        with mock.patch.object(cli_auth.os, "fsync") as fsync:
+            cli_auth._atomic_write_text(str(path), "new")
+
+        fsync.assert_called_once()
+        assert path.read_text() == "new"
+
+
+class TestPostSetupRefreshLogging:
+    def test_exception_message_cannot_leak_token(self, monkeypatch, caplog):
+        import logging
+        import app
+        import cli_auth
+
+        token = "dapi-POST-SETUP-DO-NOT-LOG"
+        monkeypatch.setattr(
+            cli_auth,
+            "update_cli_tokens",
+            lambda _token: (_ for _ in ()).throw(RuntimeError(token)),
+        )
+
+        with caplog.at_level(logging.WARNING, logger="app"):
+            assert app._refresh_cli_auth_after_setup(token) is False
+
+        assert token not in " ".join(caplog.messages)
+        assert "RuntimeError" in " ".join(caplog.messages)

@@ -231,8 +231,9 @@ class PATRotator:
             self._current_token_id = new_token_id
             self._last_rotation_time = time.time()
         config_ok, refresh_result = self._persist_token(new_token)
-        refresh_ok = bool(
-            refresh_result is not None and getattr(refresh_result, "ok", True)
+        refresh_ok = (
+            refresh_result is not None
+            and getattr(refresh_result, "ok", False) is True
         )
         persistence_ok = config_ok and refresh_ok
         app_state.set_last_rotation(new_token_id, self._last_rotation_time)
@@ -316,7 +317,9 @@ class PATRotator:
                 logger.warning(f"Bootstrap cleanup: failed to list tokens ({resp.status_code})")
                 return
         except requests.RequestException as e:
-            logger.warning(f"Bootstrap cleanup: list request failed: {e}")
+            logger.warning(
+                "Bootstrap cleanup: list request failed (%s)", type(e).__name__
+            )
             return
 
         token_infos = resp.json().get("token_infos", [])
@@ -352,7 +355,9 @@ class PATRotator:
             else:
                 logger.warning(f"Bootstrap cleanup: failed to revoke {tid} ({del_resp.status_code})")
         except requests.RequestException as e:
-            logger.warning(f"Bootstrap cleanup: revoke request failed: {e}")
+            logger.warning(
+                "Bootstrap cleanup: revoke request failed (%s)", type(e).__name__
+            )
 
     def _persist_token(self, token):
         """Write the token and run the bounded configured-CLI refresh path."""
