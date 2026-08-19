@@ -50,6 +50,6 @@ regression coverage and review evidence before reconsideration.
 
 ## Private source record
 
-The complete six-finding source record remains on the private development line.
+The complete private source record remains on the private development line.
 It is intentionally not copied into the public publication, and the public
 record does not link to a private-only path.

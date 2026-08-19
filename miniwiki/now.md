@@ -6,7 +6,7 @@
 - Local `dev` tracks `private/dev`; the refreshed measurement is `2 0`, so two
   local continuity commits are not yet present on the private mirror.
 - `origin/main` was fetched and confirmed an ancestor of `dev`.
-- The original six-finding engineering record remains intact on private `dev`;
+- The complete engineering record remains intact on private `dev`;
   it is not a public publication artifact.
 - Pre-existing untracked `.isaac/` is preserved.
 
