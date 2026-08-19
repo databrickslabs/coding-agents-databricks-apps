@@ -191,6 +191,7 @@ def test_databricks_wrapper_routes_direct_profile_commands_through_broker(tmp_pa
 class _Response:
     def __init__(self, body):
         self.body = body
+        self.headers = {"Content-Type": "text/plain"}
 
     def __enter__(self):
         return self
