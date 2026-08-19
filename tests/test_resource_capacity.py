@@ -386,40 +386,26 @@ def test_status_projection_redacts_host_process_details(monkeypatch):
             reserve_bytes=0,
         ),
     )
-    monkeypatch.setenv("OMNIGENT_HOST_MAX_RUNNERS", "10")
     monkeypatch.setattr(module, "_process_tree_rss_mb", lambda: 123)
     with mock.patch.object(module, "check_authorization", return_value=(True, "operator")):
         response = module.app.test_client().get("/api/capacity")
     body = response.get_json()
     assert response.status_code == 200
     assert body["process_tree_rss_mb"] == 123
-    # The browser cap and the Omnigent runner cap are BOTH 10 but are
-    # reported as separate counters, and the managed-lease cap is explicitly
-    # not tracked here so no reader can conflate the three.
     assert body["browser_sessions"] == {
         "current": 0,
         "pending": 0,
         "limit": 10,
         "accepting": True,
     }
-    assert body["omnigent"]["active_runner_hard_cap"] == 10
-    assert body["omnigent"]["active_runner_hard_cap_env"] == "OMNIGENT_HOST_MAX_RUNNERS"
-    assert body["omnigent"]["managed_lease_durable_sessions"]["tracked_here"] is False
-    assert "max_sessions_per_lease" in body["omnigent"]["managed_lease_durable_sessions"]["owner"]
     assert "pid" not in body and "token" not in str(body).lower()
 
 
-def test_status_projection_reports_unset_runner_cap_as_unknown(monkeypatch):
-    """Unset/0 means unlimited on the host side — report None, not 0."""
+def test_status_projection_does_not_include_host_details(monkeypatch):
     module = _fresh_app(limit=10)
-    monkeypatch.delenv("OMNIGENT_HOST_MAX_RUNNERS", raising=False)
     with mock.patch.object(module, "check_authorization", return_value=(True, "operator")):
         body = module.app.test_client().get("/api/capacity").get_json()
-    assert body["omnigent"]["active_runner_hard_cap"] is None
-    monkeypatch.setenv("OMNIGENT_HOST_MAX_RUNNERS", "garbage")
-    with mock.patch.object(module, "check_authorization", return_value=(True, "operator")):
-        body = module.app.test_client().get("/api/capacity").get_json()
-    assert body["omnigent"]["active_runner_hard_cap"] is None
+    assert "omnigent" not in body
 
 
 def test_status_projection_marks_telemetry_unavailable():

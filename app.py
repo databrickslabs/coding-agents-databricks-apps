@@ -62,13 +62,9 @@ except Exception:
 SESSION_TIMEOUT_SECONDS = 86400      # No poll for 24 hours = dead session
 CLEANUP_INTERVAL_SECONDS = 900       # Check for stale sessions every 15 min
 GRACEFUL_SHUTDOWN_WAIT = 3          # Seconds to wait after SIGHUP before SIGKILL
-# Browser PTY sessions are deliberately capped independently of Omnigent host
-# runners. The controller below adds a cgroup-v2 memory guard without using
-# host-wide memory, which is not a truthful limit inside an Apps container.
+# Browser PTY launches use this controller and the container's cgroup accounting.
 MAX_CONCURRENT_SESSIONS = max(1, env_int("MAX_CONCURRENT_SESSIONS", 5))
 _browser_capacity = controller_from_env()
-#: Browser launches admitted but not yet inserted into ``sessions``. Guarded by
-#: ``sessions_lock`` so admission counts active + in-flight atomically.
 _browser_pending = 0
 
 # Logging setup
@@ -166,25 +162,19 @@ def handle_sigterm(signum, frame):
         _sess = len(sessions)
     except Exception:
         _sess = "?"
-    logger.warning(
-        "SIGTERM received after %.0fs uptime (%s active sessions) "
-        "— platform is stopping this worker",
-        time.time() - _start_time,
-        _sess,
-    )
+    logger.warning("SIGTERM received after %.0fs uptime (%s active sessions) "
+                   "— platform is stopping this worker",
+                   time.time() - _start_time, _sess)
     # Notify WS clients immediately (HTTP poll clients will see shutting_down on next poll)
     try:
-        socketio.emit("shutting_down", {})
+        socketio.emit('shutting_down', {})
     except Exception:
         pass
-    # Do blocking listener teardown outside the signal callback. The worker
-    # fails closed as soon as the teardown thread invalidates the capability.
     threading.Thread(
         target=_shutdown_sp_token_broker,
         daemon=True,
         name="sp-token-broker-shutdown",
     ).start()
-
 
 # NOTE: Do not register SIGTERM handler at module level.
 # It is installed in initialize_app() for gunicorn only.
@@ -248,7 +238,7 @@ _sp_token_broker_atexit_registered = False
 
 
 def _shutdown_sp_token_broker():
-    """Remove the capability coordinate and close the loopback listener."""
+    """Invalidate the loopback capability and close its listener."""
     global _sp_token_broker_server
     with _sp_token_broker_shutdown_lock:
         server = _sp_token_broker_server
@@ -350,64 +340,53 @@ def _ensure_broker_cli_wrapper() -> bool:
 
 
 _TERMINAL_ENV_ALLOWLIST = frozenset({
-    # Shell/runtime basics.
     "HOME", "PATH", "USER", "LOGNAME", "SHELL", "TERM", "COLORTERM",
     "LANG", "LANGUAGE", "TZ", "TMPDIR", "EDITOR", "VISUAL", "PAGER",
-    "LESS", "NO_COLOR", "FORCE_COLOR",
-    # Enterprise network configuration. Credential-bearing proxy URLs are
-    # rejected separately below; registry credentials live in private files.
-    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
-    "http_proxy", "https_proxy", "no_proxy",
+    "LESS", "NO_COLOR", "FORCE_COLOR", "LC_ALL",
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
     "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "SSL_CERT_FILE", "SSL_CERT_DIR",
     "NODE_EXTRA_CA_CERTS", "ENTERPRISE_MODE", "UV_HTTP_TIMEOUT",
     "NPM_REGISTRY", "npm_config_registry", "GITHUB_API_BASE",
     "GITHUB_RELEASE_MIRROR", "CLAUDE_INSTALLER_URL", "HERMES_PIP_URL",
     "DEEPWIKI_MCP_URL", "EXA_MCP_URL",
-    # Non-secret model and feature selection read by terminal-launched CLIs.
     "ANTHROPIC_MODEL", "PI_MODEL", "GEMINI_MODEL", "CODEX_MODEL",
     "HERMES_MODEL", "HERMES_FALLBACK_MODEL", "ENABLE_FABLE_MODELS",
     "CLAUDE_CODE_DISABLE_AUTO_MEMORY", "CLAUDE_CODE_OTEL_ENABLED",
-    "MLFLOW_TRACING_ENABLED", "MLFLOW_OSS_TRACKING_ENABLED",
-    "PROXY_TRACE_CONTENT", "CODA_OMNIGENT_MODE",
-    # Broker/profile plumbing. The broker URL is an intentionally reviewed
-    # loopback capability; it is not an ambient bearer or client secret.
+    "MLFLOW_TRACING_ENABLED", "MLFLOW_OSS_TRACKING_ENABLED", "PROXY_TRACE_CONTENT",
     "CODA_VENV_PYTHON", "DATABRICKS_CONFIG_FILE", "DATABRICKS_CONFIG_PROFILE",
     BROKER_URL_ENV,
 })
 _TERMINAL_ENV_PREFIX_ALLOWLIST = ("LC_", "ENABLE_")
 _TERMINAL_URL_VARS = frozenset({
-    "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
-    "NPM_REGISTRY", "npm_config_registry", "GITHUB_API_BASE",
-    "GITHUB_RELEASE_MIRROR", "CLAUDE_INSTALLER_URL", "HERMES_PIP_URL",
-    "DEEPWIKI_MCP_URL", "EXA_MCP_URL", BROKER_URL_ENV,
+    "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "NPM_REGISTRY",
+    "npm_config_registry", "GITHUB_API_BASE", "GITHUB_RELEASE_MIRROR",
+    "CLAUDE_INSTALLER_URL", "HERMES_PIP_URL", "DEEPWIKI_MCP_URL", "EXA_MCP_URL",
+    BROKER_URL_ENV,
 })
 _CREDENTIAL_SHAPED_ENV_PATTERN = re.compile(
     r"TOKEN|SECRET|PASSWORD|PASSPHRASE|CREDENTIALS?|BEARER|AUTH|SESSION"
     r"|COOKIE|SIGNING|SALT|API[_-]?KEY|PRIVATE[_-]?KEY|CLIENT[_-]?ID"
-    r"|(?:^|_)(?:KEY|PAT|PWD)(?:_|$)",
-    re.IGNORECASE,
+    r"|(?:^|_)(?:KEY|PAT|PWD)(?:_|$)", re.IGNORECASE,
 )
 _TERMINAL_CREDENTIAL_EXCEPTIONS = frozenset({
     BROKER_URL_ENV,
-    # Boolean feature flag; contains APIKEY but never credential material.
     "ENABLE_SP_APIKEYHELPER",
 })
 
 
 def _terminal_url_is_safe(key: str, value: str) -> bool:
-    """Reject URL userinfo/malformed ports while accepting Hermes specs."""
+    """Reject URL userinfo/malformed ports while accepting package specs."""
     candidate = value
     if key == "HERMES_PIP_URL":
         if not enterprise_config._HERMES_SPEC_RE.match(value):
             return False
         direct_url = re.search(r"git\+(https?://\S+)", value)
         if direct_url is None:
-            return True  # Internal-index package spec, e.g. hermes-agent==1.2.3
+            return True
         candidate = direct_url.group(1)
-
     try:
         parsed = urlsplit(candidate)
-        parsed.port  # Trigger urllib validation for non-numeric/out-of-range ports.
+        parsed.port
     except ValueError:
         return False
     return (
@@ -419,41 +398,18 @@ def _terminal_url_is_safe(key: str, value: str) -> bool:
 
 
 def _build_terminal_shell_env(base_env: dict) -> dict:
-    """Build a deny-by-default environment for a browser terminal PTY.
-
-    Only explicitly reviewed non-secret names and prefixes are copied from the
-    Flask process. A final credential-shaped-name guard makes a future allowlist
-    edit fail closed unless the name is also added to the narrowly reviewed
-    exception set. Registry credentials remain available through private config
-    files; app-SP credentials remain in the Flask process.
-    """
+    """Build a deny-by-default, credential-free browser-terminal environment."""
     shell_env = {
-        key: value
-        for key, value in base_env.items()
+        key: value for key, value in base_env.items()
         if key in _TERMINAL_ENV_ALLOWLIST
         or key.startswith(_TERMINAL_ENV_PREFIX_ALLOWLIST)
     }
-
-    # Proxy variables are required in enterprise deployments, but URLs with
-    # embedded userinfo are credentials rather than safe network configuration.
-    url_keys = {
-        key
-        for key in shell_env
-        if key in _TERMINAL_URL_VARS or key.upper().endswith(("_URL", "_URI"))
-    }
-    for key in url_keys:
-        value = shell_env.get(key, "").strip()
-        if not value:
-            continue
-        if not _terminal_url_is_safe(key, value):
-            shell_env.pop(key, None)
-            # Name only: URL values can contain the credential being excluded.
-            logger.warning("Browser terminal dropped unsafe URL variable %s", key)
-        else:
-            shell_env[key] = value
-
-    # Defence in depth: even a future explicit allowlist addition cannot expose
-    # a credential-shaped variable without a separately reviewed exception.
+    for key in tuple(shell_env):
+        if key in _TERMINAL_URL_VARS or key.upper().endswith(("_URL", "_URI")):
+            value = shell_env.get(key, "").strip()
+            if value and not _terminal_url_is_safe(key, value):
+                shell_env.pop(key, None)
+                logger.warning("Browser terminal dropped unsafe URL variable %s", key)
     for key in tuple(shell_env):
         if (
             _CREDENTIAL_SHAPED_ENV_PATTERN.search(key)
@@ -467,11 +423,7 @@ def _build_terminal_shell_env(base_env: dict) -> dict:
     if not locale_value.replace("-", "").replace("_", "").lower().endswith("utf8"):
         shell_env["LANG"] = "C.UTF-8"
         shell_env["LC_ALL"] = "C.UTF-8"
-    if shell_env.get("ENABLE_SP_APIKEYHELPER", "").strip().lower() in (
-        "true",
-        "1",
-        "yes",
-    ):
+    if shell_env.get("ENABLE_SP_APIKEYHELPER", "").strip().lower() in ("true", "1", "yes"):
         shell_env["DATABRICKS_CONFIG_PROFILE"] = "omnigents-host"
 
     # Make the broker shim the direct terminal's first Databricks executable too.
@@ -484,7 +436,6 @@ def _build_terminal_shell_env(base_env: dict) -> dict:
             shell_env["PATH"] = f"{broker_bin}:{shell_env.get('PATH', '')}"
 
     return shell_env
-
 
 
 # Home-level agent context, fanned out to GEMINI.md / PI.md by the setup_*.py
@@ -880,9 +831,9 @@ def _configure_all_cli_auth(token):
     if apply_claude_otel_env(settings, token, databricks_host):
         logger.info("Claude Code OTEL export configured")
 
-    from cli_auth import _atomic_write_text
+    with open(settings_path, "w") as f:
+        json.dump(settings, f, indent=2)
 
-    _atomic_write_text(settings_path, json.dumps(settings, indent=2))
     logger.info(f"Claude CLI auth configured: {settings_path}")
 
     # 2. Configure Databricks CLI (~/.databrickscfg) — already called by
@@ -903,31 +854,9 @@ def _configure_all_cli_auth(token):
             if result.returncode == 0:
                 logger.info(f"CLI config updated: {script}")
             else:
-                logger.warning(
-                    "CLI config failed: %s (exit=%s)", script, result.returncode
-                )
+                logger.warning(f"CLI config failed: {script}: {result.stderr[:200]}")
         except Exception as e:
-            logger.warning("CLI config error: %s (%s)", script, type(e).__name__)
-
-
-def _refresh_cli_auth_after_setup(token):
-    """Reconcile setup/rotation races without exposing token-bearing errors."""
-    try:
-        from cli_auth import update_cli_tokens
-
-        result = update_cli_tokens(token)
-    except Exception as error:
-        logger.warning("Post-setup token sync failed (%s)", type(error).__name__)
-        return False
-    if getattr(result, "ok", False) is not True:
-        failed = tuple(getattr(result, "failed", ()))
-        logger.warning(
-            "Post-setup token sync incomplete: failed=%s",
-            ",".join(failed) if failed else "unknown",
-        )
-        return False
-    logger.info("Post-setup token sync: CLI configs hold the current token")
-    return True
+            logger.warning(f"CLI config error: {script}: {e}")
 
 
 def run_setup():
@@ -986,13 +915,6 @@ def run_setup():
     # Apps image, so install a static binary (same pattern as tmux).
     _run_step("jq", ["bash", "install_jq.sh"])
 
-    # beads (`bd`) — Gas City work-graph tracker (https://beads.gascity.com) used
-    # by the bundled projects: projects/agentic-energy-on-databricks-public tracks
-    # a .beads/ config and its bootstrap script hard-fails without `bd` on PATH.
-    # Best-effort install (same pattern as jq) so a firewalled deploy without a
-    # release mirror doesn't error the whole setup.
-    _run_step("beads", ["bash", "install_beads.sh"])
-
     # --- Upgrade Databricks CLI (runtime image ships an older version) ---
     _run_step("dbcli", ["bash", "install_databricks_cli.sh"])
 
@@ -1003,9 +925,6 @@ def run_setup():
     _run_step("proxy", [_py, "setup_proxy.py"])
 
     # --- Parallel agent setup (all independent of each other) ---
-    # Each setup script enforces its own ENABLE_* gate. Keeping the steps in
-    # the status payload makes skipped agents observable without installing
-    # them; disabled scripts exit successfully and are marked complete.
     parallel_steps = [
         ("claude",     [_py, "setup_claude.py"]),
         ("pi",         [_py, "setup_pi.py"]),
@@ -1036,7 +955,12 @@ def run_setup():
     # rotation's update_cli_tokens() call silently skips missing config files).
     current_token = os.environ.get("DATABRICKS_TOKEN", "")
     if current_token:
-        _refresh_cli_auth_after_setup(current_token)
+        try:
+            from cli_auth import update_cli_tokens
+            update_cli_tokens(current_token)
+            logger.info("Post-setup token sync: all CLI configs updated with current token")
+        except Exception as e:
+            logger.warning(f"Post-setup token sync failed: {e}")
 
     with setup_lock:
         any_error = any(s["status"] == "error" for s in setup_state["steps"])
@@ -1585,24 +1509,13 @@ def _process_tree_rss_mb():
 
 
 def _capacity_decision() -> CapacityDecision:
-    """Evaluate browser admission; count-only behavior is fail-safe."""
     with sessions_lock:
         count = len(sessions)
         pending = _browser_pending
     return _browser_capacity.evaluate(count, MAX_CONCURRENT_SESSIONS, pending)
 
 
-def _capacity_payload(
-    decision: CapacityDecision,
-    *,
-    session_count: int,
-    pending: int = 0,
-) -> dict:
-    """Secret-free operational projection shared by status and 429 responses.
-
-    ``telemetry_available`` false means the memory gate is inactive and the
-    fixed browser cap is the only limit — not that memory is fine.
-    """
+def _capacity_payload(decision: CapacityDecision, *, session_count: int, pending: int = 0) -> dict:
     memory = decision.memory
     return {
         "current": memory.used_bytes,
@@ -1624,7 +1537,6 @@ def _capacity_payload(
 
 
 def _capacity_rejection(decision: CapacityDecision, *, session_count: int, pending: int = 0):
-    """Return a stable structured 429 while retaining the legacy error string."""
     if decision.state == "pressured":
         code = "BROWSER_MEMORY_PRESSURE"
         message = (
@@ -1632,14 +1544,12 @@ def _capacity_rejection(decision: CapacityDecision, *, session_count: int, pendi
             "above the safe high-watermark. Retry after memory falls below the "
             "resume threshold or close an existing session."
         )
-        retry_guidance = "Retry after a running browser or Omnigent session exits and pressure clears."
     else:
         code = "BROWSER_SESSION_LIMIT"
         message = (
             f"Maximum {MAX_CONCURRENT_SESSIONS} concurrent browser sessions reached. "
             "Close an existing session before retrying."
         )
-        retry_guidance = "Close an existing browser session, then retry."
     capacity = _capacity_payload(decision, session_count=session_count, pending=pending)
     return jsonify({
         "error": message,
@@ -1647,23 +1557,16 @@ def _capacity_rejection(decision: CapacityDecision, *, session_count: int, pendi
         "message": message,
         "current": capacity["current"],
         "limit": capacity["limit"],
-        "retry_guidance": retry_guidance,
+        "retry_guidance": "Retry after capacity becomes available.",
         "capacity": capacity,
     }), 429
 
 
-#: Seconds to keep retrying the non-blocking reap of a killed speculative
-#: child. SIGKILL is prompt, but `waitpid(WNOHANG)` returns (0, 0) while the
-#: child is still finishing, and giving up there leaves a zombie.
 _SPECULATIVE_REAP_TIMEOUT_S = 2.0
 
 
 def _kill_speculative_session(pid: int, master_fd: int | None) -> None:
-    """Close PTY resources and reap a child rejected after fork.
-
-    Never raises: this runs on teardown paths that already have an error to
-    report, and it must not turn a 429 into a 500.
-    """
+    """Close PTY resources and reap a child rejected after fork."""
     if master_fd is not None:
         try:
             os.close(master_fd)
@@ -1673,67 +1576,34 @@ def _kill_speculative_session(pid: int, master_fd: int | None) -> None:
         os.kill(pid, signal.SIGKILL)
     except OSError:
         pass
-    # Monotonic, so a wall-clock adjustment cannot stop the deadline advancing.
     deadline = time.monotonic() + _SPECULATIVE_REAP_TIMEOUT_S
-    while True:
+    while time.monotonic() < deadline:
         try:
-            reaped, _status = os.waitpid(pid, os.WNOHANG)
+            reaped, _ = os.waitpid(pid, os.WNOHANG)
         except (OSError, ChildProcessError):
-            return  # already reaped, or not our child
-        if reaped:
             return
-        if time.monotonic() >= deadline:
-            logger.warning("speculative browser child %s not reaped within %.0fs", pid,
-                           _SPECULATIVE_REAP_TIMEOUT_S)
+        if reaped:
             return
         time.sleep(0.05)
 
 
-def _omnigent_runner_hard_cap() -> int | None:
-    """Configured Omnigent runner ceiling; ``None`` means unlimited/unset."""
-    try:
-        value = int(os.environ.get("OMNIGENT_HOST_MAX_RUNNERS", "0") or 0)
-    except ValueError:
-        return None
-    return value if value > 0 else None
-
-
 def _resource_capacity_snapshot() -> dict:
-    """Authenticated, secret-free capacity projection for operators.
-
-    Reports the two limits this container owns as distinct numbers, and
-    states explicitly that the Omnigent managed-lease durable-session cap is
-    NOT tracked here, so no reader can mistake one for another.
-    """
     with sessions_lock:
         session_count = len(sessions)
         pending = _browser_pending
     decision = _browser_capacity.evaluate(session_count, MAX_CONCURRENT_SESSIONS, pending)
     capacity = _capacity_payload(decision, session_count=session_count, pending=pending)
     capacity["process_tree_rss_mb"] = _process_tree_rss_mb()
-    capacity["omnigent"] = {
-        # CoDA sets this env var for the host subprocess, so it can report the
-        # configured ceiling — but the live active/pending counts belong to the
-        # Omnigent host daemon and are published over its own tunnel.
-        "active_runner_hard_cap": _omnigent_runner_hard_cap(),
-        "active_runner_hard_cap_env": "OMNIGENT_HOST_MAX_RUNNERS",
-        "managed_lease_durable_sessions": {
-            "tracked_here": False,
-            "owner": "omnigent server sandbox config (max_sessions_per_lease)",
-        },
-    }
     return capacity
 
 
 def _log_resource_snapshot() -> None:
-    """Log one resource sample; separate for deterministic unit tests."""
     with sessions_lock:
         n_sessions = len(sessions)
         pending = _browser_pending
-    n_threads = threading.active_count()
-    tree_rss = _process_tree_rss_mb()
     decision = _browser_capacity.evaluate(n_sessions, MAX_CONCURRENT_SESSIONS, pending)
     memory = decision.memory
+    tree_rss = _process_tree_rss_mb()
     try:
         import resource as _res
         peak_self_mb = round(_res.getrusage(_res.RUSAGE_SELF).ru_maxrss / 1024)
@@ -1749,13 +1619,13 @@ def _log_resource_snapshot() -> None:
         "cgroup_percent=%s pressure=%s threads=%s tree_rss=%sMB "
         "per_session=%sMB peak_self=%sMB open_fds=%s",
         n_sessions, MAX_CONCURRENT_SESSIONS, memory.used_bytes, memory.limit_bytes,
-        memory.percent, decision.state, n_threads, tree_rss, per_session,
-        peak_self_mb, open_fds,
+        memory.percent, decision.state, threading.active_count(), tree_rss,
+        per_session, peak_self_mb, open_fds,
     )
 
 
 def resource_pressure_monitor():
-    """Periodically log cgroup, process-tree, and browser-session pressure."""
+    """Periodically log cgroup and browser-session pressure."""
     while True:
         time.sleep(RESOURCE_MONITOR_INTERVAL_SECONDS)
         try:
@@ -1814,7 +1684,7 @@ def authorize_request():
     # has SSO cookies — no functional regression.
     if request.path in (
         "/health", "/api/configure-pat", "/api/inject-pat",
-    ) or request.path.startswith(("/socket.io", "/api/omnigent-host/")):
+    ) or request.path.startswith("/socket.io"):
         return None
 
     authorized, user = check_authorization()
@@ -1982,256 +1852,45 @@ def get_version():
 @app.route("/api/capacity")
 @app.route("/api/resource-status")
 def capacity_status():
-    """Authenticated, secret-free capacity projection for operations.
-
-    Also drives the browser UI's ``N/limit`` session badge, so it stays
-    cheap: no subprocess calls beyond the existing process-tree sample.
-    """
+    """Return an authenticated, secret-free browser-capacity projection."""
     return jsonify(_resource_capacity_snapshot())
 
 
 @app.route("/api/omnigents-status")
 def omnigents_status():
-    """Report browser-safe host state without runner or host log content."""
-    from omnigents_host import get_status
-
-    status = get_status()
-    browser_fields = (
-        "configured",
-        "running",
-        "installed",
-        "host_launched",
-        "server_url",
-        "stage",
-    )
-    return jsonify({key: status.get(key) for key in browser_fields})
-
-
-@app.route("/api/omnigent-host/status")
-def omnigent_host_status():
-    """Report runtime Omnigent host state to the configured server SP."""
-    if not _omnigent_server_request_authorized():
-        return jsonify({"error": "Forbidden"}), 403
+    """Report Omnigents host-integration state (FR-9 observability)."""
     from omnigents_host import get_status
     return jsonify(get_status())
 
 
-def _omnigent_server_request_authorized() -> bool:
-    """Authorize the configured Omnigent server service principal.
-
-    Databricks Apps validates the forwarded bearer before it reaches Flask;
-    this check narrows the M2M endpoint to the configured server SP.
-    """
-    expected = os.environ.get("OMNIGENT_SERVER_SP_CLIENT_ID", "").strip()
-    if not expected:
-        return False
-    # Only trust the Apps-proxy-injected token. Accepting a caller-supplied
-    # Authorization header here would make unverified JWT payload decoding an
-    # authorization bypass if the Flask port were ever exposed directly.
-    token = request.headers.get("X-Forwarded-Access-Token", "").strip()
-    try:
-        import base64
-        import json
-
-        payload = token.split(".")[1]
-        payload += "=" * (-len(payload) % 4)
-        claims = json.loads(base64.urlsafe_b64decode(payload))
-    except (IndexError, ValueError, TypeError, json.JSONDecodeError):
-        return False
-    principals = {
-        str(claims.get(key, "")).strip()
-        for key in ("sub", "client_id", "azp", "appid")
-    }
-    return any(hmac.compare_digest(principal, expected) for principal in principals)
-
-
-@app.route("/api/omnigent-host/lease", methods=["POST"])
-def omnigent_host_lease():
-    """Acquire or adopt the single user-scoped managed lease."""
-    if not _omnigent_server_request_authorized():
-        return jsonify({"error": "Forbidden"}), 403
-    data = request.get_json(silent=True) or {}
-    owner = str(data.get("owner") or "").strip()
-    lease_id = str(data.get("lease_id") or "").strip()
-    requested_app = str(data.get("app_name") or "").strip()
-    app_name = os.environ.get("DATABRICKS_APP_NAME", "").strip()
-    if not owner or not lease_id:
-        return jsonify({"error": "owner and lease_id required"}), 400
-    if not app_name or requested_app != app_name:
-        return jsonify({"error": "app_name does not match this CoDA instance"}), 409
-    from omnigents_host import acquire_lease
-
-    ok, lease = acquire_lease(owner, lease_id)
-    # The caller needs only the generation fence. Owner identity and lease
-    # timestamps remain process-internal and never cross the control API.
-    return jsonify({"lease_id": lease.get("lease_id"), "acquired": ok}), (200 if ok else 409)
-
-
-def _repository_workspace_args(data):
-    """Return optional protocol-v2 repository metadata from a control request."""
-    fields = ("repo_url", "repo_branch", "repo_name")
-    requested = any(data.get(field) is not None for field in fields)
-    if requested and data.get("workspace_protocol_version") != 2:
-        raise ValueError("repository workspace protocol version 2 is required")
-    return requested, {field: data.get(field) for field in fields}
-
-
-@app.route("/api/omnigent-host/workspaces", methods=["POST"])
-def omnigent_host_workspace():
-    """Allocate, materialize, or release a distinct session workspace."""
-    if not _omnigent_server_request_authorized():
-        return jsonify({"error": "Forbidden"}), 403
-    data = request.get_json(silent=True) or {}
-    from omnigents_host import (
-        WorkspaceAllocationError,
-        allocate_workspace,
-        release_workspace,
-    )
-
-    lease_id = str(data.get("lease_id") or "")
-    session_id = str(data.get("session_id") or "")
-    try:
-        if data.get("action") == "release":
-            released = release_workspace(lease_id, session_id)
-            return jsonify(
-                {
-                    "released": released,
-                    "workspace_protocol_version": 2,
-                }
-            )
-        repository_requested, repository = _repository_workspace_args(data)
-        workspace = allocate_workspace(
-            lease_id,
-            session_id,
-            **repository,
-        )
-    except WorkspaceAllocationError as exc:
-        return jsonify({"error": str(exc)}), exc.status_code
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-    return jsonify(
-        {
-            "workspace": workspace,
-            "workspace_protocol_version": 2,
-            "repository_materialized": repository_requested,
-        }
-    )
-
-
-@app.route("/api/omnigent-host/runner-log/<session_id>")
-def omnigent_host_runner_log(session_id):
-    """Return a bounded runner log tail to the configured server SP."""
-    if not _omnigent_server_request_authorized():
-        return jsonify({"error": "Forbidden"}), 403
-    from omnigents_host import runner_log_tail
-
-    try:
-        return jsonify({"lines": runner_log_tail(session_id)})
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
+@app.route("/api/omnigent-host/status")
+def omnigent_host_status():
+    """Report runtime Omnigent host state."""
+    from omnigents_host import get_status
+    return jsonify(get_status())
 
 
 @app.route("/api/omnigent-host/connect", methods=["POST"])
 def omnigent_host_connect():
     """Start a runtime Omnigent host tunnel for a supplied server URL."""
-    if not _omnigent_server_request_authorized():
-        return jsonify({"error": "Forbidden"}), 403
     data = request.get_json(silent=True) or {}
     server_url = (data.get("server_url") or "").strip()
     if not server_url:
         return jsonify({"error": "server_url required"}), 400
-    configured_server_url = os.environ.get("OMNIGENTS_SERVER_URL", "").strip()
-    if configured_server_url and server_url.rstrip("/") != configured_server_url.rstrip("/"):
-        return jsonify({"error": "server_url does not match configured Omnigent server"}), 409
 
-    from omnigents_host import (
-        WorkspaceAllocationError,
-        active_lease,
-        allocate_workspace,
-        connect_host,
-        release_workspace,
-    )
-
-    lease_id = str(data.get("lease_id") or "")
-    lease = active_lease()
-    if lease is None or lease.get("lease_id") != lease_id:
-        return jsonify({"error": "stale or missing lease"}), 409
-    host_config = data.get("host_config")
-    if host_config is not None and not isinstance(host_config, dict):
-        return jsonify({"error": "host_config must be an object"}), 400
-    allocated_session_id = None
-    try:
-        repository_requested, repository = _repository_workspace_args(data)
-        session_id = str(data.get("session_id") or "")
-        if repository_requested and not session_id:
-            return jsonify({"error": "repository workspace protocol upgrade required"}), 426
-        if session_id:
-            # Isolate the lease-OPENING session too, not just the ones that
-            # adopt the lease later. Returning $HOME here started the first
-            # session of every claim in this app's own home directory: all
-            # first-sessions shared one tree, and an agent's writes landed
-            # beside app.py. Sessions 2..N already get ~/coda-sessions/<id>
-            # from /api/omnigent-host/workspaces, so this only makes the
-            # opener consistent with them.
-            workspace = allocate_workspace(
-                lease_id,
-                session_id,
-                **repository,
-            )
-            allocated_session_id = session_id
-        else:
-            # A server too old to send session_id has nothing to isolate on,
-            # so it keeps the legacy whole-home workspace.
-            workspace = os.environ.get("HOME", "/app/python/source_code")
-        ok, status = connect_host(
-            server_url,
-            _omnigent_sp_creds,
-            host_token=(data.get("host_token") or None),
-            host_id=(data.get("host_id") or None),
-            host_name=(data.get("host_name") or None),
-            host_config=host_config,
-            lease_id=(data.get("lease_id") or None),
-        )
-    except WorkspaceAllocationError as exc:
-        return jsonify({"error": str(exc)}), exc.status_code
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-    except Exception:
-        if allocated_session_id is not None:
-            try:
-                release_workspace(lease_id, allocated_session_id)
-            except WorkspaceAllocationError:
-                pass
-        raise
+    from omnigents_host import connect_host
+    ok, status = connect_host(server_url, _omnigent_sp_creds)
     if not ok:
-        if allocated_session_id is not None:
-            try:
-                release_workspace(lease_id, allocated_session_id)
-            except WorkspaceAllocationError:
-                pass
         code = 409 if status.get("last_error") == "host already running" else 400
-        return jsonify({"error": "host connection failed"}), code
-    status["workspace"] = workspace
-    status["workspace_protocol_version"] = 2
-    status["repository_materialized"] = repository_requested
-    return jsonify(status), 202
+        return jsonify(status), code
+    return jsonify(status)
 
 
 @app.route("/api/omnigent-host/disconnect", methods=["POST"])
 def omnigent_host_disconnect():
-    """Release and scrub only the matching managed lease generation."""
-    if not _omnigent_server_request_authorized():
-        return jsonify({"error": "Forbidden"}), 403
-    data = request.get_json(silent=True) or {}
-    lease_id = str(data.get("lease_id") or "")
-    from omnigents_host import release_managed_lease
-
-    released, status = release_managed_lease(lease_id)
-    if status.get("stale"):
-        return jsonify(status)
-    if not released:
-        return jsonify(status), 503
-    return jsonify(status)
+    """Stop the active runtime Omnigent host tunnel, if any."""
+    from omnigents_host import disconnect_host
+    return jsonify(disconnect_host())
 
 
 @app.route("/api/omnigent-host/share", methods=["POST"])
@@ -2251,10 +1910,9 @@ def omnigent_host_share():
                   a teammate who needs to run sessions on this host.
       launch:     also launch a runner after granting (default true).
     """
-    if _is_databricks_apps() and (
-        not app_owner or get_request_user() != app_owner
-    ):
-        return jsonify({"error": "Forbidden"}), 403
+    if _is_databricks_apps() and app_owner:
+        if get_request_user() != app_owner:
+            return jsonify({"error": "Forbidden"}), 403
 
     from omnigents_host import get_status
     server_url = os.environ.get("OMNIGENTS_SERVER_URL", "").strip() or str(
@@ -2336,9 +1994,7 @@ def _bootstrap_pat(token):
             return False, {"error": "Invalid token"}, 400
         user = resp.json().get("userName", "unknown")
     except Exception as e:
-        return False, {
-            "error": f"Token validation failed ({type(e).__name__})"
-        }, 400
+        return False, {"error": f"Token validation failed: {e}"}, 400
 
     # Immediately mint a controlled short-lived token from the supplied PAT.
     # This gives us a token ID we own — all future rotations can revoke the old one.
@@ -2346,23 +2002,12 @@ def _bootstrap_pat(token):
     pat_rotator._current_token = token
     pat_rotator._current_token_id = None
     rotated = pat_rotator._rotate_once()
-    minted_token = (
-        pat_rotator.token if pat_rotator._current_token_id is not None else None
-    )
-    if minted_token:
-        # A mint can succeed while one credential target reports degraded.
-        # Keep the minted token authoritative and retain the bootstrap PAT for
-        # recovery; never overwrite the new .databrickscfg with the bootstrap.
-        token = minted_token
-        if rotated:
-            # Revoke only after every credential target accepted the new token.
-            pat_rotator.revoke_bootstrap_token()
-        else:
-            logger.warning(
-                "Bootstrap PAT retained because minted-token persistence degraded"
-            )
+    if rotated:
+        token = pat_rotator.token  # use the newly minted token from here on
+        # Revoke only the bootstrap PAT — leave other user PATs intact (#98)
+        pat_rotator.revoke_bootstrap_token()
     else:
-        # Mint failed — fall back to the supplied token (still valid).
+        # Rotation failed — fall back to supplied token (still valid)
         pat_rotator._write_databrickscfg(token)
     pat_rotator.start()
 
@@ -2472,10 +2117,6 @@ def configure_pat():
 def create_session():
     """Create a new terminal session."""
     global _browser_pending
-    # Reserve a slot before forking a PTY. Counting in-flight launches here is
-    # what stops a burst of concurrent requests from all passing the same
-    # reading and forking past the ceiling; the authoritative re-check under
-    # the insertion lock below still closes the residual race.
     with sessions_lock:
         session_count = len(sessions)
         decision = _browser_capacity.evaluate(
@@ -2492,14 +2133,13 @@ def create_session():
     inserted = False
     reserved = True
     try:
-        # Inside the try so a malformed body (e.g. a JSON array) cannot strand
-        # the reservation taken above.
         data = request.get_json(silent=True)
         label = data.get("label", "") if isinstance(data, dict) else ""
         master_fd, slave_fd = pty.openpty()
-        # Build the browser PTY's deny-by-default inherited environment. The
-        # explicit allowlist retains required shell/broker/feature plumbing;
-        # ambient credentials and unknown variables never enter Popen(env=...).
+        # Set up environment for the shell — strips PAT, SP creds, registry
+        # tokens, the workshop challenge-repo token, and other secrets that
+        # must not be readable from the user's terminal. See
+        # _build_terminal_shell_env docstring for the full list.
         shell_env = _build_terminal_shell_env(os.environ)
         # Ensure HOME is set correctly
         if not shell_env.get("HOME") or shell_env["HOME"] == "/":
@@ -2543,18 +2183,10 @@ def create_session():
         session_id = str(uuid.uuid4())
 
         with sessions_lock:
-            # Authoritative count + memory check under the insertion lock
-            # prevents TOCTOU races. A speculative child is always killed and
-            # its PTY closed when this check rejects it. This request's own
-            # reservation is excluded from `pending` so it does not refuse
-            # itself.
             session_count = len(sessions)
             decision = _browser_capacity.evaluate(
                 session_count, MAX_CONCURRENT_SESSIONS, _browser_pending - 1
             )
-            # The reservation is retired here, inside the insertion lock, so a
-            # session is never counted twice (once as `pending`, once in
-            # `sessions`) by a concurrent request's authoritative check.
             _browser_pending -= 1
             reserved = False
             if not decision.allowed:
@@ -2572,8 +2204,6 @@ def create_session():
             }
 
         # Start the reader before transferring cleanup ownership to the session.
-        # If thread startup fails, remove the invisible session and let the
-        # finally block close the PTY and kill/reap the child.
         thread = threading.Thread(target=read_pty_output, args=(session_id, master_fd), daemon=True)
         try:
             thread.start()
@@ -2583,7 +2213,6 @@ def create_session():
             raise
         inserted = True
 
-        # Telemetry must never turn a usable session into an unreturned leak.
         try:
             log_telemetry("agent", label or "shell")
         except Exception as exc:
@@ -2593,10 +2222,6 @@ def create_session():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     finally:
-        # Any path that did not insert the session owns the teardown: close
-        # both PTY descriptors and kill/reap the speculative child. Without
-        # this, a capacity rejection or an exception after openpty()/Popen()
-        # leaks an fd and an orphan shell for the life of the worker.
         if not inserted:
             if slave_fd is not None:
                 try:
@@ -2800,8 +2425,8 @@ def close_session():
 def initialize_app(local_dev=False):
     """One-time init: detect owner, start cleanup thread."""
     global app_owner, _omnigent_sp_creds, _sp_token_broker_server
-    global _sp_token_broker_atexit_registered
 
+    global _sp_token_broker_atexit_registered
     if not _sp_token_broker_atexit_registered:
         atexit.register(_shutdown_sp_token_broker)
         _sp_token_broker_atexit_registered = True
@@ -2816,10 +2441,8 @@ def initialize_app(local_dev=False):
     # Capture the app SP's M2M OAuth creds BEFORE the strip below — the
     # Omnigents host tunnel needs an OAuth token (the Apps proxy rejects PATs).
     # No-op / returns None when disabled or creds absent. See omnigents_host.py.
-    from omnigents_host import capture_sp_credentials, start_host, start_lease_reaper
-
+    from omnigents_host import capture_sp_credentials, start_host
     _omnigent_sp_creds = capture_sp_credentials()
-    start_lease_reaper()
 
     # Resolve owner: Apps API (app.creator via SP) > PAT (current_user.me)
     app_owner = get_token_owner()
@@ -2838,12 +2461,8 @@ def initialize_app(local_dev=False):
         )
         _retry_owner_resolution_in_background()
 
-    sp_helper_enabled = os.environ.get(
-        "ENABLE_SP_APIKEYHELPER", ""
-    ).strip().lower() in (
-        "true",
-        "1",
-        "yes",
+    sp_helper_enabled = os.environ.get("ENABLE_SP_APIKEYHELPER", "").strip().lower() in (
+        "true", "1", "yes",
     )
     host_enabled = bool(os.environ.get("OMNIGENTS_SERVER_URL", "").strip())
     if _omnigent_sp_creds and (sp_helper_enabled or host_enabled):
@@ -2860,7 +2479,6 @@ def initialize_app(local_dev=False):
     # long-lived client secret stays in this process; helpers mint via broker.
     if _omnigent_sp_creds and sp_helper_enabled:
         from omnigents_host import _write_oauth_profile
-
         _write_oauth_profile(_omnigent_sp_creds)
         logger.info("SP apikeyhelper: wrote secret-free host profile at boot")
 
@@ -2880,10 +2498,8 @@ def initialize_app(local_dev=False):
     # not wait for PAT setup. Background thread — never blocks app boot.
     if os.environ.get("CHALLENGE_REPO_URL"):
         threading.Thread(
-            target=_run_step,
-            args=("challenge", ["bash", "install_challenge_repo.sh"]),
-            daemon=True,
-            name="challenge-preload",
+            target=_run_step, args=("challenge", ["bash", "install_challenge_repo.sh"]),
+            daemon=True, name="challenge-preload",
         ).start()
 
     # SP-auth workshop path: when the app self-auths as its own SP (profile
@@ -2891,18 +2507,12 @@ def initialize_app(local_dev=False):
     # instead of waiting for /api/configure-pat. Installs the agent CLIs and
     # configures them against the SP OAuth token via the apiKeyHelper. Guarded
     # on the same flag + captured creds; background thread, never blocks boot.
-    if _omnigent_sp_creds and os.environ.get(
-        "ENABLE_SP_APIKEYHELPER", ""
-    ).strip().lower() in ("true", "1", "yes"):
+    if _omnigent_sp_creds and os.environ.get("ENABLE_SP_APIKEYHELPER", "").strip().lower() in ("true", "1", "yes"):
         with setup_lock:
             already = setup_state["status"] in ("running", "complete")
         if not already:
-            threading.Thread(
-                target=run_setup, daemon=True, name="setup-thread-sp"
-            ).start()
-            logger.info(
-                "SP apikeyhelper: setup triggered at boot (no PAT paste needed)"
-            )
+            threading.Thread(target=run_setup, daemon=True, name="setup-thread-sp").start()
+            logger.info("SP apikeyhelper: setup triggered at boot (no PAT paste needed)")
 
     # Telemetry: app startup ping (fire-and-forget in background thread)
     log_telemetry("event", "app_startup")
@@ -2910,19 +2520,15 @@ def initialize_app(local_dev=False):
     # Start background cleanup thread
     cleanup_thread = threading.Thread(target=cleanup_stale_sessions, daemon=True)
     cleanup_thread.start()
-    logger.info(
-        f"Started session cleanup thread (timeout={SESSION_TIMEOUT_SECONDS}s, interval={CLEANUP_INTERVAL_SECONDS}s)"
-    )
+    logger.info(f"Started session cleanup thread (timeout={SESSION_TIMEOUT_SECONDS}s, interval={CLEANUP_INTERVAL_SECONDS}s)")
 
     # Start resource-pressure monitor. On a 4 vCPU / 12 GB box a couple of heavy
     # agent sessions can approach the memory cliff; this logs a runway of
     # telemetry so a crash isn't a single silent moment, and lets us measure
     # real per-session RSS to tune MAX_CONCURRENT_SESSIONS with data.
-    monitor_thread = threading.Thread(
-        target=resource_pressure_monitor, daemon=True, name="resource-monitor"
-    )
+    monitor_thread = threading.Thread(target=resource_pressure_monitor, daemon=True,
+                                      name="resource-monitor")
     monitor_thread.start()
-
 
 
 if __name__ == "__main__":
