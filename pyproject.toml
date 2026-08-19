@@ -46,7 +46,7 @@ dependencies = [
     "pyjwt>=2.13.0",
     # python-engineio <= 4.13.1 / python-socketio <= 5.16.1 carry
     # Socket.IO CVEs. Both are transitive via flask-socketio; pin floors.
-    "python-engineio>=4.13.2",
+    "python-engineio>=4.13.4",
     "python-socketio>=5.16.2",
     # GHSA-qccp-gfcp-xxvc + GHSA-mf9v-mfxr-j63j — urllib3 < 2.7.0 leaks
     # sensitive headers across proxied redirects and bypasses the
