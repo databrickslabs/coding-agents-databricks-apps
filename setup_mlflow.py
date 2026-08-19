@@ -11,6 +11,8 @@ import sys
 import json
 from pathlib import Path
 
+from cli_auth import _atomic_write_text
+
 
 def _mint_app_sp_token():
     """Mint an app-SP OAuth (client-credentials/M2M) token for the OSS app URL.
@@ -157,7 +159,8 @@ if not already_present:
 existing_hooks["Stop"] = stop_hooks
 settings["hooks"] = existing_hooks
 
-settings_path.write_text(json.dumps(settings, indent=2))
+settings_path.parent.mkdir(parents=True, exist_ok=True)
+_atomic_write_text(str(settings_path), json.dumps(settings, indent=2))
 
 # Install the MLflow Claude plugin (the real tracing path on mlflow 3.14+).
 # Resolve the experiment id from the name so the plugin logs to the right place.

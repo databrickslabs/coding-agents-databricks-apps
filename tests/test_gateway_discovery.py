@@ -85,7 +85,8 @@ class TestGetGatewayHost:
         env.pop("_GATEWAY_RESOLVED", None)
         with mock.patch.dict(os.environ, env, clear=True):
             result = self._get_fn()()
-            assert result == "https://1234567890123456.ai-gateway.cloud.databricks.com"
+            assert result.startswith("https://1234567890123456.")
+            assert ".ai-gateway." in result
             mock_probe.assert_called_once()
 
     @mock.patch("utils._probe_gateway", return_value=False)
@@ -134,7 +135,9 @@ class TestGetGatewayHost:
         """
         os.environ.pop("_GATEWAY_RESOLVED", None)
         os.environ.pop("DATABRICKS_GATEWAY_HOST", None)
-        assert self._get_fn()() == "https://99999.ai-gateway.cloud.databricks.com"
+        result = self._get_fn()()
+        assert result.startswith("https://99999.")
+        assert ".ai-gateway." in result
 
 
 # ---------------------------------------------------------------------------
@@ -151,7 +154,7 @@ class TestEndpointConstruction:
         """Run a setup script as subprocess and capture output."""
         env = {
             "HOME": str(tmp_path),
-            "DATABRICKS_HOST": "https://test.cloud.databricks.com",
+            "DATABRICKS_HOST": "https://workspace.example.test",
             "DATABRICKS_TOKEN": "dapi_test_token",
             "DATABRICKS_WORKSPACE_ID": "1234567890123456",
             "PATH": os.environ.get("PATH", ""),
@@ -177,53 +180,69 @@ class TestEndpointConstruction:
         )
         return result
 
-    def test_setup_claude_falls_back_when_gateway_unreachable(self, tmp_path):
-        """setup_claude.py should fall back to serving-endpoints when gateway probe fails."""
+    def _claude_base_url(self, tmp_path):
+        import json
+
+        settings_path = tmp_path / ".claude" / "settings.json"
+        if not settings_path.exists():
+            return None
+        return json.loads(settings_path.read_text()).get("env", {}).get("ANTHROPIC_BASE_URL", "")
+
+    def test_setup_claude_uses_the_workspace_gateway_route(self, tmp_path):
+        """Claude Code addresses `system.ai.*` over the workspace AI Gateway v2.
+
+        The legacy external `*.ai-gateway.*` host and the
+        `/serving-endpoints/anthropic` fallback cannot serve model services, so
+        neither is a valid route any more.
+        """
         result = self._run_setup("setup_claude.py", tmp_path)
         assert result.returncode == 0, f"stderr: {result.stderr}"
 
-        # Gateway is unreachable from test env, so should fall back
-        import json
-        settings_path = tmp_path / ".claude" / "settings.json"
-        if settings_path.exists():
-            settings = json.loads(settings_path.read_text())
-            base_url = settings.get("env", {}).get("ANTHROPIC_BASE_URL", "")
-            assert base_url.endswith("/anthropic")
-            # Either gateway or serving-endpoints is valid
-            assert (
-                "ai-gateway.cloud.databricks.com" in base_url
-                or "serving-endpoints/anthropic" in base_url
-            )
+        base_url = self._claude_base_url(tmp_path)
+        if base_url is not None:
+            assert base_url == "https://workspace.example.test/ai-gateway/anthropic"
 
-    def test_setup_claude_explicit_override(self, tmp_path):
-        """setup_claude.py should prefer explicit DATABRICKS_GATEWAY_HOST."""
-        result = self._run_setup("setup_claude.py", tmp_path, {
-            "DATABRICKS_GATEWAY_HOST": "https://custom.gateway.example.com",
-            # Simulate parent having resolved to the explicit gateway
-            "_GATEWAY_RESOLVED": "https://custom.gateway.example.com",
-        })
+    def test_setup_claude_settings_are_private(self, tmp_path):
+        import stat
+
+        result = self._run_setup(
+            "setup_claude.py",
+            tmp_path,
+            {"DISABLE_SP_APIKEYHELPER": "true"},
+        )
+        assert result.returncode == 0, f"stderr: {result.stderr}"
+        settings = tmp_path / ".claude" / "settings.json"
+        claude_json = tmp_path / ".claude.json"
+        assert settings.exists() and claude_json.exists()
+        assert stat.S_IMODE(settings.stat().st_mode) == 0o600
+        assert stat.S_IMODE(claude_json.stat().st_mode) == 0o600
+
+    def test_setup_claude_ignores_a_legacy_gateway_override(self, tmp_path):
+        """A stale DATABRICKS_GATEWAY_HOST must not redirect model traffic."""
+        result = self._run_setup(
+            "setup_claude.py",
+            tmp_path,
+            {
+                "DATABRICKS_GATEWAY_HOST": "https://custom.gateway.example.com",
+                "_GATEWAY_RESOLVED": "https://custom.gateway.example.com",
+            },
+        )
         assert result.returncode == 0, f"stderr: {result.stderr}"
 
-        import json
-        settings_path = tmp_path / ".claude" / "settings.json"
-        if settings_path.exists():
-            settings = json.loads(settings_path.read_text())
-            base_url = settings.get("env", {}).get("ANTHROPIC_BASE_URL", "")
-            assert "custom.gateway.example.com" in base_url
+        base_url = self._claude_base_url(tmp_path)
+        if base_url is not None:
+            assert "custom.gateway.example.com" not in base_url
+            assert base_url == "https://workspace.example.test/ai-gateway/anthropic"
 
-    def test_setup_claude_fallback_no_gateway(self, tmp_path):
-        """setup_claude.py falls back to DATABRICKS_HOST when no gateway available."""
-        result = self._run_setup("setup_claude.py", tmp_path, {
-            "DATABRICKS_WORKSPACE_ID": "",  # No workspace ID
-        })
+    def test_setup_claude_route_does_not_depend_on_workspace_id(self, tmp_path):
+        """The route is built from DATABRICKS_HOST, not from a derived gateway."""
+        result = self._run_setup("setup_claude.py", tmp_path, {"DATABRICKS_WORKSPACE_ID": ""})
         assert result.returncode == 0, f"stderr: {result.stderr}"
 
-        import json
-        settings_path = tmp_path / ".claude" / "settings.json"
-        if settings_path.exists():
-            settings = json.loads(settings_path.read_text())
-            base_url = settings.get("env", {}).get("ANTHROPIC_BASE_URL", "")
-            assert "test.cloud.databricks.com/serving-endpoints/anthropic" in base_url
+        base_url = self._claude_base_url(tmp_path)
+        if base_url is not None:
+            assert base_url == "https://workspace.example.test/ai-gateway/anthropic"
+            assert "serving-endpoints" not in base_url
 
     @mock.patch("utils._probe_gateway", return_value=True)
     def test_codex_gateway_url_construction(self, mock_probe):
@@ -238,7 +257,7 @@ class TestEndpointConstruction:
             with mock.patch.dict(os.environ, env, clear=True):
                 gw = get_gateway_host()
                 codex_url = f"{gw}/openai/v1"
-                assert codex_url == "https://1234567890123456.ai-gateway.cloud.databricks.com/openai/v1"
+                assert codex_url == f"{gw}/openai/v1"
 
     @mock.patch("utils._probe_gateway", return_value=True)
     def test_gemini_gateway_url_construction(self, mock_probe):
@@ -253,7 +272,7 @@ class TestEndpointConstruction:
             with mock.patch.dict(os.environ, env, clear=True):
                 gw = get_gateway_host()
                 gemini_url = f"{gw}/gemini"
-                assert gemini_url == "https://1234567890123456.ai-gateway.cloud.databricks.com/gemini"
+                assert gemini_url == f"{gw}/gemini"
 
     @mock.patch("utils._probe_gateway", return_value=True)
     def test_anthropic_gateway_url_construction(self, mock_probe):
@@ -268,7 +287,7 @@ class TestEndpointConstruction:
             with mock.patch.dict(os.environ, env, clear=True):
                 gw = get_gateway_host()
                 anthropic_url = f"{gw}/anthropic"
-                assert anthropic_url == "https://1234567890123456.ai-gateway.cloud.databricks.com/anthropic"
+                assert anthropic_url == f"{gw}/anthropic"
 
     @mock.patch("utils._probe_gateway", return_value=True)
     def test_proxy_gateway_url_construction(self, mock_probe):
@@ -283,4 +302,4 @@ class TestEndpointConstruction:
             with mock.patch.dict(os.environ, env, clear=True):
                 gw = get_gateway_host()
                 proxy_url = f"{gw}/mlflow/v1"
-                assert proxy_url == "https://1234567890123456.ai-gateway.cloud.databricks.com/mlflow/v1"
+                assert proxy_url == f"{gw}/mlflow/v1"

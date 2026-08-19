@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import os
 import re
 import subprocess
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
 
 logger = logging.getLogger(__name__)
+
+CONTENT_FILTER_PROXY_URL = "http://127.0.0.1:4000"
 
 
 def discover_serving_endpoints(host: str, token: str, timeout: float = 5.0) -> set[str]:
@@ -418,7 +422,7 @@ def config_profile_env(profile: str, base_env: dict | None = None) -> dict:
     Sets ``DATABRICKS_CONFIG_PROFILE`` and strips every ambient var that would
     shadow the profile in the SDK's resolution (see
     ``_PROFILE_SHADOWING_ENV_VARS``). Use when a tool must authenticate as a
-    specific profile (e.g. the Omnigent host's ``omnigents-host`` M2M profile).
+    specific profile.
     """
     env = dict(base_env if base_env is not None else os.environ)
     env["DATABRICKS_CONFIG_PROFILE"] = profile
@@ -427,15 +431,31 @@ def config_profile_env(profile: str, base_env: dict | None = None) -> dict:
     return env
 
 
+@contextmanager
+def databrickscfg_update_lock(path: str | Path):
+    """Serialize read-modify-write ownership of co-managed profile sections."""
+    config_path = Path(path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = Path(f"{config_path}.lock")
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        os.chmod(lock_path, 0o600)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
 def read_non_default_databrickscfg_sections(path: str | Path) -> str:
     """Return every ``~/.databrickscfg`` section except ``[DEFAULT]``.
 
-    The PAT rotator owns ``[DEFAULT]`` and rewrites it on every rotation; the
-    Omnigent host appends an ``[omnigents-host]`` OAuth (M2M) profile that its
-    runners re-read from this file. Any DEFAULT-only rewrite must preserve those
-    co-owned sections, or a fresh runner (or CLI call) after the rewrite can't
-    authenticate. Both the rotator (pat_rotator.py) and the boot-time writer
-    (setup_databricks.py) call this so they honor the same contract.
+    The PAT rotator owns ``[DEFAULT]`` and rewrites it on every rotation; other
+    components may append named profiles that must survive that rewrite. Any
+    DEFAULT-only rewrite must preserve those co-owned sections, or a fresh CLI
+    call after the rewrite cannot authenticate. Both the rotator
+    (pat_rotator.py) and the boot-time writer (setup_databricks.py) call this so
+    they honor the same contract.
 
     Returns ``""`` when the file is absent or has no non-DEFAULT sections;
     otherwise the preserved text wrapped in leading/trailing newlines so it can
@@ -483,6 +503,65 @@ def resolve_mlflow_experiment_id(host: str, token: str, experiment_name: str) ->
     except Exception as exc:
         logger.warning(f"Could not resolve MLflow experiment '{experiment_name}': {exc}")
         return None
+
+
+def workspace_sync_auth():
+    """Resolve auth for the workspace sync/restore round-trip.
+
+    Returns ``(env, client)``: the environment the ``databricks`` CLI should run
+    with, and an authenticated ``WorkspaceClient`` (used to validate the creds
+    and init telemetry before a long CLI call).
+
+    Two layers, matching the app's own auth layering:
+
+    1. ``[DEFAULT]`` PAT in ``~/.databrickscfg`` — the pasted/rotated PAT path.
+       Pinned explicitly to ``DEFAULT``: an ambient
+       ``DATABRICKS_CONFIG_PROFILE`` (Apps sets it to the SP profile) would
+       otherwise silently steer the CLI at the wrong identity.
+    2. Otherwise a named profile selected by ``DATABRICKS_CONFIG_PROFILE`` or
+       discovered from the first non-default config section. This supports
+       non-PAT credentials without baking a deployment-specific profile name
+       into the sync path.
+
+    Raises if neither layer can authenticate — callers must treat that as "this
+    commit is NOT backed up".
+    """
+    import configparser
+
+    from databricks.sdk import WorkspaceClient
+
+    def _init_telemetry(client):
+        try:
+            from telemetry import set_product_info
+
+            set_product_info(client)
+        except Exception:
+            pass  # Telemetry must never break sync/restore
+        return client
+
+    cfg_path = Path.home() / ".databrickscfg"
+    parser = configparser.ConfigParser()
+    host = token = None
+    if cfg_path.exists():
+        parser.read(cfg_path)
+        host = parser.get("DEFAULT", "host", fallback=None)
+        token = parser.get("DEFAULT", "token", fallback=None)
+
+    if host and token:
+        client = WorkspaceClient(host=host, token=token, auth_type="pat")
+        client.current_user.me()  # fail fast on an expired PAT
+        return config_profile_env("DEFAULT"), _init_telemetry(client)
+
+    profile = os.environ.get("DATABRICKS_CONFIG_PROFILE")
+    if not profile:
+        sections = [section for section in parser.sections() if section != "DEFAULT"]
+        profile = sections[0] if sections else None
+    if not profile:
+        raise RuntimeError("no authenticated Databricks profile is configured")
+    env = config_profile_env(profile)
+    client = WorkspaceClient(profile=profile)
+    client.current_user.me()
+    return env, _init_telemetry(client)
 
 
 def workspace_sync_dest(repo_name: str) -> str:

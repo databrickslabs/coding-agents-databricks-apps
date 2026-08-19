@@ -70,6 +70,14 @@ class TestMlflowEnvVars:
         settings = read_settings(tmp_path)
         assert settings["env"]["MLFLOW_CLAUDE_TRACING_ENABLED"] == "false"
 
+    def test_settings_file_is_private(self, tmp_path):
+        import stat
+
+        result = run_setup_mlflow(tmp_path, {"APP_OWNER": "jane@company.com"})
+        assert result.returncode == 0, result.stderr
+        path = tmp_path / ".claude" / "settings.json"
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
     def test_tracing_enabled_via_master_switch(self, tmp_path):
         write_existing_settings(tmp_path, {"env": {"ANTHROPIC_MODEL": "test"}})
         result = run_setup_mlflow(tmp_path, {

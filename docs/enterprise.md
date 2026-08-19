@@ -60,6 +60,12 @@ binary vendoring, which is a separate follow-up feature.
 | `HERMES_PIP_URL` | Override `git+https://github.com/NousResearch/hermes-agent.git`. Can be a mirrored git URL or an internal-index package spec. | upstream git URL |
 | `DEEPWIKI_MCP_URL` / `EXA_MCP_URL` | Override or set empty to omit these MCP servers entirely. | upstream URLs |
 
+Browser terminals receive only reviewed non-secret network settings. URL-valued
+variables with embedded userinfo or malformed ports are omitted, and
+credential-shaped environment names are excluded as a defense-in-depth check.
+App-level setup processes may still use their configured credentials; those
+values are not inherited by browser PTYs.
+
 ## Mirror conventions
 
 ### GitHub releases
@@ -164,9 +170,10 @@ env:
 
 ### `HTTP 407 Proxy Authentication Required`
 
-Your proxy needs credentials. Include them in the URL:
+Your app-level proxy needs credentials. Include them in the URL:
 `HTTPS_PROXY=http://user:pass@proxy.corp.example.com:3128`. The startup banner
-masks the password in logs.
+masks the password in logs. Credential-bearing proxy URLs are intentionally
+excluded from browser-terminal environments.
 
 ### `SSL: CERTIFICATE_VERIFY_FAILED`
 

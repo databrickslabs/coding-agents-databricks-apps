@@ -8,6 +8,8 @@ since the full create_session path is hard to unit-test (PTY + Popen).
 
 from __future__ import annotations
 
+from unittest import mock
+
 import pytest
 
 
@@ -39,6 +41,12 @@ class TestTerminalEnvStrip:
         build = _build_terminal_shell_env()
         env = build({"NPM_TOKEN": "tok-abc", "HOME": "/app"})
         assert "NPM_TOKEN" not in env
+
+    @pytest.mark.parametrize("key", ["GH_TOKEN", "CODA_BOOTSTRAP_SECRET"])
+    def test_strips_privileged_app_credentials(self, key):
+        build = _build_terminal_shell_env()
+        env = build({key: "must-not-reach-terminal", "HOME": "/app"})
+        assert key not in env
 
     def test_strips_derived_npm_auth_token(self):
         """The npm_config_//host/:_authToken key derived from NPM_TOKEN must not leak."""
@@ -99,18 +107,111 @@ class TestTerminalEnvStrip:
         env = build({"HOME": "/app", "ENABLE_SP_APIKEYHELPER": "true"})
         assert env["DATABRICKS_CONFIG_PROFILE"] == "omnigents-host"
 
-    def test_preserves_unrelated_env(self):
-        """Other env vars (PATH, USER, custom workspace vars) pass through."""
+    def test_preserves_only_explicitly_allowed_non_secret_env(self):
+        """Required shell, network, model, and feature variables survive."""
         build = _build_terminal_shell_env()
         env = build({
             "HOME": "/app",
             "PATH": "/usr/bin",
             "USER": "app",
-            "MY_CUSTOM_VAR": "hello",
+            "SHELL": "/bin/bash",
+            "LC_CTYPE": "en_AU.UTF-8",
+            "HTTPS_PROXY": "http://proxy.example:8080",
+            "NO_PROXY": "workspace.example",
+            "REQUESTS_CA_BUNDLE": "/etc/corp-ca.pem",
+            "ANTHROPIC_MODEL": "databricks-claude-opus-4-8",
+            "ENABLE_OPENCODE": "true",
+            "CODA_VENV_PYTHON": "/app/.venv/bin/python",
+            "MY_CUSTOM_VAR": "deny-by-default",
         })
         assert env["PATH"] == "/usr/bin"
         assert env["USER"] == "app"
-        assert env["MY_CUSTOM_VAR"] == "hello"
+        assert env["SHELL"] == "/bin/bash"
+        assert env["LC_CTYPE"] == "en_AU.UTF-8"
+        assert env["HTTPS_PROXY"] == "http://proxy.example:8080"
+        assert env["NO_PROXY"] == "workspace.example"
+        assert env["REQUESTS_CA_BUNDLE"] == "/etc/corp-ca.pem"
+        assert env["ANTHROPIC_MODEL"] == "databricks-claude-opus-4-8"
+        assert env["ENABLE_OPENCODE"] == "true"
+        assert env["CODA_VENV_PYTHON"] == "/app/.venv/bin/python"
+        assert "MY_CUSTOM_VAR" not in env
+
+    @pytest.mark.parametrize("proxy", [
+        "http://svc:password@proxy.example:8080",
+        "svc:password@proxy.example:8080",
+    ])
+    def test_drops_proxy_urls_with_embedded_credentials(self, proxy):
+        build = _build_terminal_shell_env()
+        env = build({
+            "HOME": "/app",
+            "HTTPS_PROXY": proxy,
+            "https_proxy": proxy,
+        })
+        assert "HTTPS_PROXY" not in env
+        assert "https_proxy" not in env
+
+    @pytest.mark.parametrize("key", [
+        "NPM_REGISTRY",
+        "npm_config_registry",
+        "GITHUB_API_BASE",
+        "GITHUB_RELEASE_MIRROR",
+        "CLAUDE_INSTALLER_URL",
+        "HERMES_PIP_URL",
+        "DEEPWIKI_MCP_URL",
+        "EXA_MCP_URL",
+    ])
+    def test_drops_allowlisted_urls_with_embedded_credentials(self, key):
+        env = _build_terminal_shell_env()({
+            "HOME": "/app",
+            key: "https://svc:PASS_SENTINEL@service.example/path",
+        })
+        assert key not in env
+        assert "PASS_SENTINEL" not in repr(env)
+
+    @pytest.mark.parametrize("value", [
+        "hermes-agent==1.2.3",
+        "hermes-agent @ git+https://git.example/hermes-agent.git@abc123",
+    ])
+    def test_preserves_safe_hermes_package_specs(self, value):
+        env = _build_terminal_shell_env()({"HOME": "/app", "HERMES_PIP_URL": value})
+        assert env["HERMES_PIP_URL"] == value
+
+    def test_drops_credentialed_hermes_package_url(self):
+        value = "hermes-agent @ git+https://svc:PASS_SENTINEL@git.example/repo.git@abc"
+        env = _build_terminal_shell_env()({"HOME": "/app", "HERMES_PIP_URL": value})
+        assert "HERMES_PIP_URL" not in env
+        assert "PASS_SENTINEL" not in repr(env)
+
+    @pytest.mark.parametrize("key", ["ENABLE_MIRROR_URL", "LC_PROXY_URL"])
+    def test_drops_credentialed_dynamic_prefix_urls(self, key):
+        env = _build_terminal_shell_env()({
+            "HOME": "/app",
+            key: "https://svc:PASS_SENTINEL@service.example/path",
+        })
+        assert key not in env
+        assert "PASS_SENTINEL" not in repr(env)
+
+    @pytest.mark.parametrize("value", [
+        "http://proxy.example:notaport",
+        "http://proxy.example:99999",
+    ])
+    def test_drops_urls_with_invalid_ports(self, value):
+        env = _build_terminal_shell_env()({"HOME": "/app", "HTTPS_PROXY": value})
+        assert "HTTPS_PROXY" not in env
+
+    def test_unsafe_url_drop_is_observable_without_logging_value(self, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="app"):
+            env = _build_terminal_shell_env()({
+                "HOME": "/app",
+                "HTTPS_PROXY": "proxy.example:8080",
+            })
+
+        assert "HTTPS_PROXY" not in env
+        combined = " ".join(caplog.messages)
+        assert "HTTPS_PROXY" in combined
+        assert "proxy.example:8080" not in combined
 
     def test_does_not_mutate_input(self):
         """Caller's env dict (typically os.environ) must not be modified."""
@@ -125,9 +226,86 @@ class TestTerminalEnvStrip:
         "UV_INDEX_LONG_NAME_WITH_UNDERSCORES_PASSWORD",
         "npm_config_//jfrog-x.example.com/:_authToken",
         "npm_config_//host:8080/:_authToken",
+        "FUTURE_SERVICE_TOKEN",
+        "FUTURE_SERVICE_SECRET",
+        "FUTURE_SERVICE_PASSWORD",
+        "FUTURE_SERVICE_KEY",
+        "FUTURE_SERVICE_API_KEY",
+        "FUTURE_SERVICE_CREDENTIAL",
+        "FUTURE_CLIENT_ID",
+        "ENABLE_CLIENT_ID",
+        "LC_APIKEY",
+        "ENABLE_PRIVATEKEY",
+        "LC_GH_PAT",
+        "ENABLE_NPM_AUTH",
+        "LC_SESSION_COOKIE",
     ])
     def test_pattern_match_strips_all_credential_shapes(self, key):
-        """Each operator-named credential variant matches the strip pattern."""
+        """A new credential-shaped variable cannot leak by default."""
         build = _build_terminal_shell_env()
         env = build({key: "secret", "HOME": "/app"})
         assert key not in env
+
+    def test_only_reviewed_credential_shaped_exception_can_survive(self):
+        import app
+
+        broker_url = "http://127.0.0.1:12345/token/" + "a" * 43
+        env = _build_terminal_shell_env()({
+            "HOME": "/app",
+            app.BROKER_URL_ENV: broker_url,
+            "UNREVIEWED_ACCESS_TOKEN": "secret",
+        })
+
+        assert env[app.BROKER_URL_ENV] == broker_url
+        assert "UNREVIEWED_ACCESS_TOKEN" not in env
+        assert app._TERMINAL_CREDENTIAL_EXCEPTIONS == frozenset({
+            app.BROKER_URL_ENV,
+            "ENABLE_SP_APIKEYHELPER",
+        })
+
+    def test_session_launch_uses_sanitized_env(self, tmp_path, monkeypatch):
+        """The actual PTY Popen sink must receive the deny-by-default env."""
+        import app
+
+        broker_url = "http://127.0.0.1:12345/token/" + "a" * 43
+        broker_bin = tmp_path / ".coda-broker-bin"
+        broker_bin.mkdir()
+        for key, value in {
+            "HOME": str(tmp_path),
+            "PATH": "/usr/bin",
+            "ENABLE_SP_APIKEYHELPER": "true",
+            app.BROKER_URL_ENV: broker_url,
+            "GH_TOKEN": "GH_LEAK_SENTINEL",
+            "CODA_BOOTSTRAP_SECRET": "BOOTSTRAP_LEAK_SENTINEL",
+            "DATABRICKS_CLIENT_SECRET": "CLIENT_LEAK_SENTINEL",
+            "FUTURE_SERVICE_TOKEN": "FUTURE_LEAK_SENTINEL",
+        }.items():
+            monkeypatch.setenv(key, value)
+
+        proc = mock.Mock(pid=99999)
+        with mock.patch.object(app, "check_authorization", return_value=(True, "owner")), \
+             mock.patch("pty.openpty", return_value=(10, 11)), \
+             mock.patch("subprocess.Popen", return_value=proc) as popen, \
+             mock.patch("os.close"), \
+             mock.patch("threading.Thread") as thread:
+            thread.return_value.start = mock.Mock()
+            response = app.app.test_client().post("/api/session", json={"label": "env-boundary"})
+
+        assert response.status_code == 200
+        session_id = response.get_json()["session_id"]
+        try:
+            launched_env = popen.call_args.kwargs["env"]
+            serialized = repr(launched_env)
+            assert launched_env[app.BROKER_URL_ENV] == broker_url
+            assert launched_env["DATABRICKS_CONFIG_PROFILE"]
+            assert launched_env["PATH"].split(":")[0] == str(broker_bin)
+            for sentinel in (
+                "GH_LEAK_SENTINEL",
+                "BOOTSTRAP_LEAK_SENTINEL",
+                "CLIENT_LEAK_SENTINEL",
+                "FUTURE_LEAK_SENTINEL",
+            ):
+                assert sentinel not in serialized
+        finally:
+            with app.sessions_lock:
+                app.sessions.pop(session_id, None)

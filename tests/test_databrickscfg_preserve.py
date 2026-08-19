@@ -7,7 +7,10 @@ previous container life. Both writers now share
 utils.read_non_default_databrickscfg_sections so they honor one contract.
 """
 
-from utils import read_non_default_databrickscfg_sections
+import threading
+import time
+
+from utils import databrickscfg_update_lock, read_non_default_databrickscfg_sections
 
 
 _CFG_WITH_HOST = (
@@ -54,6 +57,36 @@ class TestReadNonDefaultSections:
         cp.read_string(rebuilt)
         assert cp["DEFAULT"]["token"] == "new"
         assert cp["omnigents-host"]["auth_type"] == "oauth-m2m"
+
+
+class TestDatabricksConfigUpdateLock:
+    def test_serializes_read_modify_write_sections(self, tmp_path):
+        cfg = tmp_path / ".databrickscfg"
+        first_entered = threading.Event()
+        release_first = threading.Event()
+        second_entered = threading.Event()
+
+        def first():
+            with databrickscfg_update_lock(cfg):
+                first_entered.set()
+                assert release_first.wait(2)
+
+        def second():
+            with databrickscfg_update_lock(cfg):
+                second_entered.set()
+
+        first_thread = threading.Thread(target=first)
+        second_thread = threading.Thread(target=second)
+        first_thread.start()
+        assert first_entered.wait(1)
+        second_thread.start()
+        time.sleep(0.05)
+        assert not second_entered.is_set()
+        release_first.set()
+        first_thread.join(2)
+        second_thread.join(2)
+        assert second_entered.is_set()
+        assert not first_thread.is_alive() and not second_thread.is_alive()
 
 
 class TestSetupDatabricksRestartClobber:

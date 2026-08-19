@@ -45,6 +45,7 @@ jobs:
       - name: requirements.txt must be installable
         run: |
           echo "::group::Resolving requirements.txt"
+          uv venv --python 3.12
           if ! uv pip install --dry-run -r requirements.txt; then
             echo "::error title=requirements.txt is unsatisfiable::pip install -r requirements.txt cannot resolve, so every Databricks Apps deploy from this commit would fail. requirements.txt is COMPILED — do not hand-edit a pin. Change the floor in pyproject.toml and run: uv pip compile pyproject.toml -o requirements.txt"
             exit 1

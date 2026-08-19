@@ -109,6 +109,28 @@ def _host_pypi_index() -> str | None:
     return None
 
 
+def _host_npm_registry() -> str | None:
+    """Read the host npm registry without forwarding npm credentials."""
+    import os
+
+    for var in ("NPM_CONFIG_REGISTRY", "npm_config_registry"):
+        value = os.environ.get(var, "").strip()
+        if value:
+            return value
+    try:
+        result = subprocess.run(
+            ["npm", "config", "get", "registry"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    value = result.stdout.strip()
+    return value if value.startswith(("https://", "http://")) else None
+
+
 def _pypi_reachable_from_container() -> tuple[bool, str]:
     """Quick test that some PyPI index is reachable from inside a container.
 
@@ -247,6 +269,7 @@ def _run_pipeline(image: str, extra_env: dict[str, str] | None = None) -> subpro
             "-e", f"SSL_CERT_FILE={container_ca}",
             "-e", f"CURL_CA_BUNDLE={container_ca}",
             "-e", f"NODE_EXTRA_CA_CERTS={container_ca}",
+            "-e", f"GIT_SSL_CAINFO={container_ca}",
             # uv reads UV_SYSTEM_CERTS to use the system trust store.
             "-e", "UV_SYSTEM_CERTS=true",
         ])
@@ -262,6 +285,9 @@ def _run_pipeline(image: str, extra_env: dict[str, str] | None = None) -> subpro
             # — operators may want the test to default to public pypi.
             "-e", f"UV_DEFAULT_INDEX={pypi_index}",
         ])
+    npm_registry = _host_npm_registry()
+    if npm_registry:
+        env_args.extend(["-e", f"NPM_CONFIG_REGISTRY={npm_registry}"])
     for k, v in (extra_env or {}).items():
         env_args.extend(["-e", f"{k}={v}"])
     return subprocess.run(

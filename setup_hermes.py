@@ -25,7 +25,14 @@ import os
 import subprocess
 from pathlib import Path
 
-from utils import adapt_instructions_file, ensure_https, get_gateway_host
+from cli_auth import _atomic_write_text
+from utils import (
+    CONTENT_FILTER_PROXY_URL,
+    adapt_instructions_file,
+    ensure_https,
+    get_gateway_host,
+)
+from token_helper import resolve_databricks_token
 
 # Opt-out: allow operators to disable Hermes bundling without removing the file.
 if os.environ.get("ENABLE_HERMES", "true").strip().lower() in ("false", "0", "no"):
@@ -39,7 +46,10 @@ if not os.environ.get("HOME") or os.environ["HOME"] == "/":
 home = Path(os.environ["HOME"])
 
 host = os.environ.get("DATABRICKS_HOST", "")
-token = os.environ.get("DATABRICKS_TOKEN", "")
+# The SP broker is the primary auth source on the no-PAT baseline. Resolve the
+# same layered source as the other public setup writers so broker-only startup
+# does not silently leave Hermes installed but unusable.
+token = resolve_databricks_token() or ""
 hermes_model = os.environ.get("HERMES_MODEL", "databricks-claude-opus-4-8")
 hermes_fallback_model = os.environ.get("HERMES_FALLBACK_MODEL", "databricks-claude-opus-4-8")
 
@@ -132,7 +142,7 @@ else:
     auth_token = token
     print(f"Hermes will route via content-filter proxy -> {host}/serving-endpoints")
 
-base_url = "http://127.0.0.1:4000"
+base_url = CONTENT_FILTER_PROXY_URL
 
 # 4. Write ~/.hermes/config.yaml
 config_path = hermes_home / "config.yaml"
@@ -218,7 +228,7 @@ if config_path.exists():
         should_write = False
 
 if should_write:
-    config_path.write_text("\n".join(lines))
+    _atomic_write_text(str(config_path), "\n".join(lines))
     # 0o600 — the file contains the plaintext PAT in `api_key:`. Without an
     # explicit chmod the file inherits umask-derived perms (often 0o644 on
     # container filesystems) which makes the token world-readable for any

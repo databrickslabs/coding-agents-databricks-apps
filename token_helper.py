@@ -20,7 +20,8 @@ import json
 import os
 import sys
 from pathlib import Path
-from urllib.request import urlopen
+
+from sp_token_broker import fetch_sp_token
 
 # Legacy SP OAuth profile name. New installs persist only a secret-free host
 # pointer under this name and fetch bearers from the loopback broker.
@@ -31,13 +32,9 @@ def resolve_sp_oauth_token() -> str | None:
     """Resolve a fresh token from the Omnigent host M2M profile."""
     broker_url = os.environ.get("CODA_SP_TOKEN_BROKER_URL", "").strip()
     if broker_url:
-        try:
-            with urlopen(broker_url, timeout=5) as response:
-                token = response.read().decode().strip()
-            if token:
-                return token
-        except Exception:
-            pass
+        token = fetch_sp_token(broker_url)
+        if token:
+            return token
     # Do not let a missing legacy profile trigger the SDK's ambient auth
     # discovery/network path. On local setup tests (and on a cold PAT-only
     # container) there is no profile; return immediately so setup scripts can
@@ -88,23 +85,63 @@ import os
 import shutil
 import subprocess
 import sys
-from urllib.request import urlopen
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler, build_opener
 
 SP_PROFILE = "omnigents-host"
+_MAX_TOKEN_BYTES = 16 * 1024
 # Set on the uv re-run so the child (which has the SDK) doesn't recurse.
 _REEXEC_GUARD = "OMNIGENTS_APIKEY_HELPER_REEXEC"
 
 
+class _NoRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, *_args, **_kwargs):
+        return None
+
+
+_NO_REDIRECT_OPENER = build_opener(_NoRedirectHandler())
+
+
+def urlopen(url, timeout):
+    return _NO_REDIRECT_OPENER.open(url, timeout=timeout)
+
+
+def _broker_token():
+    url = os.environ.get("CODA_SP_TOKEN_BROKER_URL", "").strip()
+    try:
+        parsed = urlsplit(url)
+        valid = (
+            parsed.scheme == "http"
+            and parsed.hostname == "127.0.0.1"
+            and parsed.username is None
+            and parsed.password is None
+            and parsed.port is not None
+            and not parsed.query
+            and not parsed.fragment
+            and len(parsed.path.split("/")) == 3
+            and parsed.path.startswith("/token/")
+            and len(parsed.path.rsplit("/", 1)[1]) >= 32
+        )
+    except ValueError:
+        valid = False
+    if not valid:
+        return None
+    try:
+        with urlopen(url, timeout=5) as response:
+            content_type = (response.headers.get("Content-Type", "") or "").split(";", 1)[0]
+            body = response.read(_MAX_TOKEN_BYTES + 1)
+        if content_type.strip().lower() != "text/plain" or len(body) > _MAX_TOKEN_BYTES:
+            return None
+        token = body.decode("utf-8").strip()
+        return token if token and "\r" not in token and "\n" not in token else None
+    except Exception:
+        return None
+
+
 def _sp_oauth_token():
-    broker_url = os.environ.get("CODA_SP_TOKEN_BROKER_URL", "").strip()
-    if broker_url:
-        try:
-            with urlopen(broker_url, timeout=5) as response:
-                token = response.read().decode().strip()
-            if token:
-                return token
-        except Exception:
-            pass
+    token = _broker_token()
+    if token:
+        return token
 
     # Upgrade fallback: mint via an older persisted M2M profile. New installs
     # never write client_id/client_secret to terminal-visible HOME.

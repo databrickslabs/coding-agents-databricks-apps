@@ -6,14 +6,21 @@ import subprocess
 from pathlib import Path
 
 from claude_otel import apply_claude_otel_env
-from token_helper import resolve_databricks_token
-from utils import (
-    add_1m_context_suffix,
-    discover_serving_endpoints,
-    ensure_https,
-    get_gateway_host,
-    pick_in_geo_model,
+from cli_auth import _atomic_write_text
+from gateway_models import (
+    claude_model_capabilities,
+    discover_model_catalog,
+    family_model,
+    pi_base_urls,
 )
+from token_helper import resolve_databricks_token
+from utils import add_1m_context_suffix, ensure_https
+from enterprise_config import deepwiki_mcp_url, exa_mcp_url
+
+# Opt-out: allow operators to keep only the explicitly selected agent CLIs.
+if os.environ.get("ENABLE_CLAUDE", "true").strip().lower() in ("false", "0", "no"):
+    print("ENABLE_CLAUDE=false — skipping Claude Code setup")
+    raise SystemExit(0)
 
 # Set HOME if not properly set
 if not os.environ.get("HOME") or os.environ["HOME"] == "/":
@@ -50,15 +57,13 @@ claude_dir.mkdir(exist_ok=True)
 # OpenCode: SP broker/profile, then user PAT.
 token = resolve_databricks_token() or ""
 if token:
-    gateway_host = get_gateway_host()
     databricks_host = ensure_https(os.environ.get("DATABRICKS_HOST", "").rstrip("/"))
-
-    if gateway_host:
-        anthropic_base_url = f"{gateway_host}/anthropic"
-        print(f"Using Databricks AI Gateway: {gateway_host}")
-    else:
-        anthropic_base_url = f"{databricks_host}/serving-endpoints/anthropic"
-        print(f"Using Databricks Host: {databricks_host}")
+    # Same workspace AI Gateway v2 route and model-services catalog as Pi and
+    # OpenCode. The legacy external `*.ai-gateway.*` host and the
+    # `/serving-endpoints/anthropic` fallback cannot serve `system.ai.*` model
+    # services, so Claude Code has to use the workspace origin too.
+    anthropic_base_url = pi_base_urls(databricks_host)["claude"]
+    print(f"Using workspace AI Gateway: {anthropic_base_url}")
 
     settings_path = claude_dir / "settings.json"
 
@@ -71,38 +76,20 @@ if token:
     else:
         settings = {}
 
-    # Discover models actually served at this workspace. The direct serving-
-    # endpoints list reflects Databricks Geo Designated Services policy — a
-    # workspace in AU only sees in-geo models, etc. Validating env-set defaults
-    # against this list avoids configuring Claude Code with a model the gateway
-    # claims to serve but the user's geo can't access.
-    available = discover_serving_endpoints(databricks_host, token)
-    if available:
-        print(f"Discovered {len(available)} READY serving endpoints at workspace")
+    # Ask the gateway which model services it will actually accept over
+    # `anthropic/v1/messages`, then configure only those. A model the workspace
+    # serves under a different dialect would 404 on the first message.
+    catalog = discover_model_catalog(databricks_host, token)
+    served = catalog["anthropic"]
+    print(f"Discovered {len(served)} anthropic-dialect model services")
 
-    requested_model = os.environ.get("ANTHROPIC_MODEL", "databricks-claude-opus-4-8")
-    active_model = pick_in_geo_model(
-        [requested_model, "databricks-claude-opus-4-7", "databricks-claude-opus-4-6", "databricks-claude-sonnet-4-6"],
-        available,
-        fallback=requested_model,
-    )
-    opus_model = pick_in_geo_model(
-        ["databricks-claude-opus-4-8", "databricks-claude-opus-4-7", "databricks-claude-opus-4-6"],
-        available,
-        fallback="databricks-claude-opus-4-8",
-    )
-    sonnet_model = pick_in_geo_model(
-        ["databricks-claude-sonnet-4-6", "databricks-claude-sonnet-4-5"],
-        available,
-        fallback="databricks-claude-sonnet-4-6",
-    )
-    haiku_model = pick_in_geo_model(
-        ["databricks-claude-haiku-4-5"],
-        available,
-        fallback="databricks-claude-haiku-4-5",
-    )
-    if available and active_model != requested_model:
-        print(f"ANTHROPIC_MODEL={requested_model} not served at this workspace, using {active_model}")
+    requested_model = os.environ.get("ANTHROPIC_MODEL", "system.ai.claude-sonnet-5")
+    sonnet_model = family_model("sonnet", served, fallback=requested_model)
+    opus_model = family_model("opus", served, fallback=sonnet_model)
+    haiku_model = family_model("haiku", served, fallback=sonnet_model)
+    active_model = requested_model if requested_model in served else sonnet_model
+    if served and active_model != requested_model:
+        print(f"ANTHROPIC_MODEL={requested_model} not served here, using {active_model}")
 
     settings.setdefault("env", {})
     settings["env"]["ANTHROPIC_MODEL"] = active_model
@@ -135,17 +122,28 @@ if token:
         print(f"Claude apiKeyHelper installed: {helper_path}")
     else:
         settings["env"]["ANTHROPIC_AUTH_TOKEN"] = token
-    # Suffix opus/sonnet with [1m] so Claude Code requests the 1M context window
-    # via the gateway (see utils.add_1m_context_suffix). Haiku stays 200K-native.
-    settings["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = add_1m_context_suffix(opus_model)
-    settings["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = add_1m_context_suffix(sonnet_model)
+    # Only suffix `[1m]` for tiers that actually offer the opt-in 1M window,
+    # per the shared Claude version policy (opus >= 4.6, sonnet >= 4.5). Fable 5
+    # is 1M by default and needs no suffix; Haiku is 200K-native.
+    _supports_1m = {
+        spec["id"]: spec["supports_1m"] for spec in (catalog.get("anthropic_specs") or [])
+    }
+
+    def _tier(model: str) -> str:
+        supports_1m = _supports_1m.get(model)
+        if supports_1m is None:
+            supports_1m = claude_model_capabilities(model)["supports_1m"]
+        return add_1m_context_suffix(model) if supports_1m else model
+
+    settings["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = _tier(opus_model)
+    settings["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = _tier(sonnet_model)
     settings["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = haiku_model
     settings["env"]["ANTHROPIC_CUSTOM_HEADERS"] = "x-databricks-use-coding-agent-mode: true"
     settings["env"]["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] = "1"
     if apply_claude_otel_env(settings, token, databricks_host):
         print("Claude Code OTEL export enabled")
 
-    settings_path.write_text(json.dumps(settings, indent=2))
+    _atomic_write_text(str(settings_path), json.dumps(settings, indent=2))
     print(f"Claude configured: {settings_path}")
 else:
     print("No DATABRICKS_TOKEN — skipping settings.json (will be configured after PAT setup)")
@@ -154,8 +152,6 @@ else:
 # Honour DEEPWIKI_MCP_URL / EXA_MCP_URL from enterprise_config — operators in
 # locked-down envs can set these to empty string to omit the public MCP
 # servers entirely. Default behaviour (no env vars) remains unchanged.
-from enterprise_config import deepwiki_mcp_url, exa_mcp_url
-
 mcp_servers = {}
 if dw_url := deepwiki_mcp_url():
     mcp_servers["deepwiki"] = {"type": "http", "url": dw_url}
@@ -183,7 +179,7 @@ else:
     existing = {}
 existing["hasCompletedOnboarding"] = True
 existing["mcpServers"] = mcp_servers  # ours wins — these are the agent CLIs we manage
-claude_json_path.write_text(json.dumps(existing, indent=2))
+_atomic_write_text(str(claude_json_path), json.dumps(existing, indent=2))
 
 print(f"Onboarding skipped + MCPs configured ({len(mcp_servers)} servers): {claude_json_path}")
 

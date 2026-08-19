@@ -161,6 +161,16 @@ your user (owner-gated `POST /api/omnigent-host/share`).
 | `GEMINI_MODEL` | No | Gemini model name (default: `databricks-gemini-2-5-pro`) |
 | `HERMES_MODEL` | No | Hermes model name (default: `databricks-claude-opus-4-8`) |
 | `DATABRICKS_GATEWAY_HOST` | No | AI Gateway URL override. Auto-discovered from `DATABRICKS_WORKSPACE_ID` if unset. Falls back to direct model serving if neither is available |
+| `MAX_CONCURRENT_SESSIONS` | No | Browser PTY hard cap per worker (default `5`) |
+| `CODA_MEMORY_HIGH_WATERMARK_PERCENT` / `CODA_MEMORY_RESUME_THRESHOLD_PERCENT` | No | cgroup admission hysteresis (defaults `80` / `70`) |
+| `CODA_BROWSER_SESSION_RESERVE_MB` | No | Reserve required for each new browser PTY (default `768` MB) |
+| `CODA_CGROUP_V2_ROOT` | No | Optional cgroup root for deterministic tests or non-default layouts |
+
+The memory gate uses the container's own cgroup accounting. It subtracts both
+active and inactive reclaimable file cache, keeps swap-backed shared memory in
+the working set, and falls back to the fixed session cap when accounting is
+unavailable. Status responses distinguish unavailable telemetry from healthy
+low usage.
 
 ## Security Model
 

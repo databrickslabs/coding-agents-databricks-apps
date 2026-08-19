@@ -20,7 +20,6 @@ Safety:
   file mirror, not a repo) — after restoring, re-run ``git init`` / re-clone if
   you need history. Do not import ``.git`` into the workspace.
 """
-import configparser
 import subprocess
 import sys
 from pathlib import Path
@@ -33,33 +32,6 @@ except ImportError:
         f.write(f"databricks-sdk not installed for {sys.executable}\n")
     print("⚠ databricks-sdk not available", file=sys.stderr)
     sys.exit(1)
-
-
-def _read_databrickscfg():
-    """Read host and token from ~/.databrickscfg [DEFAULT] profile."""
-    cfg_path = Path.home() / ".databrickscfg"
-    if not cfg_path.exists():
-        return None, None
-    parser = configparser.ConfigParser()
-    parser.read(cfg_path)
-    return (
-        parser.get("DEFAULT", "host", fallback=None),
-        parser.get("DEFAULT", "token", fallback=None),
-    )
-
-
-def get_user_email():
-    """Get current user's email from Databricks token."""
-    host, token = _read_databrickscfg()
-    if not host or not token:
-        raise RuntimeError("~/.databrickscfg missing host or token")
-    w = WorkspaceClient(host=host, token=token, auth_type="pat")
-    try:
-        from telemetry import set_product_info
-        set_product_info(w)
-    except Exception:
-        pass
-    return w.current_user.me().user_name
 
 
 def _target_is_nonempty(path: Path) -> bool:
@@ -87,13 +59,13 @@ def restore_project(project_name: str, force: bool = False):
         return 3
 
     try:
-        get_user_email()  # validates ~/.databrickscfg auth + inits telemetry
-        from utils import databrickscfg_only_env, workspace_sync_dest
+        from utils import workspace_sync_auth, workspace_sync_dest
 
         workspace_src = workspace_sync_dest(project_name)
 
-        # Strip ambient creds so the CLI falls through to ~/.databrickscfg
-        restore_env = databrickscfg_only_env()
+        # Validates auth (PAT profile, else the SP-broker profile) + inits
+        # telemetry, and returns the env the CLI must run with.
+        restore_env, _ = workspace_sync_auth()
 
         local_dest.mkdir(parents=True, exist_ok=True)
 

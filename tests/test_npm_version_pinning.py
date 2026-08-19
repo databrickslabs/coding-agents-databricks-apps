@@ -1,6 +1,7 @@
 """Tests for get_npm_version() — dynamic npm version resolution for supply chain hardening."""
 
 import os
+from pathlib import Path
 from unittest import mock
 
 import pytest

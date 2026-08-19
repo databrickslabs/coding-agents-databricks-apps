@@ -1,5 +1,6 @@
 import os
 import sys
+import atexit
 import hmac
 import codecs
 import pty
@@ -14,14 +15,19 @@ import signal
 import time
 import copy
 import logging
+import re
 import shutil
+from urllib.parse import urlsplit
 from concurrent.futures import ThreadPoolExecutor, wait
 from flask import Flask, send_from_directory, request, jsonify, session
 from flask_socketio import SocketIO, emit, join_room, leave_room, disconnect
 from werkzeug.utils import secure_filename
 from collections import deque
 
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10 compatibility
+    import tomli as tomllib
 import requests
 
 import app_state
@@ -30,8 +36,15 @@ from claude_otel import apply_claude_otel_env
 from utils import add_1m_context_suffix, ensure_https, get_gateway_host
 from token_helper import write_databricks_token_wrapper
 from pat_rotator import PATRotator
-from sp_token_broker import BROKER_URL_ENV, broker_url, mint_sp_token, start_sp_token_broker
+from sp_token_broker import (
+    BROKER_URL_ENV,
+    broker_url,
+    mint_sp_token,
+    start_sp_token_broker,
+    stop_sp_token_broker,
+)
 from telemetry import log_telemetry, set_product_info
+from resource_capacity import CapacityDecision, controller_from_env, env_int
 
 # Sanitize DATABRICKS_TOKEN early — the platform sometimes injects trailing
 # newlines / whitespace which causes auth failures.  Cleaning it here prevents
@@ -52,7 +65,10 @@ except Exception:
 SESSION_TIMEOUT_SECONDS = 86400      # No poll for 24 hours = dead session
 CLEANUP_INTERVAL_SECONDS = 900       # Check for stale sessions every 15 min
 GRACEFUL_SHUTDOWN_WAIT = 3          # Seconds to wait after SIGHUP before SIGKILL
-MAX_CONCURRENT_SESSIONS = int(os.environ.get("MAX_CONCURRENT_SESSIONS", "5"))
+# Browser PTY launches use this controller and the container's cgroup accounting.
+MAX_CONCURRENT_SESSIONS = max(1, env_int("MAX_CONCURRENT_SESSIONS", 5))
+_browser_capacity = controller_from_env()
+_browser_pending = 0
 
 # Logging setup
 logging.basicConfig(level=logging.INFO)
@@ -157,6 +173,11 @@ def handle_sigterm(signum, frame):
         socketio.emit('shutting_down', {})
     except Exception:
         pass
+    threading.Thread(
+        target=_shutdown_sp_token_broker,
+        daemon=True,
+        name="sp-token-broker-shutdown",
+    ).start()
 
 # NOTE: Do not register SIGTERM handler at module level.
 # It is installed in initialize_app() for gunicorn only.
@@ -215,6 +236,18 @@ def _get_setup_state_snapshot():
 app_owner = None
 _omnigent_sp_creds = None
 _sp_token_broker_server = None
+_sp_token_broker_shutdown_lock = threading.Lock()
+_sp_token_broker_atexit_registered = False
+
+
+def _shutdown_sp_token_broker():
+    """Invalidate the loopback capability and close its listener."""
+    global _sp_token_broker_server
+    with _sp_token_broker_shutdown_lock:
+        server = _sp_token_broker_server
+        os.environ.pop(BROKER_URL_ENV, None)
+        stop_sp_token_broker(server)
+        _sp_token_broker_server = None
 
 
 def _owner_check_disabled() -> bool:
@@ -266,12 +299,6 @@ def _run_step(step_id, command):
 
         result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=300)
         if result.returncode == 0:
-            # The profile-backed broker shim is also needed by direct terminal
-            # `databricks` commands, not only Omnigent's SDK model-catalog path.
-            # On a no-Omnigent deploy the host setup never calls its installer,
-            # leaving databricks_cli_path pointing at a missing wrapper and every
-            # workspace CLI call failing with `no cached credentials`. Install it
-            # immediately after the real CLI is available.
             if step_id == "dbcli" and os.environ.get(BROKER_URL_ENV):
                 _ensure_broker_cli_wrapper()
             _update_step(step_id, status="complete", completed_at=time.time())
@@ -285,15 +312,7 @@ def _run_step(step_id, command):
 
 
 def _ensure_broker_cli_wrapper() -> bool:
-    """Install the broker-aware Databricks CLI shim for terminal commands.
-
-    The SDK honours the absolute `databricks_cli_path` in the omnigents-host
-    profile, but a user typing `databricks ...` resolves through PATH. Put the
-    same shim first in the terminal PATH too. This is needed when
-    ENABLE_SP_APIKEYHELPER is on but Omnigent resources are absent: the broker
-    starts, the profile is written, but the Omnigent host setup (which used to
-    install the shim) is intentionally skipped.
-    """
+    """Install the broker-aware CLI shim for direct terminal commands."""
     if not os.environ.get(BROKER_URL_ENV, "").strip():
         return False
     home = os.environ.get("HOME", "/app/python/source_code")
@@ -302,37 +321,91 @@ def _ensure_broker_cli_wrapper() -> bool:
     expected = os.path.join(home, ".local", "bin", "databricks")
     real_cli = expected if os.path.isfile(expected) else shutil.which("databricks")
     if not real_cli:
-        logger.warning("SP broker is running but Databricks CLI is not installed yet; wrapper deferred")
+        logger.warning("SP broker is running but Databricks CLI is not installed yet")
         return False
     wrapper = write_databricks_token_wrapper(os.path.join(home, ".coda-broker-bin"), real_cli)
     logger.info("Installed broker-aware Databricks CLI wrapper at %s", wrapper)
     return True
 
 
+_TERMINAL_ENV_ALLOWLIST = frozenset({
+    "HOME", "PATH", "USER", "LOGNAME", "SHELL", "TERM", "COLORTERM",
+    "LANG", "LANGUAGE", "TZ", "TMPDIR", "EDITOR", "VISUAL", "PAGER",
+    "LESS", "NO_COLOR", "FORCE_COLOR", "LC_ALL",
+    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+    "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "SSL_CERT_FILE", "SSL_CERT_DIR",
+    "NODE_EXTRA_CA_CERTS", "ENTERPRISE_MODE", "UV_HTTP_TIMEOUT",
+    "NPM_REGISTRY", "npm_config_registry", "GITHUB_API_BASE",
+    "GITHUB_RELEASE_MIRROR", "CLAUDE_INSTALLER_URL", "HERMES_PIP_URL",
+    "DEEPWIKI_MCP_URL", "EXA_MCP_URL",
+    "ANTHROPIC_MODEL", "PI_MODEL", "GEMINI_MODEL", "CODEX_MODEL",
+    "HERMES_MODEL", "HERMES_FALLBACK_MODEL", "ENABLE_FABLE_MODELS",
+    "CLAUDE_CODE_DISABLE_AUTO_MEMORY", "CLAUDE_CODE_OTEL_ENABLED",
+    "MLFLOW_TRACING_ENABLED", "MLFLOW_OSS_TRACKING_ENABLED", "PROXY_TRACE_CONTENT",
+    "CODA_VENV_PYTHON", "DATABRICKS_CONFIG_FILE", "DATABRICKS_CONFIG_PROFILE",
+    BROKER_URL_ENV,
+})
+_TERMINAL_ENV_PREFIX_ALLOWLIST = ("LC_", "ENABLE_")
+_TERMINAL_URL_VARS = frozenset({
+    "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "NPM_REGISTRY",
+    "npm_config_registry", "GITHUB_API_BASE", "GITHUB_RELEASE_MIRROR",
+    "CLAUDE_INSTALLER_URL", "HERMES_PIP_URL", "DEEPWIKI_MCP_URL", "EXA_MCP_URL",
+    BROKER_URL_ENV,
+})
+_CREDENTIAL_SHAPED_ENV_PATTERN = re.compile(
+    r"TOKEN|SECRET|PASSWORD|PASSPHRASE|CREDENTIALS?|BEARER|AUTH|SESSION"
+    r"|COOKIE|SIGNING|SALT|API[_-]?KEY|PRIVATE[_-]?KEY|CLIENT[_-]?ID"
+    r"|(?:^|_)(?:KEY|PAT|PWD)(?:_|$)", re.IGNORECASE,
+)
+_TERMINAL_CREDENTIAL_EXCEPTIONS = frozenset({
+    BROKER_URL_ENV,
+    "ENABLE_SP_APIKEYHELPER",
+})
+
+
+def _terminal_url_is_safe(key: str, value: str) -> bool:
+    """Reject URL userinfo/malformed ports while accepting package specs."""
+    candidate = value
+    if key == "HERMES_PIP_URL":
+        if not enterprise_config._HERMES_SPEC_RE.match(value):
+            return False
+        direct_url = re.search(r"git\+(https?://\S+)", value)
+        if direct_url is None:
+            return True
+        candidate = direct_url.group(1)
+    try:
+        parsed = urlsplit(candidate)
+        parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme in ("http", "https")
+        and parsed.hostname is not None
+        and parsed.username is None
+        and parsed.password is None
+    )
+
+
 def _build_terminal_shell_env(base_env: dict) -> dict:
-    """Build the env dict for a user terminal PTY.
+    """Build a deny-by-default, credential-free browser-terminal environment."""
+    shell_env = {
+        key: value for key, value in base_env.items()
+        if key in _TERMINAL_ENV_ALLOWLIST
+        or key.startswith(_TERMINAL_ENV_PREFIX_ALLOWLIST)
+    }
+    for key in tuple(shell_env):
+        if key in _TERMINAL_URL_VARS or key.upper().endswith(("_URL", "_URI")):
+            value = shell_env.get(key, "").strip()
+            if value and not _terminal_url_is_safe(key, value):
+                shell_env.pop(key, None)
+                logger.warning("Browser terminal dropped unsafe URL variable %s", key)
+    for key in tuple(shell_env):
+        if (
+            _CREDENTIAL_SHAPED_ENV_PATTERN.search(key)
+            and key not in _TERMINAL_CREDENTIAL_EXCEPTIONS
+        ):
+            shell_env.pop(key, None)
 
-    Starts from ``base_env`` (typically ``os.environ``) and strips the
-    credentials and CLI-state vars that should never reach a user shell:
-
-    - ``CLAUDECODE`` / ``CLAUDE_CODE_SESSION`` — would mark the terminal as
-      a nested-Claude session.
-    - ``DATABRICKS_TOKEN`` / ``DATABRICKS_HOST`` — forces CLIs to read
-      ``~/.databrickscfg`` per-request so they pick up rotated PATs without
-      an env-snapshot rewrite.
-    - ``GEMINI_API_KEY`` — same pattern, read from config file instead.
-    - ``NPM_TOKEN`` / ``UV_DEFAULT_INDEX`` / ``UV_INDEX_*_PASSWORD`` /
-      ``UV_INDEX_*_USERNAME`` / ``npm_config_//host/:_authToken`` —
-      deployer-level credentials from app.yaml that must not be readable
-      via ``env`` inside the user terminal. The user's npm/uv operations
-      still work because ``~/.npmrc`` (written by
-      ``enterprise_config.bootstrap``) holds the registry config — they
-      just can't see the bearer token in plaintext. (F-01)
-    - ``CHALLENGE_REPO_READ_TOKEN`` — workshop-only read token for the
-      startup challenge-repo clone; must never be exposed in attendee
-      terminals.
-    """
-    shell_env = base_env.copy()
     shell_env["TERM"] = "xterm-256color"
     lc_all = shell_env.get("LC_ALL")
     locale_value = lc_all if lc_all else shell_env.get("LANG", "")
@@ -341,27 +414,6 @@ def _build_terminal_shell_env(base_env: dict) -> dict:
         shell_env["LC_ALL"] = "C.UTF-8"
     if shell_env.get("ENABLE_SP_APIKEYHELPER", "").strip().lower() in ("true", "1", "yes"):
         shell_env["DATABRICKS_CONFIG_PROFILE"] = "omnigents-host"
-
-    # Always-strip fixed names
-    for key in (
-        "CLAUDECODE", "CLAUDE_CODE_SESSION",
-        "DATABRICKS_TOKEN", "DATABRICKS_HOST",
-        "GEMINI_API_KEY",
-        "NPM_TOKEN", "UV_DEFAULT_INDEX",
-        "CHALLENGE_REPO_READ_TOKEN",
-    ):
-        shell_env.pop(key, None)
-
-    # Pattern-strip operator-named registry credentials
-    for key in list(shell_env.keys()):
-        if (
-            key.startswith("npm_config_//")  # derived registry-auth tokens
-            or (
-                key.startswith("UV_INDEX_")
-                and (key.endswith("_PASSWORD") or key.endswith("_USERNAME"))
-            )
-        ):
-            shell_env.pop(key, None)
 
     # Make the broker shim the direct terminal's first Databricks executable too.
     # The session creator also prepends this path defensively; doing it here
@@ -768,8 +820,8 @@ def _configure_all_cli_auth(token):
     if apply_claude_otel_env(settings, token, databricks_host):
         logger.info("Claude Code OTEL export configured")
 
-    with open(settings_path, "w") as f:
-        json.dump(settings, f, indent=2)
+    from cli_auth import _atomic_write_text
+    _atomic_write_text(settings_path, json.dumps(settings, indent=2))
 
     logger.info(f"Claude CLI auth configured: {settings_path}")
 
@@ -794,6 +846,26 @@ def _configure_all_cli_auth(token):
                 logger.warning(f"CLI config failed: {script}: {result.stderr[:200]}")
         except Exception as e:
             logger.warning(f"CLI config error: {script}: {e}")
+
+
+def _refresh_cli_auth_after_setup(token):
+    """Reconcile setup/rotation races without exposing token-bearing errors."""
+    try:
+        from cli_auth import update_cli_tokens
+
+        result = update_cli_tokens(token)
+    except Exception as error:
+        logger.warning("Post-setup token sync failed (%s)", type(error).__name__)
+        return False
+    if getattr(result, "ok", False) is not True:
+        failed = tuple(getattr(result, "failed", ()))
+        logger.warning(
+            "Post-setup token sync incomplete: failed=%s",
+            ",".join(failed) if failed else "unknown",
+        )
+        return False
+    logger.info("Post-setup token sync: CLI configs hold the current token")
+    return True
 
 
 def run_setup():
@@ -892,12 +964,7 @@ def run_setup():
     # rotation's update_cli_tokens() call silently skips missing config files).
     current_token = os.environ.get("DATABRICKS_TOKEN", "")
     if current_token:
-        try:
-            from cli_auth import update_cli_tokens
-            update_cli_tokens(current_token)
-            logger.info("Post-setup token sync: all CLI configs updated with current token")
-        except Exception as e:
-            logger.warning(f"Post-setup token sync failed: {e}")
+        _refresh_cli_auth_after_setup(current_token)
 
     with setup_lock:
         any_error = any(s["status"] == "error" for s in setup_state["steps"])
@@ -1445,42 +1512,128 @@ def _process_tree_rss_mb():
         return None
 
 
-def resource_pressure_monitor():
-    """Periodically log memory / thread / session pressure.
+def _capacity_decision() -> CapacityDecision:
+    with sessions_lock:
+        count = len(sessions)
+        pending = _browser_pending
+    return _browser_capacity.evaluate(count, MAX_CONCURRENT_SESSIONS, pending)
 
-    Read-only observability: gives a crash a runway of telemetry instead of a
-    single silent moment, and surfaces per-session memory so the operator can
-    tune MAX_CONCURRENT_SESSIONS from data. Never raises — monitoring must not
-    be able to take down the process it's watching.
-    """
+
+def _capacity_payload(decision: CapacityDecision, *, session_count: int, pending: int = 0) -> dict:
+    memory = decision.memory
+    return {
+        "current": memory.used_bytes,
+        "limit": memory.limit_bytes,
+        "percent": memory.percent,
+        "telemetry_available": memory.available and memory.limit_bytes is not None,
+        "state": decision.state,
+        "observed_at": time.time(),
+        "high_watermark_percent": _browser_capacity.high_watermark_percent,
+        "resume_threshold_percent": _browser_capacity.resume_threshold_percent,
+        "reserve_mb": round(_browser_capacity.reserve_bytes / (1024 * 1024)),
+        "browser_sessions": {
+            "current": session_count,
+            "pending": pending,
+            "limit": MAX_CONCURRENT_SESSIONS,
+            "accepting": decision.allowed,
+        },
+    }
+
+
+def _capacity_rejection(decision: CapacityDecision, *, session_count: int, pending: int = 0):
+    if decision.state == "pressured":
+        code = "BROWSER_MEMORY_PRESSURE"
+        message = (
+            "Browser session launch paused because shared container memory is "
+            "above the safe high-watermark. Retry after memory falls below the "
+            "resume threshold or close an existing session."
+        )
+    else:
+        code = "BROWSER_SESSION_LIMIT"
+        message = (
+            f"Maximum {MAX_CONCURRENT_SESSIONS} concurrent browser sessions reached. "
+            "Close an existing session before retrying."
+        )
+    capacity = _capacity_payload(decision, session_count=session_count, pending=pending)
+    return jsonify({
+        "error": message,
+        "code": code,
+        "message": message,
+        "current": capacity["current"],
+        "limit": capacity["limit"],
+        "retry_guidance": "Retry after capacity becomes available.",
+        "capacity": capacity,
+    }), 429
+
+
+_SPECULATIVE_REAP_TIMEOUT_S = 2.0
+
+
+def _kill_speculative_session(pid: int, master_fd: int | None) -> None:
+    """Close PTY resources and reap a child rejected after fork."""
+    if master_fd is not None:
+        try:
+            os.close(master_fd)
+        except OSError:
+            pass
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
+    deadline = time.monotonic() + _SPECULATIVE_REAP_TIMEOUT_S
+    while time.monotonic() < deadline:
+        try:
+            reaped, _ = os.waitpid(pid, os.WNOHANG)
+        except (OSError, ChildProcessError):
+            return
+        if reaped:
+            return
+        time.sleep(0.05)
+
+
+def _resource_capacity_snapshot() -> dict:
+    with sessions_lock:
+        session_count = len(sessions)
+        pending = _browser_pending
+    decision = _browser_capacity.evaluate(session_count, MAX_CONCURRENT_SESSIONS, pending)
+    capacity = _capacity_payload(decision, session_count=session_count, pending=pending)
+    capacity["process_tree_rss_mb"] = _process_tree_rss_mb()
+    return capacity
+
+
+def _log_resource_snapshot() -> None:
+    with sessions_lock:
+        n_sessions = len(sessions)
+        pending = _browser_pending
+    decision = _browser_capacity.evaluate(n_sessions, MAX_CONCURRENT_SESSIONS, pending)
+    memory = decision.memory
+    tree_rss = _process_tree_rss_mb()
+    try:
+        import resource as _res
+        peak_self_mb = round(_res.getrusage(_res.RUSAGE_SELF).ru_maxrss / 1024)
+    except Exception:
+        peak_self_mb = None
+    try:
+        open_fds = len(os.listdir(f"/proc/{os.getpid()}/fd"))
+    except Exception:
+        open_fds = None
+    per_session = round(tree_rss / n_sessions) if tree_rss and n_sessions else None
+    logger.info(
+        "RESOURCE: browser_sessions=%s/%s cgroup_used=%sB cgroup_limit=%sB "
+        "cgroup_percent=%s pressure=%s threads=%s tree_rss=%sMB "
+        "per_session=%sMB peak_self=%sMB open_fds=%s",
+        n_sessions, MAX_CONCURRENT_SESSIONS, memory.used_bytes, memory.limit_bytes,
+        memory.percent, decision.state, threading.active_count(), tree_rss,
+        per_session, peak_self_mb, open_fds,
+    )
+
+
+def resource_pressure_monitor():
+    """Periodically log cgroup and browser-session pressure."""
     while True:
         time.sleep(RESOURCE_MONITOR_INTERVAL_SECONDS)
         try:
-            with sessions_lock:
-                n_sessions = len(sessions)
-            n_threads = threading.active_count()
-            tree_rss = _process_tree_rss_mb()
-            try:
-                import resource as _res
-                # ru_maxrss is KB on Linux — peak RSS of THIS process only.
-                peak_self_mb = round(
-                    _res.getrusage(_res.RUSAGE_SELF).ru_maxrss / 1024
-                )
-            except Exception:
-                peak_self_mb = None
-            try:
-                open_fds = len(os.listdir(f"/proc/{os.getpid()}/fd"))
-            except Exception:
-                open_fds = None
-            per_session = (
-                round(tree_rss / n_sessions) if tree_rss and n_sessions else None
-            )
-            logger.info(
-                "RESOURCE: sessions=%s/%s threads=%s tree_rss=%sMB "
-                "per_session=%sMB peak_self=%sMB open_fds=%s",
-                n_sessions, MAX_CONCURRENT_SESSIONS, n_threads,
-                tree_rss, per_session, peak_self_mb, open_fds,
-            )
+            _log_resource_snapshot()
         except Exception as e:
             logger.warning("RESOURCE monitor iteration failed: %s", e)
 
@@ -1700,6 +1853,13 @@ def get_version():
     return jsonify({"version": APP_VERSION})
 
 
+@app.route("/api/capacity")
+@app.route("/api/resource-status")
+def capacity_status():
+    """Return an authenticated, secret-free browser-capacity projection."""
+    return jsonify(_resource_capacity_snapshot())
+
+
 @app.route("/api/omnigents-status")
 def omnigents_status():
     """Report Omnigents host-integration state (FR-9 observability)."""
@@ -1851,8 +2011,16 @@ def _bootstrap_pat(token):
         # Revoke only the bootstrap PAT — leave other user PATs intact (#98)
         pat_rotator.revoke_bootstrap_token()
     else:
-        # Rotation failed — fall back to supplied token (still valid)
-        pat_rotator._write_databrickscfg(token)
+        # Rotation may have minted a token before reporting degraded status.
+        # Keep that in-memory token authoritative; never persist the original
+        # bootstrap PAT as a fallback after the exchange has been attempted.
+        if (
+            pat_rotator._current_token == token
+            or not pat_rotator._current_token_id
+        ):
+            logger.warning("Bootstrap PAT exchange did not produce a controlled token")
+            return False, {"error": "Token exchange unavailable"}, 503
+        logger.warning("Bootstrap PAT exchange degraded; keeping the current token in memory")
     pat_rotator.start()
 
     # Configure all CLI tools (Claude, Codex, OpenCode, Gemini, Databricks)
@@ -1960,14 +2128,25 @@ def configure_pat():
 @app.route("/api/session", methods=["POST"])
 def create_session():
     """Create a new terminal session."""
-    # Quick reject before forking a PTY (approximate — authoritative check below)
+    global _browser_pending
     with sessions_lock:
-        if len(sessions) >= MAX_CONCURRENT_SESSIONS:
-            return jsonify({"error": f"Maximum {MAX_CONCURRENT_SESSIONS} concurrent sessions reached. Close an existing session first."}), 429
+        session_count = len(sessions)
+        decision = _browser_capacity.evaluate(
+            session_count, MAX_CONCURRENT_SESSIONS, _browser_pending
+        )
+        if not decision.allowed:
+            return _capacity_rejection(
+                decision, session_count=session_count, pending=_browser_pending
+            )
+        _browser_pending += 1
 
-    data = request.get_json(silent=True) or {}
-    label = data.get("label", "")
+    master_fd = slave_fd = None
+    pid = None
+    inserted = False
+    reserved = True
     try:
+        data = request.get_json(silent=True)
+        label = data.get("label", "") if isinstance(data, dict) else ""
         master_fd, slave_fd = pty.openpty()
         # Set up environment for the shell — strips PAT, SP creds, registry
         # tokens, the workshop challenge-repo token, and other secrets that
@@ -2011,19 +2190,21 @@ def create_session():
             cwd=projects_dir
         ).pid
         os.close(slave_fd)  # Parent doesn't need the slave side; child inherited it
+        slave_fd = None
 
         session_id = str(uuid.uuid4())
 
         with sessions_lock:
-            # Authoritative check under the same lock as insertion — prevents
-            # TOCTOU race where two concurrent requests both pass the early check.
-            if len(sessions) >= MAX_CONCURRENT_SESSIONS:
-                os.close(master_fd)
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except OSError:
-                    pass
-                return jsonify({"error": f"Maximum {MAX_CONCURRENT_SESSIONS} concurrent sessions reached. Close an existing session first."}), 429
+            session_count = len(sessions)
+            decision = _browser_capacity.evaluate(
+                session_count, MAX_CONCURRENT_SESSIONS, _browser_pending - 1
+            )
+            _browser_pending -= 1
+            reserved = False
+            if not decision.allowed:
+                return _capacity_rejection(
+                    decision, session_count=session_count, pending=_browser_pending
+                )
             sessions[session_id] = {
                 "master_fd": master_fd,
                 "pid": pid,
@@ -2034,16 +2215,41 @@ def create_session():
                 "label": label,
             }
 
-        # Start background reader thread
+        # Start the reader before transferring cleanup ownership to the session.
         thread = threading.Thread(target=read_pty_output, args=(session_id, master_fd), daemon=True)
-        thread.start()
+        try:
+            thread.start()
+        except Exception:
+            with sessions_lock:
+                sessions.pop(session_id, None)
+            raise
+        inserted = True
 
-        # Telemetry: track session creation with agent type
-        log_telemetry("agent", label or "shell")
+        try:
+            log_telemetry("agent", label or "shell")
+        except Exception as exc:
+            logger.warning("session creation telemetry failed: %s", exc)
 
         return jsonify({"session_id": session_id})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+    finally:
+        if not inserted:
+            if slave_fd is not None:
+                try:
+                    os.close(slave_fd)
+                except OSError:
+                    pass
+            if pid is not None:
+                _kill_speculative_session(pid, master_fd)
+            elif master_fd is not None:
+                try:
+                    os.close(master_fd)
+                except OSError:
+                    pass
+        if reserved:
+            with sessions_lock:
+                _browser_pending -= 1
 
 
 @app.route("/api/input", methods=["POST"])
@@ -2232,6 +2438,11 @@ def initialize_app(local_dev=False):
     """One-time init: detect owner, start cleanup thread."""
     global app_owner, _omnigent_sp_creds, _sp_token_broker_server
 
+    global _sp_token_broker_atexit_registered
+    if not _sp_token_broker_atexit_registered:
+        atexit.register(_shutdown_sp_token_broker)
+        _sp_token_broker_atexit_registered = True
+
     # Install SIGTERM handler only for gunicorn (production).
     # For local dev, SIG_DFL is fine — the process just exits cleanly.
     if not local_dev:
@@ -2271,8 +2482,6 @@ def initialize_app(local_dev=False):
             lambda: mint_sp_token(_omnigent_sp_creds)
         )
         os.environ[BROKER_URL_ENV] = broker_url(_sp_token_broker_server)
-        # Install immediately when the CLI is already cached; _run_step("dbcli")
-        # retries this after a cold-boot install completes.
         _ensure_broker_cli_wrapper()
         logger.info("SP token broker listening on loopback")
 

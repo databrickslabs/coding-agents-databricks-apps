@@ -13,7 +13,9 @@ exec it in a namespace with the SDK/env mocked, and assert:
 """
 
 import re
+import threading
 import types
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 import token_helper
@@ -33,23 +35,80 @@ def _load_helper_module():
     return mod
 
 
+class _RedirectHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(302)
+        self.send_header("Location", self.server.redirect_target)
+        self.end_headers()
+
+    def log_message(self, *_args):
+        pass
+
+
+class _TokenHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        body = b"redirected-token"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *_args):
+        pass
+
+
+@pytest.fixture
+def redirecting_broker_url():
+    target = ThreadingHTTPServer(("127.0.0.1", 0), _TokenHandler)
+    redirect = ThreadingHTTPServer(("127.0.0.1", 0), _RedirectHandler)
+    target_thread = threading.Thread(target=target.serve_forever, daemon=True)
+    redirect_thread = threading.Thread(target=redirect.serve_forever, daemon=True)
+    target_thread.start()
+    redirect_thread.start()
+    redirect.redirect_target = f"http://127.0.0.1:{target.server_port}/not-a-broker-path"
+    try:
+        yield f"http://127.0.0.1:{redirect.server_port}/token/" + "a" * 43
+    finally:
+        redirect.shutdown()
+        target.shutdown()
+        redirect.server_close()
+        target.server_close()
+        redirect_thread.join(timeout=2)
+        target_thread.join(timeout=2)
+
+
 class TestSpBranch:
     def test_runtime_resolver_prefers_loopback_broker(self, monkeypatch):
-        monkeypatch.setenv("CODA_SP_TOKEN_BROKER_URL", "http://127.0.0.1:4010/token")
+        url = "http://127.0.0.1:4010/token/" + "a" * 43
+        monkeypatch.setenv("CODA_SP_TOKEN_BROKER_URL", url)
         monkeypatch.setattr(
-            token_helper,
-            "urlopen",
-            lambda *_a, **_k: _BrokerResponse(b"broker-token"),
+            token_helper, "fetch_sp_token", lambda target: "broker-token"
         )
 
         assert token_helper.resolve_sp_oauth_token() == "broker-token"
 
+
     def test_broker_token_wins_without_persisted_profile(self, monkeypatch):
         mod = _load_helper_module()
-        monkeypatch.setenv("CODA_SP_TOKEN_BROKER_URL", "http://127.0.0.1:4010/token")
-        monkeypatch.setattr(mod, "urlopen", lambda *_a, **_k: _BrokerResponse(b"broker-tok"))
+        monkeypatch.setenv(
+            "CODA_SP_TOKEN_BROKER_URL",
+            "http://127.0.0.1:4010/token/" + "a" * 43,
+        )
+        monkeypatch.setattr(
+            mod, "urlopen", lambda *_a, **_k: _BrokerResponse(b"broker-tok")
+        )
 
         assert mod._sp_oauth_token() == "broker-tok"
+
+    def test_generated_helper_rejects_redirected_token(
+        self, monkeypatch, redirecting_broker_url
+    ):
+        mod = _load_helper_module()
+        monkeypatch.setenv("CODA_SP_TOKEN_BROKER_URL", redirecting_broker_url)
+
+        assert mod._broker_token() is None
+
 
     def test_sdk_mint_strips_bearer_prefix(self, monkeypatch):
         """SP path returns the raw token with 'Bearer ' stripped."""
@@ -140,6 +199,8 @@ class TestMainOutput:
 class _BrokerResponse:
     def __init__(self, body):
         self.body = body
+        self.headers = {"Content-Type": "text/plain; charset=utf-8"}
+
 
     def __enter__(self):
         return self
@@ -147,5 +208,5 @@ class _BrokerResponse:
     def __exit__(self, *_args):
         return None
 
-    def read(self):
+    def read(self, *_args):
         return self.body

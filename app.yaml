@@ -5,11 +5,11 @@ env:
   - name: HOME
     value: /app/python/source_code
   - name: ANTHROPIC_MODEL
-    value: databricks-claude-opus-4-8
+    value: system.ai.claude-sonnet-5
   # Pi routes to the same /anthropic gateway route as Claude Code; PI_MODEL is
   # the serving-endpoint name it addresses (validated against in-geo models).
   - name: PI_MODEL
-    value: databricks-claude-opus-4-8
+    value: system.ai.claude-sonnet-5
   - name: GEMINI_MODEL
     value: databricks-gemini-2-5-pro
   # Must be a *-codex model served via the Responses API — the Codex harness
@@ -22,10 +22,13 @@ env:
     value: databricks-claude-opus-4-8
   - name: HERMES_FALLBACK_MODEL
     value: databricks-claude-opus-4-8
-  # All agents ON for the workshop. Each ENABLE_* defaults to true; set any to
-  # "false" to skip that CLI's install (others unaffected).
-  - name: ENABLE_HERMES
+  # Keep the public default set small and explicit.
+  - name: ENABLE_CLAUDE
     value: "true"
+  - name: ENABLE_FABLE_MODELS
+    value: "false"
+  - name: ENABLE_HERMES
+    value: "false"
   - name: ENABLE_PI
     value: "true"
   # Codex disabled: this gateway/workspace serves no Responses-API (*-codex)

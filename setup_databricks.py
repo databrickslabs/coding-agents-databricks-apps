@@ -4,7 +4,13 @@ import os
 import subprocess
 from pathlib import Path
 
-from utils import ensure_https, pat_only_env, read_non_default_databrickscfg_sections
+from cli_auth import _atomic_write_text
+from utils import (
+    databrickscfg_update_lock,
+    ensure_https,
+    pat_only_env,
+    read_non_default_databrickscfg_sections,
+)
 
 # Set HOME if not properly set
 if not os.environ.get("HOME") or os.environ["HOME"] == "/":
@@ -29,14 +35,15 @@ host = ensure_https(host)
 # spawned before the host re-appended it failed to authenticate. Rewrite only
 # [DEFAULT] and carry everything else through, matching pat_rotator's contract.
 databrickscfg = home / ".databrickscfg"
-preserved = read_non_default_databrickscfg_sections(databrickscfg)
-config_content = f"""[DEFAULT]
+with databrickscfg_update_lock(databrickscfg):
+    preserved = read_non_default_databrickscfg_sections(databrickscfg)
+    config_content = f"""[DEFAULT]
 host = {host}
 token = {token}
 """ + preserved
-
-databrickscfg.write_text(config_content)
-databrickscfg.chmod(0o600)  # Restrict permissions
+    _atomic_write_text(str(databrickscfg), config_content)
+    # Defence in depth; atomic writer already pins 0600.
+    databrickscfg.chmod(0o600)
 print(f"Databricks CLI configured: {databrickscfg}")
 
 # Verify it works
@@ -71,4 +78,4 @@ if result.returncode == 0:
     except json.JSONDecodeError:
         print("Databricks CLI configured (couldn't parse user)")
 else:
-    print(f"Warning: CLI config may have issues: {result.stderr}")
+    print(f"Warning: CLI config validation failed (exit={result.returncode})")

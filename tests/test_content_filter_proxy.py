@@ -6,7 +6,6 @@ moment the rotator rewrites the file, otherwise the proxy serves revoked
 tokens to upstream for up to TTL seconds after each rotation.
 """
 
-import time
 from unittest import mock
 
 import pytest
@@ -359,3 +358,282 @@ def test_sanitize_tool_schemas_strips_exclusive_minimum_gemini_rejects():
     # Non-deny-set keys survive so the tool stays callable.
     assert seconds["type"] == "integer"
     assert label["type"] == "string"
+
+
+@pytest.fixture
+def readiness(monkeypatch):
+    import content_filter_proxy as cfp
+
+    monkeypatch.setattr(
+        cfp,
+        "_HEALTH_CACHE",
+        {"checked_at": 0.0, "status": 503, "payload": None},
+    )
+    monkeypatch.setattr(cfp, "_resolve_current_token", lambda: "fresh-token")
+    return cfp
+
+
+def test_readiness_requires_authenticated_workspace_listing_success(
+    readiness, monkeypatch
+):
+    upstream = "https://workspace.example.com/serving-endpoints"
+    monkeypatch.setattr(readiness, "UPSTREAM_BASE", upstream)
+    monkeypatch.setenv("DATABRICKS_HOST", "https://workspace.example.com")
+    get = mock.Mock(return_value=mock.Mock(status_code=200))
+    monkeypatch.setattr(readiness.requests, "get", get)
+
+    status, payload = readiness._readiness_status()
+
+    assert status == 200
+    assert payload == {
+        "service": "coda-content-filter-proxy",
+        "schema": 1,
+        "status": "ready",
+        "upstream": upstream,
+        "upstream_ready": True,
+        "upstream_status": 200,
+        "workspace": "https://workspace.example.com",
+        "workspace_status": None,
+        "check": "workspace-serving-endpoints",
+        "readiness_semantics": (
+            "authenticated-workspace-serving-endpoints-listing"
+        ),
+    }
+    get.assert_called_once_with(
+        "https://workspace.example.com/api/2.0/serving-endpoints",
+        headers={"Authorization": "Bearer fresh-token"},
+        timeout=3,
+    )
+
+
+@pytest.mark.parametrize(
+    "workspace_host",
+    ["https://other.example.com", "", "http://workspace.example.com"],
+)
+def test_readiness_rejects_serving_endpoint_host_mismatch(
+    readiness, monkeypatch, workspace_host
+):
+    monkeypatch.setattr(
+        readiness, "UPSTREAM_BASE", "https://workspace.example.com/serving-endpoints"
+    )
+    monkeypatch.setenv("DATABRICKS_HOST", workspace_host)
+    get = mock.Mock()
+    monkeypatch.setattr(readiness.requests, "get", get)
+
+    status, payload = readiness._readiness_status()
+
+    assert status == 503
+    assert payload["reason"] == "upstream_config_invalid"
+    get.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "workspace_host",
+    ["https://workspace.example.com", "workspace.example.com/"],
+)
+def test_mlflow_readiness_uses_ucode_foundation_models_contract(
+    readiness, monkeypatch, workspace_host
+):
+    upstream = "https://workspace.example.com/ai-gateway/mlflow/v1"
+    monkeypatch.setattr(readiness, "UPSTREAM_BASE", upstream)
+    monkeypatch.setenv("DATABRICKS_HOST", workspace_host)
+    get = mock.Mock(return_value=mock.Mock(status_code=200))
+    monkeypatch.setattr(readiness.requests, "get", get)
+
+    status, payload = readiness._readiness_status()
+
+    assert status == 200
+    assert payload == {
+        "service": "coda-content-filter-proxy",
+        "schema": 1,
+        "status": "ready",
+        "upstream": upstream,
+        "upstream_ready": True,
+        "upstream_status": None,
+        "workspace": "https://workspace.example.com",
+        "workspace_status": 200,
+        "check": "workspace-foundation-models",
+        "readiness_semantics": (
+            "authenticated-workspace-foundation-models-for-mlflow-route"
+        ),
+    }
+    get.assert_called_once_with(
+        "https://workspace.example.com/api/2.0/serving-endpoints:foundation-models",
+        headers={"Authorization": "Bearer fresh-token"},
+        timeout=3,
+    )
+
+
+def test_readiness_rejects_missing_current_token(readiness, monkeypatch):
+    monkeypatch.setattr(
+        readiness, "UPSTREAM_BASE", "https://workspace.example.com/serving-endpoints"
+    )
+    monkeypatch.setenv("DATABRICKS_HOST", "https://workspace.example.com")
+    monkeypatch.setattr(readiness, "_resolve_current_token", lambda: None)
+    get = mock.Mock()
+    monkeypatch.setattr(readiness.requests, "get", get)
+
+    status, payload = readiness._readiness_status()
+
+    assert status == 503
+    assert payload["reason"] == "token_unavailable"
+    assert payload["upstream_ready"] is False
+    get.assert_not_called()
+
+
+@pytest.mark.parametrize("upstream_status", [400, 401, 403, 404, 500, 503])
+def test_readiness_rejects_workspace_listing_error_status(
+    readiness, monkeypatch, upstream_status
+):
+    monkeypatch.setattr(
+        readiness, "UPSTREAM_BASE", "https://workspace.example.com/serving-endpoints"
+    )
+    monkeypatch.setenv("DATABRICKS_HOST", "https://workspace.example.com")
+    monkeypatch.setattr(
+        readiness.requests,
+        "get",
+        mock.Mock(return_value=mock.Mock(status_code=upstream_status)),
+    )
+
+    status, payload = readiness._readiness_status()
+
+    assert status == 503
+    assert payload["reason"] == "upstream_status"
+    assert payload["upstream_status"] == upstream_status
+
+
+@pytest.mark.parametrize("workspace_status", [400, 401, 403, 404, 500, 503])
+def test_mlflow_readiness_rejects_foundation_listing_error(
+    readiness, monkeypatch, workspace_status
+):
+    monkeypatch.setattr(
+        readiness, "UPSTREAM_BASE", "https://workspace.example.com/ai-gateway/mlflow/v1"
+    )
+    monkeypatch.setenv("DATABRICKS_HOST", "https://workspace.example.com")
+    monkeypatch.setattr(
+        readiness.requests,
+        "get",
+        mock.Mock(return_value=mock.Mock(status_code=workspace_status)),
+    )
+
+    status, payload = readiness._readiness_status()
+
+    assert status == 503
+    assert payload["reason"] == "workspace_status"
+    assert payload["workspace_status"] == workspace_status
+    assert payload["upstream_status"] is None
+    assert payload["upstream_ready"] is False
+
+
+def test_mlflow_readiness_rejects_standalone_gateway_400(readiness, monkeypatch):
+    monkeypatch.setattr(
+        readiness, "UPSTREAM_BASE", "https://workspace.example.com/ai-gateway/mlflow/v1"
+    )
+    monkeypatch.setenv("DATABRICKS_HOST", "https://workspace.example.com")
+    get = mock.Mock(return_value=mock.Mock(status_code=400))
+    monkeypatch.setattr(readiness.requests, "get", get)
+
+    status, payload = readiness._readiness_status()
+
+    assert status == 503
+    assert payload["workspace_status"] == 400
+    assert payload["status"] == "unready"
+    assert payload["upstream_ready"] is False
+    assert payload["check"] == "workspace-foundation-models"
+    assert "/mlflow/v1/models" not in get.call_args.args[0]
+
+
+def test_mlflow_readiness_rejects_foundation_listing_timeout(readiness, monkeypatch):
+    monkeypatch.setattr(
+        readiness, "UPSTREAM_BASE", "https://workspace.example.com/ai-gateway/mlflow/v1"
+    )
+    monkeypatch.setenv("DATABRICKS_HOST", "https://workspace.example.com")
+    monkeypatch.setattr(
+        readiness.requests,
+        "get",
+        mock.Mock(side_effect=readiness.requests.exceptions.Timeout()),
+    )
+
+    status, payload = readiness._readiness_status()
+
+    assert status == 503
+    assert payload["reason"] == "workspace_unreachable"
+
+
+@pytest.mark.parametrize(
+    "workspace_host",
+    [
+        "",
+        "http://workspace.example.com",
+        "https://user@workspace.example.com",
+        "https://workspace.example.com/path",
+        "https://workspace.example.com?forged=1",
+    ],
+)
+def test_mlflow_readiness_rejects_missing_or_unsafe_workspace_host(
+    readiness, monkeypatch, workspace_host
+):
+    monkeypatch.setattr(
+        readiness, "UPSTREAM_BASE", "https://workspace.example.com/ai-gateway/mlflow/v1"
+    )
+    monkeypatch.setenv("DATABRICKS_HOST", workspace_host)
+    get = mock.Mock()
+    monkeypatch.setattr(readiness.requests, "get", get)
+
+    status, payload = readiness._readiness_status()
+
+    assert status == 503
+    assert payload["reason"] == "workspace_config_invalid"
+    get.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "upstream",
+    [
+        "",
+        "http://workspace.example.com/serving-endpoints",
+        "https://user@workspace.example.com/serving-endpoints",
+        "https://workspace.example.com/wrong",
+        "https://workspace.example.com/prefix/serving-endpoints",
+        "https://workspace.example.com/prefix/mlflow/v1",
+        "https://workspace.example.com/serving-endpoints?forged=1",
+    ],
+)
+def test_readiness_rejects_unsupported_or_unsafe_upstream(
+    readiness, monkeypatch, upstream
+):
+    monkeypatch.setattr(readiness, "UPSTREAM_BASE", upstream)
+    get = mock.Mock()
+    monkeypatch.setattr(readiness.requests, "get", get)
+
+    status, payload = readiness._readiness_status()
+
+    assert status == 503
+    assert payload["reason"] == "upstream_config_invalid"
+    get.assert_not_called()
+
+
+def test_upstream_error_log_excludes_the_response_body(caplog):
+    """A rejected request must not leave the model transcript in the log.
+
+    Gateway error bodies echo the prompt or completion they rejected, and the
+    proxy log is tailed into the app logger, so only bounded metadata is safe.
+    """
+    import logging
+
+    from content_filter_proxy import log_upstream_error
+
+    response = mock.Mock(
+        status_code=400,
+        text='{"error":"rejected: SECRET_TRANSCRIPT_MARKER"}',
+        headers={"content-length": "44", "x-request-id": "req-123"},
+    )
+
+    with caplog.at_level(logging.ERROR, logger="content-filter-proxy"):
+        log_upstream_error(response, "/v1/chat/completions")
+
+    logged = caplog.text
+    assert "SECRET_TRANSCRIPT_MARKER" not in logged
+    assert "400" in logged
+    assert "/v1/chat/completions" in logged
+    assert "req-123" in logged

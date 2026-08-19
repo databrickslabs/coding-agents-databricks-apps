@@ -1,7 +1,7 @@
 """Guard the Apps-overlay foot-gun.
 
-`databricks apps deploy` with an overlay (e.g. `make deploy-workshop` swapping
-in `app.yaml.workshop`) **replaces** `app.yaml` wholesale — it does not merge.
+`databricks apps deploy` with an overlay **replaces** `app.yaml` wholesale — it
+does not merge.
 So any env var that exists in the base `app.yaml` but is missing from an overlay
 silently disappears from the deployed container and falls back to whatever the
 consuming code defaults to.
@@ -34,20 +34,18 @@ CLI_TOGGLES = frozenset(
         "ENABLE_OPENCODE",
         "ENABLE_CODEX",
         "ENABLE_GEMINI",
+        "ENABLE_CLAUDE",
     }
 )
 
 
 def _tracked_app_yamls() -> list[Path]:
-    """All git-tracked app.yaml files. Untracked local variants are ignored."""
-    out = subprocess.run(
-        ["git", "ls-files", "app.yaml", "app.yaml.*"],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.split()
-    return [REPO_ROOT / name for name in out if (REPO_ROOT / name).is_file()]
+    """Return the explicitly supported public overlay set."""
+    return [
+        REPO_ROOT / name
+        for name in ("app.yaml", "app.yaml.template")
+        if (REPO_ROOT / name).is_file()
+    ]
 
 
 def _env_names(path: Path) -> set[str]:
@@ -59,7 +57,7 @@ def test_finds_the_overlays():
     """Sanity check — a silent empty list would make the tests below vacuous."""
     names = {p.name for p in _tracked_app_yamls()}
     assert "app.yaml" in names
-    assert len(names) >= 3, f"expected several overlays, found {sorted(names)}"
+    assert names == {"app.yaml", "app.yaml.template"}
 
 
 @pytest.mark.parametrize(
@@ -103,7 +101,7 @@ def test_toggles_match_code():
     unlisted = found - CLI_TOGGLES
     assert not unlisted, (
         f"setup scripts read {sorted(unlisted)} but the overlay guard doesn't "
-        f"know about it — add it to CLI_TOGGLES and to every app.yaml*."
+        f"know about it — add it to CLI_TOGGLES and to every supported overlay."
     )
 
 

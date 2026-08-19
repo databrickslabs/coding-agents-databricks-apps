@@ -17,6 +17,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from cli_auth import _atomic_write_text
 from utils import (
     adapt_instructions_file,
     ensure_https,
@@ -193,7 +194,7 @@ if tracing_enabled and experiment_name:
     print(f"Codex MLflow tracing configured: experiment_id={experiment_id or 'unresolved'}")
 
 env_path = codex_dir / ".env"
-env_path.write_text("\n".join(env_lines) + "\n")
+_atomic_write_text(str(env_path), "\n".join(env_lines) + "\n")
 env_path.chmod(0o600)
 print(f"Codex CLI env configured: {env_path}")
 

@@ -9,20 +9,55 @@ the new token whole — never a half-written file. Errors other than "file does
 not exist" surface as warnings rather than being silently swallowed.
 """
 
+import copy
 import json
 import os
 import re
-import stat
+import tempfile
+import threading
 import logging
+from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 from claude_otel import refresh_claude_otel_token
-from utils import OPENCODE_AUTH_KEY_FIELD, is_opencode_api_credential
+from utils import (
+    CONTENT_FILTER_PROXY_URL,
+    OPENCODE_AUTH_KEY_FIELD,
+    is_opencode_api_credential,
+)
 
 logger = logging.getLogger(__name__)
 
 _HOME = os.environ.get("HOME", "/app/python/source_code")
 if not _HOME or _HOME == "/":
     _HOME = "/app/python/source_code"
+
+_CLI_REFRESH_LOCK = threading.Lock()
+_CONTENT_FILTER_PROXY = urlsplit(CONTENT_FILTER_PROXY_URL)
+_CODA_OPENCODE_REQUIRED_AUTH_HEADER_IDS = frozenset({
+    "databricks",
+    "databricks-anthropic",
+})
+_CODA_OPENCODE_PROVIDER_IDS = frozenset({
+    "databricks",  # legacy pre-gateway provider id
+    "databricks-anthropic",
+    "databricks-openai",
+    "databricks-google",
+    "databricks-oss",
+})
+
+
+@dataclass(frozen=True)
+class CLIAuthRefreshResult:
+    """Bounded, non-secret outcome of one all-CLI credential refresh."""
+
+    updated: tuple[str, ...] = ()
+    skipped: tuple[str, ...] = ()
+    failed: tuple[str, ...] = ()
+
+    @property
+    def ok(self) -> bool:
+        return not self.failed
 
 
 def _atomic_write_text(path, content):
@@ -33,158 +68,329 @@ def _atomic_write_text(path, content):
     open(path, 'w') by the rotator could leave the file in a partial state
     visible to a concurrent Hermes call → 403 Invalid access token.
     """
-    tmp = f"{path}.tmp"
-    with open(tmp, "w") as f:
-        f.write(content)
-    # os.replace() installs the *tmp* file's inode, so it also installs the
-    # tmp file's permissions. Without this, an atomic rewrite would silently
-    # widen a hardened config back to the umask default — e.g. undoing the
-    # 0600 that setup_hermes.py applies to ~/.hermes/config.yaml.
+    directory = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(
+        prefix=f".{os.path.basename(path)}.", dir=directory, text=True
+    )
     try:
-        os.chmod(tmp, stat.S_IMODE(os.stat(path).st_mode))
-    except OSError:
-        pass  # target missing/unreadable — callers already guard on existence
-    os.replace(tmp, path)
+        with os.fdopen(fd, "w") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
+        # Every target stores a live credential. Never inherit a pre-existing
+        # loose mode; mkstemp starts at 0600 and we pin it explicitly.
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+        directory_fd = os.open(
+            directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        )
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
-def update_cli_tokens(token):
-    """Update the literal token in all CLI config files."""
-    _update_claude(token)
-    _update_pi(token)
-    _update_codex(token)
-    _update_opencode(token)
-    _update_gemini(token)
-    _update_hermes(token)
+def _ensure_private(path):
+    """Every existing file touched by the refresh path carries credentials."""
+    os.chmod(path, 0o600)
+
+
+def update_cli_tokens(token, *, lock_timeout=5.0):
+    """Refresh every configured CLI under one bounded in-process lock.
+
+    The report contains CLI names only. Exception text and token values never
+    enter logs, and one target failure does not prevent later targets from
+    receiving the current token.
+    """
+    if not _CLI_REFRESH_LOCK.acquire(timeout=max(0.0, float(lock_timeout))):
+        logger.warning("CLI token refresh skipped: refresh lock timed out")
+        return CLIAuthRefreshResult(failed=("refresh_lock",))
+
+    updated = []
+    skipped = []
+    failed = []
+    updaters = (
+        ("claude", _update_claude),
+        ("pi", _update_pi),
+        ("codex", _update_codex),
+        ("opencode", _update_opencode),
+        ("opencode_provider", _update_opencode_provider_headers),
+        ("gemini", _update_gemini),
+        ("hermes", _update_hermes),
+    )
+    try:
+        for name, updater in updaters:
+            try:
+                changed = updater(token)
+            except Exception as error:
+                failed.append(name)
+                # The exception can contain file contents or the token. Log only
+                # the target and exception class, never its message.
+                logger.warning(
+                    "CLI token refresh failed for %s (%s)",
+                    name,
+                    type(error).__name__,
+                )
+                continue
+            (updated if changed else skipped).append(name)
+    finally:
+        _CLI_REFRESH_LOCK.release()
+
+    if failed:
+        logger.warning("CLI token refresh incomplete: failed=%s", ",".join(failed))
+    else:
+        logger.info("CLI token refresh complete")
+    return CLIAuthRefreshResult(
+        updated=tuple(updated), skipped=tuple(skipped), failed=tuple(failed)
+    )
 
 
 def _update_claude(token):
     """Update Claude tokens in ~/.claude/settings.json."""
     path = os.path.join(_HOME, ".claude", "settings.json")
     if not os.path.exists(path):
-        return  # setup_claude.py hasn't run yet
-    try:
-        with open(path) as f:
-            settings = json.load(f)
-        changed = False
-        # Only refresh a *static* token if one is present. When the spec-C
-        # apiKeyHelper owns model auth, this key is absent and the rotator
-        # leaves it alone — Claude fetches its own token per-TTL. The OTEL
-        # refresh below still runs (it authenticates the OTLP export to the
-        # workspace, a separate concern the helper does not cover).
-        if "env" in settings and "ANTHROPIC_AUTH_TOKEN" in settings["env"]:
-            settings["env"]["ANTHROPIC_AUTH_TOKEN"] = token
-            changed = True
-        if refresh_claude_otel_token(settings, token):
-            changed = True
-        if changed:
-            _atomic_write_text(path, json.dumps(settings, indent=2))
-    except (OSError, json.JSONDecodeError) as e:
-        logger.warning("Failed to update Claude token in %s: %s", path, e)
+        return False
+    _ensure_private(path)
+    with open(path) as f:
+        settings = json.load(f)
+    original = copy.deepcopy(settings)
+    env = settings.get("env")
+    # apiKeyHelper mode has no static ANTHROPIC_AUTH_TOKEN. OTEL headers are a
+    # separate credential surface and still refresh when present.
+    has_static = isinstance(env, dict) and "ANTHROPIC_AUTH_TOKEN" in env
+    has_otel = isinstance(env, dict) and any(
+        key.startswith("OTEL_EXPORTER_OTLP_") and key.endswith("_HEADERS")
+        for key in env
+    )
+    if has_static:
+        env["ANTHROPIC_AUTH_TOKEN"] = token
+    refresh_claude_otel_token(settings, token)
+    if not settings.get("apiKeyHelper") and not has_static and not has_otel:
+        raise ValueError("Claude credential field is missing")
+    if settings == original:
+        return False
+    _atomic_write_text(path, json.dumps(settings, indent=2))
+    return True
 
 
 def _update_pi(token):
-    """Update the databricks-claude provider apiKey in ~/.pi/agent/models.json.
-
-    Pi resolves an `apiKey` beginning with `!` as a shell command, fresh per
-    request (docs/models.md: "shell commands are resolved at request time"). We
-    configure it as `!<token helper>` (the same helper Claude's apiKeyHelper
-    runs), so a running pi resolves a live token per request and survives PAT
-    rotation / SP-OAuth expiry without a restart. In that mode the rotator must
-    NOT clobber the command back to a static literal, or the next rotation
-    reverts pi to the fragile cache-at-launch behavior. So skip the rewrite
-    whenever apiKey is already a command. This mirrors _update_claude, which
-    leaves ANTHROPIC_AUTH_TOKEN alone when the apiKeyHelper owns auth. (A legacy
-    static apiKey is still rewritten, for backward compatibility.)
-    """
+    """Refresh a legacy literal Pi key; preserve per-request helper commands."""
     path = os.path.join(_HOME, ".pi", "agent", "models.json")
     if not os.path.exists(path):
-        return  # setup_pi.py hasn't run yet
-    try:
-        with open(path) as f:
-            config = json.load(f)
-        provider = config.get("providers", {}).get("databricks-claude")
-        if (
-            isinstance(provider, dict)
-            and "apiKey" in provider
-            and not str(provider["apiKey"]).startswith("!")
-        ):
-            provider["apiKey"] = token
-            _atomic_write_text(path, json.dumps(config, indent=2))
-    except (OSError, json.JSONDecodeError) as e:
-        logger.warning("Failed to update pi token in %s: %s", path, e)
+        return False
+    _ensure_private(path)
+    with open(path) as f:
+        config = json.load(f)
+    provider = config.get("providers", {}).get("databricks-claude")
+    if provider is None:
+        return False
+    if (
+        not isinstance(provider, dict)
+        or "apiKey" not in provider
+        or not isinstance(provider["apiKey"], str)
+    ):
+        raise ValueError("Pi credential field is missing or invalid")
+    if provider["apiKey"].startswith("!") or provider["apiKey"] == token:
+        return False
+    provider["apiKey"] = token
+    _atomic_write_text(path, json.dumps(config, indent=2))
+    return True
 
 
 def _update_codex(token):
     """Update OPENAI_API_KEY in ~/.codex/.env."""
-    path = os.path.join(_HOME, ".codex", ".env")
-    _replace_dotenv_key(path, "OPENAI_API_KEY", token)
+    return _replace_dotenv_key(
+        os.path.join(_HOME, ".codex", ".env"), "OPENAI_API_KEY", token
+    )
 
 
 def _update_opencode(token):
-    """Rotate API keys in ~/.local/share/opencode/auth.json.
-
-    The credential shape is defined once in utils — shared with the writer in
-    setup_opencode.py so the two can't drift. Only `type == "api"` entries are
-    touched; `oauth` and `wellknown` credentials carry different fields and must
-    not have a PAT written into them.
-    """
+    """Rotate only OpenCode's API credential union variants."""
     path = os.path.join(_HOME, ".local", "share", "opencode", "auth.json")
     if not os.path.exists(path):
-        return  # setup_opencode.py hasn't run yet
-    try:
-        with open(path) as f:
-            auth = json.load(f)
-        changed = False
-        for provider in auth.values():
-            if is_opencode_api_credential(provider):
-                provider[OPENCODE_AUTH_KEY_FIELD] = token
-                changed = True
-        if changed:
-            _atomic_write_text(path, json.dumps(auth, indent=2))
-    except (OSError, json.JSONDecodeError) as e:
-        logger.warning("Failed to update OpenCode token in %s: %s", path, e)
+        return False
+    _ensure_private(path)
+    with open(path) as f:
+        auth = json.load(f)
+    changed = False
+    managed_ids = _CODA_OPENCODE_PROVIDER_IDS.intersection(auth)
+    if not managed_ids:
+        return False
+    for provider_id in managed_ids:
+        provider = auth[provider_id]
+        if not is_opencode_api_credential(provider):
+            raise ValueError(f"OpenCode credential shape is invalid for {provider_id}")
+        if provider.get(OPENCODE_AUTH_KEY_FIELD) != token:
+            provider[OPENCODE_AUTH_KEY_FIELD] = token
+            changed = True
+    if not changed:
+        return False
+    _atomic_write_text(path, json.dumps(auth, indent=2))
+    return True
+
+
+def _update_opencode_provider_headers(token):
+    """Rotate literal OpenCode provider keys and Authorization headers."""
+    path = os.path.join(_HOME, ".config", "opencode", "opencode.json")
+    if not os.path.exists(path):
+        return False
+    _ensure_private(path)
+    with open(path) as f:
+        config = json.load(f)
+    providers = config.get("provider")
+    if not isinstance(providers, dict):
+        return False
+    changed = False
+    managed_ids = _CODA_OPENCODE_PROVIDER_IDS.intersection(providers)
+    if not managed_ids:
+        return False
+    for provider_id in managed_ids:
+        provider = providers[provider_id]
+        options = provider.get("options") if isinstance(provider, dict) else None
+        if not isinstance(options, dict):
+            raise ValueError(f"OpenCode provider options missing for {provider_id}")
+        if "apiKey" not in options or not isinstance(options["apiKey"], str):
+            raise ValueError(f"OpenCode provider apiKey invalid for {provider_id}")
+        headers = options.get("headers")
+        if headers is not None and not isinstance(headers, dict):
+            raise ValueError(f"OpenCode provider headers invalid for {provider_id}")
+        if (
+            provider_id in _CODA_OPENCODE_REQUIRED_AUTH_HEADER_IDS
+            and (
+                not isinstance(headers, dict)
+                or not isinstance(headers.get("Authorization"), str)
+            )
+        ):
+            raise ValueError(
+                f"OpenCode Authorization header missing for {provider_id}"
+            )
+        if (
+            isinstance(headers, dict)
+            and "Authorization" in headers
+            and not isinstance(headers["Authorization"], str)
+        ):
+            raise ValueError(
+                f"OpenCode Authorization header invalid for {provider_id}"
+            )
+
+        api_key = options["apiKey"]
+        if (
+            not api_key.startswith("{")
+            and api_key != token
+        ):
+            options["apiKey"] = token
+            changed = True
+        expected = f"Bearer {token}"
+        authorization = (
+            headers.get("Authorization") if isinstance(headers, dict) else None
+        )
+        if (
+            isinstance(authorization, str)
+            and "{env:" not in authorization
+            and authorization != expected
+        ):
+            headers["Authorization"] = expected
+            changed = True
+    if not changed:
+        return False
+    _atomic_write_text(path, json.dumps(config, indent=2))
+    os.chmod(path, 0o600)
+    return True
 
 
 def _update_gemini(token):
     """Update GEMINI_API_KEY in ~/.gemini/.env."""
-    path = os.path.join(_HOME, ".gemini", ".env")
-    _replace_dotenv_key(path, "GEMINI_API_KEY", token)
+    return _replace_dotenv_key(
+        os.path.join(_HOME, ".gemini", ".env"), "GEMINI_API_KEY", token
+    )
 
 
 def _update_hermes(token):
-    """Update api_key lines in ~/.hermes/config.yaml."""
+    """Refresh only CoDA's local-proxy Hermes provider blocks.
+
+    Hand-edited configs may contain external providers with unrelated API keys.
+    A key is CoDA-owned only when the same-indentation block declares the local
+    content-filter proxy as its ``base_url``.
+    """
     path = os.path.join(_HOME, ".hermes", "config.yaml")
     if not os.path.exists(path):
-        return  # setup_hermes.py hasn't run yet
-    try:
-        with open(path) as f:
-            content = f.read()
-        new_content = re.sub(
-            r'^(  api_key: ).*$',
-            rf'\g<1>{token}',
-            content,
-            flags=re.MULTILINE
-        )
-        if new_content != content:
-            _atomic_write_text(path, new_content)
-    except OSError as e:
-        logger.warning("Failed to update Hermes token in %s: %s", path, e)
+        return False
+    _ensure_private(path)
+    with open(path) as f:
+        content = f.read()
+
+    lines = content.splitlines(keepends=True)
+    trusted_by_indent = {}
+    trusted_blocks = 0
+    refreshed_keys = 0
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        for known_indent in tuple(trusted_by_indent):
+            if known_indent > indent or stripped.startswith("-"):
+                trusted_by_indent.pop(known_indent, None)
+        if stripped.startswith("base_url:"):
+            base_url = (
+                stripped.split(":", 1)[1]
+                .split(" #", 1)[0]
+                .strip()
+                .strip("'\"")
+                .rstrip("/")
+            )
+            try:
+                parsed = urlsplit(base_url)
+                trusted = (
+                    parsed.scheme == _CONTENT_FILTER_PROXY.scheme
+                    and parsed.hostname in (_CONTENT_FILTER_PROXY.hostname, "localhost")
+                    and parsed.port == _CONTENT_FILTER_PROXY.port
+                    and parsed.path in ("", "/")
+                    and parsed.username is None
+                    and parsed.password is None
+                    and not parsed.query
+                    and not parsed.fragment
+                )
+            except ValueError:
+                trusted = False
+            trusted_by_indent[indent] = trusted
+            if trusted:
+                trusted_blocks += 1
+            continue
+        if stripped.startswith("api_key:") and trusted_by_indent.get(indent):
+            newline = "\n" if line.endswith("\n") else ""
+            lines[index] = f"{' ' * indent}api_key: {token}{newline}"
+            refreshed_keys += 1
+
+    if not trusted_blocks:
+        return False
+    if refreshed_keys != trusted_blocks:
+        raise ValueError("Hermes managed credential field is missing")
+    new_content = "".join(lines)
+    if new_content == content:
+        return False
+    _atomic_write_text(path, new_content)
+    return True
 
 
 def _replace_dotenv_key(path, key, value):
     """Replace a KEY=value line in a dotenv file."""
     if not os.path.exists(path):
-        return  # caller's setup script hasn't run yet
-    try:
-        with open(path) as f:
-            content = f.read()
-        new_content = re.sub(
-            rf'^{re.escape(key)}=.*$',
-            f'{key}={value}',
-            content,
-            flags=re.MULTILINE
-        )
-        if new_content != content:
-            _atomic_write_text(path, new_content)
-    except OSError as e:
-        logger.warning("Failed to update %s in %s: %s", key, path, e)
+        return False
+    _ensure_private(path)
+    with open(path) as f:
+        content = f.read()
+    pattern = re.compile(rf"^{re.escape(key)}=.*$", flags=re.MULTILINE)
+    if not pattern.search(content):
+        raise ValueError(f"{key} credential field is missing")
+    new_content = pattern.sub(lambda _match: f"{key}={value}", content)
+    if new_content == content:
+        return False
+    _atomic_write_text(path, new_content)
+    return True
