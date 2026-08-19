@@ -207,6 +207,12 @@ databricks apps start <app-name> --profile <profile>
 databricks apps logs <app-name> --profile <profile>
 ```
 
+## Work tracking
+
+This repository does not use Beads (`bd`) or a second issue tracker. Agents
+should keep continuity in the tracked miniwiki under `miniwiki/`; do not install
+or bootstrap a work-graph CLI during app setup.
+
 **Known noisy boot warning (safe to ignore until wired):**
 `error resolving resource challenge-repo-token ... not found` — the secret key is
 `challenge-repo-read-token`.

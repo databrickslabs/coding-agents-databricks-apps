@@ -32,7 +32,7 @@ def _seed_fake_pi_binary(home: Path):
 def run_setup_pi(tmp_path, env_overrides=None):
     env = {
         "HOME": str(tmp_path),
-        "DATABRICKS_HOST": "https://test.cloud.databricks.com",
+        "DATABRICKS_HOST": "https://workspace.example.test",
         "DATABRICKS_TOKEN": "dapi_test_token",
         "PATH": os.environ.get("PATH", ""),
         "_GATEWAY_RESOLVED": "",
@@ -66,7 +66,7 @@ class TestSetupPiConfig:
         # rotation / SP-OAuth expiry without a restart.
         assert provider["apiKey"].startswith("!")
         assert provider["apiKey"].endswith("anthropic-token-helper.py")
-        assert provider["baseUrl"] == "https://test.cloud.databricks.com/ai-gateway/anthropic"
+        assert provider["baseUrl"] == "https://workspace.example.test/ai-gateway/anthropic"
         assert ".ai-gateway." not in provider["baseUrl"]
         assert provider["compat"] == {"supportsEagerToolInputStreaming": False}
         assert [m["id"] for m in provider["models"]] == ["system.ai.claude-opus-5"]
@@ -130,6 +130,7 @@ class TestSetupPiConfig:
                 body = b"sp-token-for-setup"
                 self.send_response(200)
                 self.send_header("Content-Length", str(len(body)))
+                self.send_header("Content-Type", "text/plain")
                 self.end_headers()
                 self.wfile.write(body)
 
@@ -142,7 +143,9 @@ class TestSetupPiConfig:
         try:
             result = run_setup_pi(tmp_path, {
                 "DATABRICKS_TOKEN": "",
-                "CODA_SP_TOKEN_BROKER_URL": f"http://127.0.0.1:{server.server_port}/token",
+                "CODA_SP_TOKEN_BROKER_URL": (
+                    f"http://127.0.0.1:{server.server_port}/token/" + "a" * 32
+                ),
             })
         finally:
             server.shutdown()

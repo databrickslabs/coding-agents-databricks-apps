@@ -8,7 +8,7 @@ import pytest
 
 import gateway_models as gm
 
-WORKSPACE = "https://adb-7405618534560628.8.azuredatabricks.net"
+WORKSPACE = "https://workspace.example.test"
 CATALOG = {
     "anthropic": ["system.ai.claude-opus-5", "system.ai.claude-sonnet-4-6"],
     "openai": ["system.ai.gpt-5-5"],
@@ -80,7 +80,7 @@ def test_ucode_workspace_gateway_urls_never_use_external_gateway_host():
         "https://user@workspace.example.com",
         "https://workspace.example.com/path",
         "https://workspace.example.com?query=1",
-        "https://7405618534560628.0.ai-gateway.azuredatabricks.net",
+        "https://synthetic.ai-gateway.example.test",
     ],
 )
 def test_workspace_origin_rejects_unsafe_values(value):

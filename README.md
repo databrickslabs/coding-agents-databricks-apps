@@ -92,6 +92,18 @@ This isn't just a terminal in the cloud. Running coding agents on Databricks giv
 
 ## Terminal Features
 
+### Capacity and terminal boundary
+
+New browser PTYs are admitted against both the configured session cap and the
+container's own cgroup memory budget. Reclaimable active and inactive file
+cache is excluded from pressure accounting, while in-flight launches consume a
+reserve so concurrent requests cannot oversubscribe the budget.
+
+Browser terminals receive a reviewed, non-secret environment. Workspace
+credentials, client secrets, registry tokens, bootstrap secrets, and unsafe
+credential-bearing URL values are removed before the shell starts; the
+loopback token-broker coordinate is the only intentional capability exception.
+
 | | |
 |---|---|
 | 🎨 **8 Themes** | Dracula, Nord, Solarized, Monokai, GitHub Dark, and more |

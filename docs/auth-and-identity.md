@@ -38,15 +38,21 @@ token helper). The shell/tools do not.
 | **Hermes** | routes via the **content-filter proxy** too (same fresh-token injection) | yes |
 | **Codex** | content-filter proxy | yes |
 
-### Secret boundary
+### Browser-terminal secret boundary
 
 - The Flask process alone retains the app-SP client secret.
 - A loopback-only broker mints short-lived OAuth tokens on demand.
 - The `[omnigents-host]` profile stores only `host`; it has no client ID,
   client secret, or static token.
-- Agent helpers, the content-filter proxy, the host tunnel, and spawned
-  Omnigent runners obtain fresh tokens without exposing the client secret to a
-  browser terminal.
+- Browser PTYs use a deny-by-default environment allowlist. Workspace
+  credentials, client secrets, registry tokens, bootstrap secrets, and
+  credential-bearing URL values are excluded before the shell starts.
+- The loopback broker coordinate is an intentional, narrow capability needed by
+  terminal-launched CLIs; it is not a bearer token.
+
+This is an environment-inheritance control, not an OS process sandbox. A
+deployment that requires confidentiality from terminal-executed code still
+needs separate identities or container/UID isolation.
 
 ## Key files
 
