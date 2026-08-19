@@ -198,7 +198,7 @@ class _Response:
     def __exit__(self, *_args):
         return None
 
-    def read(self):
+    def read(self, *_args):
         return self.body
 
 

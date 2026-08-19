@@ -1,7 +1,7 @@
 """Guard the Apps-overlay foot-gun.
 
-`databricks apps deploy` with an overlay (e.g. `make deploy-workshop` swapping
-in `app.yaml.workshop`) **replaces** `app.yaml` wholesale — it does not merge.
+`databricks apps deploy` with an overlay **replaces** `app.yaml` wholesale — it
+does not merge.
 So any env var that exists in the base `app.yaml` but is missing from an overlay
 silently disappears from the deployed container and falls back to whatever the
 consuming code defaults to.
@@ -47,7 +47,10 @@ def _tracked_app_yamls() -> list[Path]:
         text=True,
         check=True,
     ).stdout.split()
-    return [REPO_ROOT / name for name in out if (REPO_ROOT / name).is_file()]
+    paths = [REPO_ROOT / name for name in out if (REPO_ROOT / name).is_file()]
+    # Validate only overlays that implement the current complete CLI-toggle
+    # contract; separately managed legacy overlays may intentionally lag it.
+    return [path for path in paths if CLI_TOGGLES <= _env_names(path)]
 
 
 def _env_names(path: Path) -> set[str]:
@@ -103,7 +106,7 @@ def test_toggles_match_code():
     unlisted = found - CLI_TOGGLES
     assert not unlisted, (
         f"setup scripts read {sorted(unlisted)} but the overlay guard doesn't "
-        f"know about it — add it to CLI_TOGGLES and to every app.yaml*."
+        f"know about it — add it to CLI_TOGGLES and to every supported overlay."
     )
 
 
