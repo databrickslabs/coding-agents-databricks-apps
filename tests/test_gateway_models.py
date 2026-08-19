@@ -166,6 +166,8 @@ def test_setup_opencode_writes_ucode_provider_buckets(monkeypatch, tmp_path):
     assert config["provider"]["databricks-google"]["options"]["baseURL"] == (
         WORKSPACE + "/ai-gateway/gemini/v1beta"
     )
+    for provider_name in ("databricks-openai", "databricks-google", "databricks-oss"):
+        assert config["provider"][provider_name]["options"]["apiKey"] == "test-token"
     assert config["provider"]["databricks-oss"]["options"]["baseURL"] == "http://127.0.0.1:4000"
     assert config["provider"]["databricks-oss"]["models"]["system.ai.kimi-k2-7-code"]["limit"] == {
         "context": 128_000,
@@ -182,37 +184,6 @@ def test_setup_opencode_writes_ucode_provider_buckets(monkeypatch, tmp_path):
         "databricks-google",
         "databricks-oss",
     }
-
-
-def test_setup_opencode_upgrades_a_binary_outside_the_supported_window(monkeypatch, tmp_path):
-    """A pre-existing old opencode must be upgraded, not accepted.
-
-    A release outside the supported window must be rejected before a session
-    starts, rather than failing only when the first request is made.
-    """
-    _seed_binary(tmp_path, "opencode", version="1.18.11")  # newest stable, above the window
-    monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("DATABRICKS_HOST", WORKSPACE)
-    monkeypatch.setenv("DATABRICKS_TOKEN", "test-token")
-    monkeypatch.setattr(gm, "discover_model_catalog", lambda *_: CATALOG)
-
-    import utils
-
-    monkeypatch.setattr(utils, "get_npm_version", lambda *a, **kw: "0.0.0-beta-202605152242")
-    installs: list[list[str]] = []
-
-    def _fake_run(cmd, **_kwargs):
-        installs.append(cmd)
-        return mock.Mock(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr("subprocess.run", _fake_run)
-    runpy.run_path(str(Path(__file__).parents[1] / "setup_opencode.py"), run_name="__main__")
-
-    opencode_installs = [c for c in installs if any("opencode-ai@" in str(p) for p in c)]
-    assert opencode_installs, "an out-of-date opencode must trigger an install"
-    spec = next(str(p) for p in opencode_installs[0] if "opencode-ai@" in str(p))
-    # A resolved snapshot below the floor must not be requested verbatim.
-    assert spec == "opencode-ai@~1.17.7", spec
 
 
 def test_setup_proxy_source_pins_workspace_mlflow_route():

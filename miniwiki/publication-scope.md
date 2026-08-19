@@ -36,15 +36,24 @@ behaviours. The Beads boot/install path is retired from the public branch.
 
 - workshop fleet provisioning and challenge-repository automation;
 - managed Omnigent host integration and its evidence pages;
-- the complete private findings record and all unrepaired findings;
+- finding 2: the remaining admission/control-plane issue is not remediated;
+- finding 3b: the remaining boundary issue is not remediated;
+- finding 5: the hand-written `[DEFAULT]` PAT bypass remains unremediated and
+  would disclose an active secret-boundary weakness;
+- finding 6: the remaining private integration issue is not remediated;
+- the complete private findings record and any other unrepaired findings;
 - any file or Make target that would expose or depend on those private layers.
 
-These holds reopen only after the relevant implementation is remediated,
-tenant-specific evidence is removed, an independent security/data review is
-complete, and a new publication authorization names the resulting scope.
+These holds reopen individually only after the corresponding implementation is
+remediated, tenant-specific evidence is removed, an independent security/data
+review is complete, and a new publication authorization names that finding and
+the resulting scope. Finding 5 additionally requires proof that all bootstrap
+and rotation paths use the controlled exchange and revoke the bootstrap token.
+Findings 2, 3b, and 6 require new deterministic regression coverage and review
+evidence before reconsideration.
 
 ## Private source record
 
-The complete six-finding record remains on `dev` at
-`docs/plans/2026-08-13-session-admission-and-secret-boundary-findings.md`.
-It is intentionally not copied into the public publication.
+The complete six-finding source record remains on the private development line.
+It is intentionally not copied into the public publication, and the public
+record does not link to a private-only path.

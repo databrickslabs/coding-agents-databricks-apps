@@ -269,6 +269,7 @@ def _run_pipeline(image: str, extra_env: dict[str, str] | None = None) -> subpro
             "-e", f"SSL_CERT_FILE={container_ca}",
             "-e", f"CURL_CA_BUNDLE={container_ca}",
             "-e", f"NODE_EXTRA_CA_CERTS={container_ca}",
+            "-e", f"GIT_SSL_CAINFO={container_ca}",
             # uv reads UV_SYSTEM_CERTS to use the system trust store.
             "-e", "UV_SYSTEM_CERTS=true",
         ])

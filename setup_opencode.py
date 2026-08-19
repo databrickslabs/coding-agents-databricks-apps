@@ -23,9 +23,7 @@ from gateway_models import (
 from token_helper import resolve_databricks_token
 from utils import (
     get_npm_version,
-    installed_cli_version,
     opencode_api_credential,
-    version_in_range,
 )
 
 if os.environ.get("ENABLE_OPENCODE", "true").strip().lower() in ("false", "0", "no"):
@@ -44,44 +42,10 @@ requested_model = os.environ.get("ANTHROPIC_MODEL", "system.ai.claude-sonnet-5")
 local_bin = home / ".local" / "bin"
 local_bin.mkdir(parents=True, exist_ok=True)
 opencode_bin = local_bin / "opencode"
-# The supported integration pins a version *window* and rejects anything
-# outside it, which fails session launch. Both ends matter:
-# npm's `latest` tag for opencode-ai points at a `0.0.0-<snapshot>` build (below
-# every real release) while the newest stable is 1.18.x (above the window), and
-# the image may already ship an out-of-range binary. So compare the installed
-# version against the window instead of only checking that the file exists.
-OPENCODE_MIN_VERSION = os.environ.get("OPENCODE_MIN_VERSION", "1.17.7").strip() or "1.17.7"
-OPENCODE_MAX_VERSION_EXCLUSIVE = (
-    os.environ.get("OPENCODE_MAX_VERSION_EXCLUSIVE", "1.18.0").strip() or "1.18.0"
-)
-# `~1.17.7` is npm for `>=1.17.7 <1.18.0` — the same window, so npm resolves the
-# newest patch in the supported window.
-OPENCODE_SPEC = f"opencode-ai@~{OPENCODE_MIN_VERSION}"
-current_version = installed_cli_version(opencode_bin) if opencode_bin.exists() else None
-if version_in_range(current_version, OPENCODE_MIN_VERSION, OPENCODE_MAX_VERSION_EXCLUSIVE):
-    print(
-        f"OpenCode {current_version} is within "
-        f"[{OPENCODE_MIN_VERSION}, {OPENCODE_MAX_VERSION_EXCLUSIVE})"
-    )
-else:
-    if current_version:
-        print(
-            f"OpenCode {current_version} is outside "
-            f"[{OPENCODE_MIN_VERSION}, {OPENCODE_MAX_VERSION_EXCLUSIVE}); reinstalling"
-        )
+if not opencode_bin.exists():
     npm_prefix = str(home / ".local")
     version = get_npm_version("opencode-ai")
-    if version and not version_in_range(
-        version, OPENCODE_MIN_VERSION, OPENCODE_MAX_VERSION_EXCLUSIVE
-    ):
-        # Requesting it verbatim would reinstall an unusable harness every deploy.
-        print(
-            f"Warning: npm resolved opencode-ai@{version}, outside "
-            f"[{OPENCODE_MIN_VERSION}, {OPENCODE_MAX_VERSION_EXCLUSIVE}); "
-            f"requesting {OPENCODE_SPEC} instead"
-        )
-        version = None
-    package = f"opencode-ai@{version}" if version else OPENCODE_SPEC
+    package = f"opencode-ai@{version}" if version else "opencode-ai@latest"
     print(f"Installing {package}")
     for attempt in range(1, 4):
         result = subprocess.run(
@@ -95,15 +59,6 @@ else:
         print(f"OpenCode install failed (attempt {attempt}/3, rc={result.returncode})")
         if attempt < 3:
             time.sleep(5)
-    installed = installed_cli_version(opencode_bin)
-    if not version_in_range(installed, OPENCODE_MIN_VERSION, OPENCODE_MAX_VERSION_EXCLUSIVE):
-        print(
-            f"Warning: OpenCode reports {installed!r} after install, still outside "
-            f"[{OPENCODE_MIN_VERSION}, {OPENCODE_MAX_VERSION_EXCLUSIVE}) — "
-            "opencode-native sessions will not launch"
-        )
-    else:
-        print(f"OpenCode {installed} installed")
     sdk_version = get_npm_version("@ai-sdk/openai")
     sdk_package = f"@ai-sdk/openai@{sdk_version}" if sdk_version else "@ai-sdk/openai"
     subprocess.run(
@@ -112,6 +67,8 @@ else:
         text=True,
         env={**os.environ, "HOME": str(home), **npm_env()},
     )
+else:
+    print(f"OpenCode CLI already installed at {opencode_bin}")
 
 if not host or not token:
     print("OpenCode CLI installed — config will be set after auth is available")
@@ -185,7 +142,7 @@ if catalog["openai"]:
         "name": "Databricks Responses Gateway",
         "options": {
             "baseURL": base_urls["openai"],
-            "apiKey": "{env:DATABRICKS_TOKEN}",
+            "apiKey": token,
         },
         "models": {
             model: {
@@ -201,7 +158,7 @@ if catalog["gemini"]:
         "name": "Databricks Gemini Gateway",
         "options": {
             "baseURL": base_urls["gemini"],
-            "apiKey": "{env:DATABRICKS_TOKEN}",
+            "apiKey": token,
         },
         "models": {model: {} for model in catalog["gemini"]},
     }
@@ -212,7 +169,7 @@ if catalog["oss"]:
         "name": "Databricks MLflow Gateway (filtered)",
         "options": {
             "baseURL": CONTENT_FILTER_PROXY_URL,
-            "apiKey": "{env:DATABRICKS_TOKEN}",
+            "apiKey": token,
         },
         "models": {
             model: {

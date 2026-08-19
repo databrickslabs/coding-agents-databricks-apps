@@ -34,6 +34,7 @@ import app_state
 import enterprise_config
 from claude_otel import apply_claude_otel_env
 from utils import add_1m_context_suffix, ensure_https, get_gateway_host
+from token_helper import write_databricks_token_wrapper
 from pat_rotator import PATRotator
 from sp_token_broker import (
     BROKER_URL_ENV,
@@ -298,6 +299,8 @@ def _run_step(step_id, command):
 
         result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=300)
         if result.returncode == 0:
+            if step_id == "dbcli" and os.environ.get(BROKER_URL_ENV):
+                _ensure_broker_cli_wrapper()
             _update_step(step_id, status="complete", completed_at=time.time())
         else:
             err = result.stderr.strip() or result.stdout.strip() or "Unknown error"
@@ -306,6 +309,23 @@ def _run_step(step_id, command):
         _update_step(step_id, status="error", completed_at=time.time(), error="Timed out after 300s")
     except Exception as e:
         _update_step(step_id, status="error", completed_at=time.time(), error=str(e))
+
+
+def _ensure_broker_cli_wrapper() -> bool:
+    """Install the broker-aware CLI shim for direct terminal commands."""
+    if not os.environ.get(BROKER_URL_ENV, "").strip():
+        return False
+    home = os.environ.get("HOME", "/app/python/source_code")
+    if not home or home == "/":
+        home = "/app/python/source_code"
+    expected = os.path.join(home, ".local", "bin", "databricks")
+    real_cli = expected if os.path.isfile(expected) else shutil.which("databricks")
+    if not real_cli:
+        logger.warning("SP broker is running but Databricks CLI is not installed yet")
+        return False
+    wrapper = write_databricks_token_wrapper(os.path.join(home, ".coda-broker-bin"), real_cli)
+    logger.info("Installed broker-aware Databricks CLI wrapper at %s", wrapper)
+    return True
 
 
 _TERMINAL_ENV_ALLOWLIST = frozenset({
@@ -2462,6 +2482,7 @@ def initialize_app(local_dev=False):
             lambda: mint_sp_token(_omnigent_sp_creds)
         )
         os.environ[BROKER_URL_ENV] = broker_url(_sp_token_broker_server)
+        _ensure_broker_cli_wrapper()
         logger.info("SP token broker listening on loopback")
 
     # The profile retains only the workspace host for Omnigent routing. The
