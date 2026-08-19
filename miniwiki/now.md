@@ -49,3 +49,15 @@
 Next: obtain green required CI, merge PR #137, fetch `origin`, prove the merge
 SHA on `origin/main`, and append that evidence to this page and the decision
 record.
+
+## 2026-08-19 — publication outcome
+
+- PR #137 merged into public `main` at
+  `55137d5194699c2931812583fd1ec12dfdef680f`; a fresh fetch confirmed the
+  merge commit on `origin/main`.
+- GitHub Actions remained unscheduled (queued with zero jobs), so the merge was
+  performed by explicit maintainer administrator authorization after local
+  validation; no CI result was fabricated or bypassed as a test result.
+- The public decision record now documents the merge evidence, validation, and
+  the runner-scheduling limitation. `.isaac/` remains preserved and no private
+  or Omnigent repository was modified.

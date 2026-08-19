@@ -53,3 +53,21 @@ regression coverage and review evidence before reconsideration.
 The complete private source record remains on the private development line.
 It is intentionally not copied into the public publication, and the public
 record does not link to a private-only path.
+
+## Publication outcome
+
+- PR #137 was merged into public `main` on 2026-08-19 with merge commit
+  `55137d5194699c2931812583fd1ec12dfdef680f`.
+- `origin/main` was fetched after the merge and points to that merge commit.
+- Required GitHub Actions checks could not be scheduled: both workflows remained
+  queued with zero jobs, cancellation returned HTTP 500, and the Actions
+  permissions check returned HTTP 403. The merge used explicit maintainer
+  administrator authorization rather than bypassing the recorded local
+  validation.
+- Local evidence before merge: focused `406 passed, 1 skipped`; CI-equivalent
+  suite `813 passed, 3 skipped`; full suite `814 passed, 3 skipped` with two
+  Docker integration timeouts; dependency dry-run, fresh lock comparison,
+  `git diff --check`, scrub scan, and held-back-path intersection passed.
+- The published diff contained no held-back paths and the added-line tenant/secret
+  scrub was empty. The complete private record and held-back layers remain
+  private.
