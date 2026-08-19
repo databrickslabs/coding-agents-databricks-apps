@@ -186,6 +186,27 @@ def test_setup_opencode_writes_ucode_provider_buckets(monkeypatch, tmp_path):
     }
 
 
+def test_setup_hermes_uses_broker_auth_without_pat(monkeypatch, tmp_path):
+    hermes_bin = tmp_path / ".local" / "bin" / "hermes"
+    hermes_bin.parent.mkdir(parents=True)
+    hermes_bin.write_text("#!/bin/sh\nexit 0\n")
+    hermes_bin.chmod(hermes_bin.stat().st_mode | stat.S_IEXEC)
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("DATABRICKS_HOST", WORKSPACE)
+    monkeypatch.setenv("DATABRICKS_GATEWAY_HOST", "")
+    monkeypatch.setenv("ENABLE_HERMES", "true")
+    monkeypatch.delenv("DATABRICKS_TOKEN", raising=False)
+
+    import token_helper
+
+    monkeypatch.setattr(token_helper, "resolve_databricks_token", lambda: "broker-token")
+    runpy.run_path(str(Path(__file__).parents[1] / "setup_hermes.py"), run_name="__main__")
+
+    config = (tmp_path / ".hermes/config.yaml").read_text()
+    assert "api_key: broker-token" in config
+
+
 def test_setup_proxy_source_pins_workspace_mlflow_route():
     source = (Path(__file__).parents[1] / "setup_proxy.py").read_text()
     assert 'upstream_base = f"{host}/ai-gateway/mlflow/v1"' in source

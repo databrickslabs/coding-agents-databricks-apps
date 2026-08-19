@@ -378,6 +378,7 @@ def test_readiness_requires_authenticated_workspace_listing_success(
 ):
     upstream = "https://workspace.example.com/serving-endpoints"
     monkeypatch.setattr(readiness, "UPSTREAM_BASE", upstream)
+    monkeypatch.setenv("DATABRICKS_HOST", "https://workspace.example.com")
     get = mock.Mock(return_value=mock.Mock(status_code=200))
     monkeypatch.setattr(readiness.requests, "get", get)
 
@@ -403,6 +404,27 @@ def test_readiness_requires_authenticated_workspace_listing_success(
         headers={"Authorization": "Bearer fresh-token"},
         timeout=3,
     )
+
+
+@pytest.mark.parametrize(
+    "workspace_host",
+    ["https://other.example.com", "", "http://workspace.example.com"],
+)
+def test_readiness_rejects_serving_endpoint_host_mismatch(
+    readiness, monkeypatch, workspace_host
+):
+    monkeypatch.setattr(
+        readiness, "UPSTREAM_BASE", "https://workspace.example.com/serving-endpoints"
+    )
+    monkeypatch.setenv("DATABRICKS_HOST", workspace_host)
+    get = mock.Mock()
+    monkeypatch.setattr(readiness.requests, "get", get)
+
+    status, payload = readiness._readiness_status()
+
+    assert status == 503
+    assert payload["reason"] == "upstream_config_invalid"
+    get.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -446,6 +468,7 @@ def test_readiness_rejects_missing_current_token(readiness, monkeypatch):
     monkeypatch.setattr(
         readiness, "UPSTREAM_BASE", "https://workspace.example.com/serving-endpoints"
     )
+    monkeypatch.setenv("DATABRICKS_HOST", "https://workspace.example.com")
     monkeypatch.setattr(readiness, "_resolve_current_token", lambda: None)
     get = mock.Mock()
     monkeypatch.setattr(readiness.requests, "get", get)
@@ -465,6 +488,7 @@ def test_readiness_rejects_workspace_listing_error_status(
     monkeypatch.setattr(
         readiness, "UPSTREAM_BASE", "https://workspace.example.com/serving-endpoints"
     )
+    monkeypatch.setenv("DATABRICKS_HOST", "https://workspace.example.com")
     monkeypatch.setattr(
         readiness.requests,
         "get",

@@ -158,6 +158,14 @@ def _readiness_target(upstream: str) -> tuple[str, str, str, str, str] | None:
         return None
     if path == "/serving-endpoints":
         workspace = f"{parsed.scheme}://{parsed.netloc}"
+        try:
+            configured_workspace = normalize_workspace(
+                os.environ.get("DATABRICKS_HOST", "")
+            )
+        except ValueError:
+            return None
+        if workspace != configured_workspace:
+            return None
         return (
             workspace + "/api/2.0/serving-endpoints",
             "workspace-serving-endpoints",

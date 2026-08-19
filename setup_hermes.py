@@ -32,6 +32,7 @@ from utils import (
     ensure_https,
     get_gateway_host,
 )
+from token_helper import resolve_databricks_token
 
 # Opt-out: allow operators to disable Hermes bundling without removing the file.
 if os.environ.get("ENABLE_HERMES", "true").strip().lower() in ("false", "0", "no"):
@@ -45,7 +46,10 @@ if not os.environ.get("HOME") or os.environ["HOME"] == "/":
 home = Path(os.environ["HOME"])
 
 host = os.environ.get("DATABRICKS_HOST", "")
-token = os.environ.get("DATABRICKS_TOKEN", "")
+# The SP broker is the primary auth source on the no-PAT baseline. Resolve the
+# same layered source as the other public setup writers so broker-only startup
+# does not silently leave Hermes installed but unusable.
+token = resolve_databricks_token() or ""
 hermes_model = os.environ.get("HERMES_MODEL", "databricks-claude-opus-4-8")
 hermes_fallback_model = os.environ.get("HERMES_FALLBACK_MODEL", "databricks-claude-opus-4-8")
 
