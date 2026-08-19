@@ -15,16 +15,29 @@
 - `publish/recommended-subset` was reconstructed from refreshed `origin/main`; it
   does not merge `dev` wholesale and has no held-back path in its diff.
 - Focused auth, gateway, capacity, terminal-boundary, and overlay tests pass.
-- The non-Docker suite passes (`851 passed, 3 skipped`). The Docker pipeline
-  reaches the security checks (`3 passed`) but its installer checks are blocked
-  in this container by external npm/GitHub availability; the assertions remain
-  enabled for CI.
+- The non-Docker suite passes (`813 passed, 3 skipped`) on the final
+  implementation. The full `uv run pytest tests -q` equivalent completed
+  `814 passed, 3 skipped, 2 failed`; both failures were Docker setup-pipeline
+  timeouts while external installers ran. CI deliberately excludes that
+  network-dependent integration directory and its assertions remain enabled.
 - Added Python 3.10 compatibility and staged all runtime modules required by
   the apps-like pipeline; commits `6652744`, `0d1e615`, `df7d528`, and
   `e884c4c` carry these fixes.
 - Added-line tenant/secret scan and held-back-path intersection are empty;
-  normalized `requirements.lock` comparison is empty.
+  the Python 3.12 `requirements.lock` comparison is empty.
 
-Next: complete independent review, push directly to the public upstream PR,
-obtain required CI, merge, and append the merge evidence here and in the
-publication decision record.
+## 2026-08-19 — final pre-push validation
+
+- Security fix `2623e7b` binds proxy readiness to the configured workspace host;
+  broker-only Hermes setup is covered by focused gateway tests.
+- Focused proxy/gateway tests after the fix: `89 passed`.
+- The literal `pytest tests -q` command is unavailable in this shell; the `uv
+  run` equivalent was used. Requirements dry-run, compileall, diff check, scrub
+  scan, and held-back-path intersection pass on the current branch.
+- The focused security re-review is pending; the requested Opus reviewer is
+  unavailable in this environment. No push, PR, merge, or private-remote write
+  has occurred.
+
+Next: complete focused security adjudication, push directly to the public
+upstream PR, obtain required CI, merge, and append the PR/CI/merge evidence here
+and in the publication decision record.
