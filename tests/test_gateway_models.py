@@ -158,7 +158,7 @@ def test_setup_opencode_writes_ucode_provider_buckets(monkeypatch, tmp_path):
     config = json.loads((tmp_path / ".config/opencode/opencode.json").read_text())
     assert config["model"] == "databricks-anthropic/system.ai.claude-opus-5"
     assert config["provider"]["databricks-anthropic"]["options"]["baseURL"] == (
-        WORKSPACE + "/ai-gateway/anthropic/v1"
+        "http://127.0.0.1:4000/v1"
     )
     assert config["provider"]["databricks-openai"]["options"]["baseURL"] == (
         WORKSPACE + "/ai-gateway/codex/v1"

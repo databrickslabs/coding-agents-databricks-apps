@@ -79,7 +79,9 @@ def test_broker_binds_loopback_and_mints_per_request():
 
 
 def test_fetch_sp_token_uses_configured_broker(monkeypatch):
-    monkeypatch.setenv("CODA_SP_TOKEN_BROKER_URL", "http://127.0.0.1:9/token")
+    monkeypatch.setenv(
+        "CODA_SP_TOKEN_BROKER_URL", "http://127.0.0.1:9/token/" + "a" * 43
+    )
     monkeypatch.setattr(
         broker,
         "urlopen",

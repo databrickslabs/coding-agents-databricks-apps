@@ -34,7 +34,6 @@ CLI_TOGGLES = frozenset(
         "ENABLE_OPENCODE",
         "ENABLE_CODEX",
         "ENABLE_GEMINI",
-        "ENABLE_CLAUDE",
     }
 )
 
