@@ -75,7 +75,7 @@ def resolve_databricks_token() -> str | None:
     except Exception:
         return None
 
-_HELPER_SRC = '''#!/usr/bin/env python3
+_HELPER_SRC = r'''#!/usr/bin/env python3
 """Print a Databricks bearer token for Claude Code / Pi token resolution.
 
 stdout MUST be the token only -- both callers use it verbatim.
