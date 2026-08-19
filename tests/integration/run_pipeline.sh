@@ -26,7 +26,7 @@ echo
 mkdir -p /work
 cd /repo && cp -a --no-preserve=ownership \
     requirements.txt pyproject.toml app.py utils.py app_state.py \
-    pat_rotator.py telemetry.py cli_auth.py enterprise_config.py \
+    pat_rotator.py telemetry.py cli_auth.py claude_otel.py gateway_models.py enterprise_config.py \
     install_micro.sh install_gh.sh install_databricks_cli.sh \
     setup_proxy.py setup_claude.py setup_codex.py setup_gemini.py \
     setup_opencode.py setup_hermes.py setup_databricks.py setup_mlflow.py \

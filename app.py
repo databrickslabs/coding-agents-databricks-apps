@@ -24,7 +24,10 @@ from flask_socketio import SocketIO, emit, join_room, leave_room, disconnect
 from werkzeug.utils import secure_filename
 from collections import deque
 
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10 compatibility
+    import tomli as tomllib
 import requests
 
 import app_state
@@ -831,8 +834,8 @@ def _configure_all_cli_auth(token):
     if apply_claude_otel_env(settings, token, databricks_host):
         logger.info("Claude Code OTEL export configured")
 
-    with open(settings_path, "w") as f:
-        json.dump(settings, f, indent=2)
+    from cli_auth import _atomic_write_text
+    _atomic_write_text(settings_path, json.dumps(settings, indent=2))
 
     logger.info(f"Claude CLI auth configured: {settings_path}")
 
@@ -857,6 +860,26 @@ def _configure_all_cli_auth(token):
                 logger.warning(f"CLI config failed: {script}: {result.stderr[:200]}")
         except Exception as e:
             logger.warning(f"CLI config error: {script}: {e}")
+
+
+def _refresh_cli_auth_after_setup(token):
+    """Reconcile setup/rotation races without exposing token-bearing errors."""
+    try:
+        from cli_auth import update_cli_tokens
+
+        result = update_cli_tokens(token)
+    except Exception as error:
+        logger.warning("Post-setup token sync failed (%s)", type(error).__name__)
+        return False
+    if getattr(result, "ok", False) is not True:
+        failed = tuple(getattr(result, "failed", ()))
+        logger.warning(
+            "Post-setup token sync incomplete: failed=%s",
+            ",".join(failed) if failed else "unknown",
+        )
+        return False
+    logger.info("Post-setup token sync: CLI configs hold the current token")
+    return True
 
 
 def run_setup():
@@ -2007,8 +2030,10 @@ def _bootstrap_pat(token):
         # Revoke only the bootstrap PAT — leave other user PATs intact (#98)
         pat_rotator.revoke_bootstrap_token()
     else:
-        # Rotation failed — fall back to supplied token (still valid)
-        pat_rotator._write_databrickscfg(token)
+        # Rotation may have minted a token before reporting degraded status.
+        # Keep that in-memory token authoritative; never persist the original
+        # bootstrap PAT as a fallback after the exchange has been attempted.
+        logger.warning("Bootstrap PAT exchange degraded; keeping the current token in memory")
     pat_rotator.start()
 
     # Configure all CLI tools (Claude, Codex, OpenCode, Gemini, Databricks)

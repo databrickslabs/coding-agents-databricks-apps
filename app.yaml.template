@@ -16,6 +16,8 @@ env:
     value: databricks-claude-opus-4-8
   - name: HERMES_FALLBACK_MODEL
     value: databricks-claude-opus-4-8
+  - name: ENABLE_CLAUDE
+    value: "true"
   # Per-CLI install toggles. Each ENABLE_* defaults to true when the variable
   # is absent, so list all of them here explicitly: an Apps overlay *replaces*
   # app.yaml rather than merging with it, and an omitted toggle silently falls

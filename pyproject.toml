@@ -15,6 +15,7 @@ dependencies = [
     "databricks-sdk>=0.123.0",
     "mlflow-skinny==3.14.0",
     "requests",
+    "tomli",
     # GHSA-g6cj-pr64-35w5 / CVE-2026-69247 — cryptography >= 44.0.0, < 50.0.0
     # leaks a Bleichenbacher oracle through distinguishable errors and timing
     # when decrypting PKCS#7 EnvelopedData.
