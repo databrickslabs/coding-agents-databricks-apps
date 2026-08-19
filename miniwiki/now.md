@@ -34,10 +34,18 @@
 - The literal `pytest tests -q` command is unavailable in this shell; the `uv
   run` equivalent was used. Requirements dry-run, compileall, diff check, scrub
   scan, and held-back-path intersection pass on the current branch.
-- The focused security re-review is pending; the requested Opus reviewer is
-  unavailable in this environment. No push, PR, merge, or private-remote write
-  has occurred.
+- The focused security re-review completed: the workspace-host binding passed;
+  the requested Opus reviewer is unavailable in this environment. Generic
+  miniwiki scope metadata was adjudicated as required non-sensitive decision
+  evidence.
+- Public PR: https://github.com/databrickslabs/coding-agents-databricks-apps/pull/137
+- Tests workflow: https://github.com/databrickslabs/coding-agents-databricks-apps/actions/runs/32223937599
+- Dependency Audit workflow: https://github.com/databrickslabs/coding-agents-databricks-apps/actions/runs/32223937335
+  Both runs are queued with zero jobs because of the repository's external
+  runner scheduling issue; no CI result or merge SHA exists yet.
+- The topic branch is pushed directly to public `origin`; no private remote,
+  private `main`, or Omnigent repository was modified.
 
-Next: complete focused security adjudication, push directly to the public
-upstream PR, obtain required CI, merge, and append the PR/CI/merge evidence here
-and in the publication decision record.
+Next: obtain green required CI, merge PR #137, fetch `origin`, prove the merge
+SHA on `origin/main`, and append that evidence to this page and the decision
+record.
