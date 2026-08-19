@@ -28,7 +28,7 @@ CATALOG = {
 def _seed_binary(home: Path, name: str, version: str = "1.17.20") -> None:
     """Seed a fake CLI that answers ``--version``.
 
-    setup_opencode.py compares the installed version against Omnigent's floor,
+    setup_opencode.py compares the installed version against the supported floor,
     so a stub that says nothing is treated as too old and the setup script would
     try a real ``npm install``.
     """
@@ -184,11 +184,11 @@ def test_setup_opencode_writes_ucode_provider_buckets(monkeypatch, tmp_path):
     }
 
 
-def test_setup_opencode_upgrades_a_binary_below_the_omnigent_floor(monkeypatch, tmp_path):
+def test_setup_opencode_upgrades_a_binary_outside_the_supported_window(monkeypatch, tmp_path):
     """A pre-existing old opencode must be upgraded, not accepted.
 
-    Omnigent reports the host as `version-too-low` and refuses to launch an
-    opencode-native session, which is invisible until a session fails.
+    A release outside the supported window must be rejected before a session
+    starts, rather than failing only when the first request is made.
     """
     _seed_binary(tmp_path, "opencode", version="1.18.11")  # newest stable, above the window
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -225,8 +225,8 @@ def test_setup_proxy_source_pins_workspace_mlflow_route():
 def test_app_yaml_enables_the_three_supported_harnesses_on_system_ai_defaults():
     """The installed set is Claude Code, Pi and OpenCode.
 
-    Claude Code is Omnigent's default harness, so a participant who never opens
-    the picker must still land on a working agent. The harnesses this workspace
+    Claude Code is the default harness, so a participant who never opens the
+    picker must still land on a working agent. The harnesses this workspace
     cannot serve (Hermes, Codex, Gemini) stay off, and every enabled harness
     defaults to the same `system.ai` sonnet model.
     """
@@ -240,7 +240,7 @@ def test_app_yaml_enables_the_three_supported_harnesses_on_system_ai_defaults():
 
 
 def test_fable_is_withheld_from_pickers_by_default(monkeypatch):
-    """`fable` is a preview family; a workshop picker must not offer it."""
+    """`fable` is a preview family; the picker must not offer it by default."""
     monkeypatch.delenv("ENABLE_FABLE_MODELS", raising=False)
     assert gm.offered_families() == ("sonnet", "opus", "haiku")
 
@@ -392,7 +392,7 @@ def test_family_model_picks_newest_and_falls_back():
 
 
 def test_app_yaml_enables_claude_pi_and_opencode():
-    """Claude Code is Omnigent's default harness, so it must be installed."""
+    """Claude Code is the default harness, so it must be installed."""
     source = (Path(__file__).parents[1] / "app.yaml").read_text()
     for toggle in ("ENABLE_CLAUDE", "ENABLE_PI", "ENABLE_OPENCODE"):
         block = source.split(f"name: {toggle}", 1)[1].split("value:", 1)[1]
@@ -577,7 +577,7 @@ def test_opencode_anthropic_provider_sends_an_explicit_bearer(monkeypatch, tmp_p
 
     config = json.loads((tmp_path / ".config/opencode/opencode.json").read_text())
     provider = config["provider"]["databricks-anthropic"]
-    assert provider["options"]["baseURL"] == WORKSPACE + "/ai-gateway/anthropic/v1"
+    assert provider["options"]["baseURL"] == "http://127.0.0.1:4000/v1"
     assert provider["options"]["headers"]["Authorization"].startswith("Bearer ")
     # UA must be per-model: opencode clobbers provider-level headers.
     for overlay in provider["models"].values():

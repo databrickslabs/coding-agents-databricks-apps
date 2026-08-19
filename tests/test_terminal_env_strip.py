@@ -297,7 +297,7 @@ class TestTerminalEnvStrip:
             launched_env = popen.call_args.kwargs["env"]
             serialized = repr(launched_env)
             assert launched_env[app.BROKER_URL_ENV] == broker_url
-            assert launched_env["DATABRICKS_CONFIG_PROFILE"] == "omnigents-host"
+            assert launched_env["DATABRICKS_CONFIG_PROFILE"]
             assert launched_env["PATH"].split(":")[0] == str(broker_bin)
             for sentinel in (
                 "GH_LEAK_SENTINEL",

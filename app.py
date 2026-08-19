@@ -34,7 +34,6 @@ import app_state
 import enterprise_config
 from claude_otel import apply_claude_otel_env
 from utils import add_1m_context_suffix, ensure_https, get_gateway_host
-from token_helper import write_databricks_token_wrapper
 from pat_rotator import PATRotator
 from sp_token_broker import (
     BROKER_URL_ENV,
@@ -299,14 +298,6 @@ def _run_step(step_id, command):
 
         result = subprocess.run(command, env=env, capture_output=True, text=True, timeout=300)
         if result.returncode == 0:
-            # The profile-backed broker shim is also needed by direct terminal
-            # `databricks` commands, not only Omnigent's SDK model-catalog path.
-            # On a no-Omnigent deploy the host setup never calls its installer,
-            # leaving databricks_cli_path pointing at a missing wrapper and every
-            # workspace CLI call failing with `no cached credentials`. Install it
-            # immediately after the real CLI is available.
-            if step_id == "dbcli" and os.environ.get(BROKER_URL_ENV):
-                _ensure_broker_cli_wrapper()
             _update_step(step_id, status="complete", completed_at=time.time())
         else:
             err = result.stderr.strip() or result.stdout.strip() or "Unknown error"
@@ -315,31 +306,6 @@ def _run_step(step_id, command):
         _update_step(step_id, status="error", completed_at=time.time(), error="Timed out after 300s")
     except Exception as e:
         _update_step(step_id, status="error", completed_at=time.time(), error=str(e))
-
-
-def _ensure_broker_cli_wrapper() -> bool:
-    """Install the broker-aware Databricks CLI shim for terminal commands.
-
-    The SDK honours the absolute `databricks_cli_path` in the omnigents-host
-    profile, but a user typing `databricks ...` resolves through PATH. Put the
-    same shim first in the terminal PATH too. This is needed when
-    ENABLE_SP_APIKEYHELPER is on but Omnigent resources are absent: the broker
-    starts, the profile is written, but the Omnigent host setup (which used to
-    install the shim) is intentionally skipped.
-    """
-    if not os.environ.get(BROKER_URL_ENV, "").strip():
-        return False
-    home = os.environ.get("HOME", "/app/python/source_code")
-    if not home or home == "/":
-        home = "/app/python/source_code"
-    expected = os.path.join(home, ".local", "bin", "databricks")
-    real_cli = expected if os.path.isfile(expected) else shutil.which("databricks")
-    if not real_cli:
-        logger.warning("SP broker is running but Databricks CLI is not installed yet; wrapper deferred")
-        return False
-    wrapper = write_databricks_token_wrapper(os.path.join(home, ".coda-broker-bin"), real_cli)
-    logger.info("Installed broker-aware Databricks CLI wrapper at %s", wrapper)
-    return True
 
 
 _TERMINAL_ENV_ALLOWLIST = frozenset({
@@ -978,12 +944,7 @@ def run_setup():
     # rotation's update_cli_tokens() call silently skips missing config files).
     current_token = os.environ.get("DATABRICKS_TOKEN", "")
     if current_token:
-        try:
-            from cli_auth import update_cli_tokens
-            update_cli_tokens(current_token)
-            logger.info("Post-setup token sync: all CLI configs updated with current token")
-        except Exception as e:
-            logger.warning(f"Post-setup token sync failed: {e}")
+        _refresh_cli_auth_after_setup(current_token)
 
     with setup_lock:
         any_error = any(s["status"] == "error" for s in setup_state["steps"])
@@ -2033,6 +1994,12 @@ def _bootstrap_pat(token):
         # Rotation may have minted a token before reporting degraded status.
         # Keep that in-memory token authoritative; never persist the original
         # bootstrap PAT as a fallback after the exchange has been attempted.
+        if (
+            pat_rotator._current_token == token
+            or not pat_rotator._current_token_id
+        ):
+            logger.warning("Bootstrap PAT exchange did not produce a controlled token")
+            return False, {"error": "Token exchange unavailable"}, 503
         logger.warning("Bootstrap PAT exchange degraded; keeping the current token in memory")
     pat_rotator.start()
 
@@ -2495,9 +2462,6 @@ def initialize_app(local_dev=False):
             lambda: mint_sp_token(_omnigent_sp_creds)
         )
         os.environ[BROKER_URL_ENV] = broker_url(_sp_token_broker_server)
-        # Install immediately when the CLI is already cached; _run_step("dbcli")
-        # retries this after a cold-boot install completes.
-        _ensure_broker_cli_wrapper()
         logger.info("SP token broker listening on loopback")
 
     # The profile retains only the workspace host for Omnigent routing. The

@@ -29,7 +29,7 @@ cd /repo && cp -a --no-preserve=ownership \
     pat_rotator.py telemetry.py cli_auth.py claude_otel.py gateway_models.py \
     token_helper.py sp_token_broker.py resource_capacity.py enterprise_config.py \
     install_micro.sh install_gh.sh install_databricks_cli.sh \
-    setup_proxy.py setup_claude.py setup_codex.py setup_gemini.py \
+    setup_proxy.py setup_claude.py setup_pi.py setup_codex.py setup_gemini.py \
     setup_opencode.py setup_hermes.py setup_databricks.py setup_mlflow.py \
     content_filter_proxy.py CLAUDE.md \
     /work/ 2>/dev/null || true
@@ -98,6 +98,9 @@ echo
 
 echo ">>> Stage 3b: setup_claude.py"
 uv run python setup_claude.py || echo "(setup_claude.py exited non-zero — checking what landed anyway)"
+
+echo ">>> Stage 3b: setup_pi.py"
+uv run python setup_pi.py || echo "(setup_pi.py exited non-zero)"
 
 echo ">>> Stage 3c: setup_codex.py"
 uv run python setup_codex.py || echo "(setup_codex.py exited non-zero)"

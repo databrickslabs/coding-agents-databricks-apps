@@ -14,10 +14,9 @@ from urllib.parse import urlencode, urlsplit
 import requests
 
 ANTHROPIC_FAMILIES = ("fable", "opus", "sonnet", "haiku")
-# Families offered to harness pickers, in preference order. Sonnet leads: it is
-# the workshop default. `fable` is discovered but withheld unless explicitly
-# enabled — it is a preview family, and offering it in a picker invites
-# participants to select a model the workshop has not budgeted or validated.
+# Families offered to harness pickers, in preference order. Sonnet leads as the
+# default. `fable` is discovered but withheld unless explicitly enabled because
+# it is a preview family that may not be budgeted or validated.
 DEFAULT_FAMILY_ORDER = ("sonnet", "opus", "haiku")
 OPT_IN_FAMILIES = ("fable",)
 OSS_STATIC_FAMILIES = ("kimi-", "glm-")

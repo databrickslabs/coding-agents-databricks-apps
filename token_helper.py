@@ -49,7 +49,6 @@ def resolve_sp_oauth_token() -> str | None:
         return None
     try:
         from databricks.sdk.core import Config
-
         headers = Config(profile=SP_PROFILE).authenticate()
         auth = (headers or {}).get("Authorization", "")
         token = auth[7:].strip() if auth.startswith("Bearer ") else auth.strip()
@@ -75,7 +74,6 @@ def resolve_databricks_token() -> str | None:
         return config.get("DEFAULT", "token", fallback="").strip() or None
     except Exception:
         return None
-
 
 _HELPER_SRC = '''#!/usr/bin/env python3
 """Print a Databricks bearer token for Claude Code / Pi token resolution.
@@ -113,9 +111,13 @@ def _broker_token():
     try:
         parsed = urlsplit(url)
         valid = (
-            parsed.scheme == "http" and parsed.hostname == "127.0.0.1"
-            and parsed.username is None and parsed.password is None
-            and parsed.port is not None and not parsed.query and not parsed.fragment
+            parsed.scheme == "http"
+            and parsed.hostname == "127.0.0.1"
+            and parsed.username is None
+            and parsed.password is None
+            and parsed.port is not None
+            and not parsed.query
+            and not parsed.fragment
             and len(parsed.path.split("/")) == 3
             and parsed.path.startswith("/token/")
             and len(parsed.path.rsplit("/", 1)[1]) >= 32
@@ -131,7 +133,7 @@ def _broker_token():
         if content_type.strip().lower() != "text/plain" or len(body) > _MAX_TOKEN_BYTES:
             return None
         token = body.decode("utf-8").strip()
-        return token if token and "\\r" not in token and "\\n" not in token else None
+        return token if token and "\r" not in token and "\n" not in token else None
     except Exception:
         return None
 
@@ -249,242 +251,49 @@ import datetime
 import json
 import os
 import sys
-from urllib.parse import urlsplit
-from urllib.request import HTTPRedirectHandler, build_opener
+from urllib.request import urlopen
 
-REAL_CLI_FALLBACK = {json.dumps(real_cli)}
+REAL_CLI = {json.dumps(real_cli)}
 PROFILE = {json.dumps(SP_PROFILE)}
-
-
-class _NoRedirectHandler(HTTPRedirectHandler):
-    def redirect_request(self, *_args, **_kwargs):
-        return None
-
-
-_NO_REDIRECT_OPENER = build_opener(_NoRedirectHandler())
-
-
-def urlopen(url, timeout):
-    return _NO_REDIRECT_OPENER.open(url, timeout=timeout)
-
-
-def _real_cli():
-    """Resolve the CLI at call time so a boot race can't pin a stale binary.
-
-    The wrapper is written as soon as the SP broker is up, which can be BEFORE
-    install_databricks_cli.sh has finished putting the current CLI in
-    ~/.local/bin. Baking whatever existed at that moment (the image's much
-    older /usr/local/bin build) silently downgraded every CLI call for the life
-    of the container. That is not only missing flags: the old CLI ignores
-    `bundle.engine: direct`, so a Databricks Asset Bundle deploy runs through
-    Terraform instead \u2014 which drops an app's compute_size and needs egress to
-    releases.hashicorp.com.
-    """
-    preferred = os.path.join(
-        os.environ.get("HOME", "/app/python/source_code"), ".local", "bin", "databricks"
-    )
-    if os.path.isfile(preferred) and os.access(preferred, os.X_OK):
-        return preferred
-    return REAL_CLI_FALLBACK
-
-
-# `--profile` and its documented shorthand `-p` are GLOBAL flags on the
-# Databricks CLI, so both forms must be recognised — an agent (or the repo's
-# Makefile) typing `-p omnigents-host` hit the un-brokered path otherwise.
-PROFILE_FLAGS = ("--profile", "-p")
 
 
 def _profile(args):
     for index, arg in enumerate(args):
-        if arg in PROFILE_FLAGS and index + 1 < len(args):
+        if arg == "--profile" and index + 1 < len(args):
             return args[index + 1]
-        for flag in PROFILE_FLAGS:
-            if arg.startswith(flag + "="):
-                return arg.split("=", 1)[1]
+        if arg.startswith("--profile="):
+            return arg.split("=", 1)[1]
     return None
 
 
-def _strip_profile_flags(args):
-    """Drop `--profile/-p <PROFILE>` before handing argv to the real CLI.
-
-    Load-bearing. The Go CLI reads `auth_type = databricks-cli` out of the
-    omnigents-host profile and then looks for ITS OWN OAuth token cache —
-    `databricks_cli_path` is a databricks-sdk (Python) Config field the Go CLI
-    ignores. So an explicit `--profile omnigents-host` made the real CLI fail
-    with "cache: no cached credentials; run `databricks auth login` to sign in"
-    even though this shim had just injected a valid brokered token into the
-    environment: the named profile shadows DATABRICKS_TOKEN/DATABRICKS_HOST.
-    Stripping the selector leaves the env creds as the resolution path, which is
-    the same identity the profile names.
-    """
-    out = []
-    skip = False
-    for arg in args:
-        if skip:
-            skip = False
-            continue
-        if arg in PROFILE_FLAGS:
-            skip = True
-            continue
-        if any(arg.startswith(flag + "=") for flag in PROFILE_FLAGS):
-            continue
-        out.append(arg)
-    return out
-
-
 def _broker_token():
-    url = os.environ.get("CODA_SP_TOKEN_BROKER_URL", "").strip()
-    try:
-        parsed = urlsplit(url)
-        valid = (
-            parsed.scheme == "http" and parsed.hostname == "127.0.0.1"
-            and parsed.username is None and parsed.password is None
-            and parsed.port is not None and not parsed.query and not parsed.fragment
-            and len(parsed.path.split("/")) == 3
-            and parsed.path.startswith("/token/")
-            and len(parsed.path.rsplit("/", 1)[1]) >= 32
-        )
-    except ValueError:
-        valid = False
-    if not valid:
+    url = os.environ.get("CODA_SP_TOKEN_BROKER_URL", "")
+    if not url:
         return None
     try:
         with urlopen(url, timeout=5) as response:
-            content_type = (response.headers.get("Content-Type", "") or "").split(";", 1)[0]
-            body = response.read(16 * 1024 + 1)
-        if content_type.strip().lower() != "text/plain" or len(body) > 16 * 1024:
-            return None
-        token = body.decode("utf-8").strip()
-        return token if token and "\\r" not in token and "\\n" not in token else None
+            token = response.read().decode().strip()
+        return token or None
     except Exception:
         return None
 
 
-def _config_path():
-    configured = os.environ.get("DATABRICKS_CONFIG_FILE", "").strip()
-    path = configured or os.path.join(
-        os.environ.get("HOME", "/app/python/source_code"), ".databrickscfg"
-    )
-    return os.path.abspath(path)
-
-def _read_config():
-    cfg = configparser.ConfigParser(interpolation=None)
-    try:
-        cfg.read(_config_path())
-    except Exception:
-        pass
-    return cfg
-
-
 def _profile_host():
+    path = os.path.expanduser("~/.databrickscfg")
     try:
-        cfg = _read_config()
-        if not cfg.has_section(PROFILE):
-            return ""
+        cfg = configparser.ConfigParser(interpolation=None)
+        cfg.read(path)
         return (cfg.get(PROFILE, "host", fallback="") or "").strip()
     except Exception:
         return ""
 
 
-def _env_has_credentials():
-    env = os.environ
-    if (env.get("DATABRICKS_AUTH_TYPE") or "").strip():
-        return True
-    if (env.get("DATABRICKS_TOKEN") or "").strip():
-        return True
-    if (env.get("DATABRICKS_CLIENT_ID") or "").strip() and (
-        env.get("DATABRICKS_CLIENT_SECRET") or ""
-    ).strip():
-        return True
-    if (env.get("DATABRICKS_PASSWORD") or "").strip():
-        return True
-    return False
-
-
-def _default_profile_has_credentials():
-    """True when [DEFAULT] in ~/.databrickscfg can authenticate on its own.
-
-    That is the PAT-bootstrap path (a human pasted a token, `pat_rotator`
-    refreshes it). When it exists we must NOT silently switch identity to the
-    app service principal.
-    """
-    try:
-        defaults = _read_config().defaults()
-    except Exception:
-        return False
-    if (defaults.get("auth_type") or "").strip():
-        return True
-    if (defaults.get("token") or "").strip():
-        return True
-    if (defaults.get("client_id") or "").strip() and (
-        defaults.get("client_secret") or ""
-    ).strip():
-        return True
-    if (defaults.get("password") or "").strip():
-        return True
-    return False
-
-
-def _host_arg(args):
-    for index, arg in enumerate(args):
-        if arg == "--host" and index + 1 < len(args):
-            return args[index + 1]
-        if arg.startswith("--host="):
-            return arg.split("=", 1)[1]
-    return None
-
-
 args = sys.argv[1:]
-explicit_profile = _profile(args)
-profile = explicit_profile or os.environ.get("DATABRICKS_CONFIG_PROFILE")
-
-# `databricks auth login` cannot work in this container: the OAuth redirect
-# lands on a loopback port no outside browser can reach, and on an
-# ENABLE_SP_APIKEYHELPER-only instance there is no PAT bootstrap either. Agents
-# that hit the un-brokered error above followed its advice, ran `auth login`,
-# and stalled on an interactive prompt — burning a session on "deployments are
-# impossible here". Short-circuit it into a no-op WHEN (and only when) the
-# broker really can mint a token for this workspace, so `auth login && bundle
-# deploy` chains succeed.
-#
-# Deliberately NARROW so Omnigent's own login path is untouched:
-#   * only a bare `--host` equal to the brokered workspace matches — omnigent's
-#     _run_databricks_browser_login passes `--host <ws>/?o=<org>` when it has an
-#     org selector, which does NOT match and falls through to the real CLI;
-#   * `omnigent login` only reaches that browser flow interactively
-#     (`sys.stdin.isatty()`), and it verifies the minted token afterwards, so a
-#     no-op surfaces as its own actionable error, never a silent success;
-#   * CODA_BROKER_ALLOW_AUTH_LOGIN=1 disables the short-circuit entirely for
-#     anyone who genuinely wants to drive the interactive OAuth flow.
-_allow_login = (os.environ.get("CODA_BROKER_ALLOW_AUTH_LOGIN", "").strip().lower()
-                in ("1", "true", "yes"))
-if args[:2] == ["auth", "login"] and profile in (None, "", PROFILE) and not _allow_login:
-    requested_host = (_host_arg(args) or "").rstrip("/")
-    broker_host = _profile_host().rstrip("/")
-    if broker_host and requested_host in ("", broker_host):
-        if _broker_token():
-            sys.stderr.write(
-                """databricks auth login: skipped — this container already has
-brokered Databricks OAuth (CoDA app service principal). No interactive
-login and no PAT are needed.
-
-  host    : {{broker_host}}
-  profile : {{PROFILE}}  (also used when no profile is selected)
-
-Just run the command you wanted, e.g.
-  databricks current-user me
-  databricks bundle deploy -t dev
-A fresh token is minted per invocation, so nothing expires mid-session.
-Set CODA_BROKER_ALLOW_AUTH_LOGIN=1 to force the real interactive flow.
-""".format(broker_host=broker_host, PROFILE=PROFILE)
-            )
-            raise SystemExit(0)
-
-if args[:2] == ["auth", "token"] and explicit_profile == PROFILE:
+profile = _profile(args) or os.environ.get("DATABRICKS_CONFIG_PROFILE")
+if args[:2] == ["auth", "token"] and _profile(args) == PROFILE:
     token = _broker_token()
     if not token:
-        real_cli = _real_cli()
-        os.execv(real_cli, [real_cli, *args])
+        os.execv(REAL_CLI, [REAL_CLI, *args])
     # Emit the FULL OAuth token shape the databricks-sdk CLI token source
     # (DatabricksCliTokenSource) requires: access_token + token_type + expiry.
     # ALWAYS emit JSON — NOT gated on `--output json`. The SDK builds the token
@@ -524,22 +333,7 @@ if args[:2] == ["auth", "token"] and explicit_profile == PROFILE:
 # cache. For that one profile, mint a broker token and hand it to the real CLI
 # through process-local env vars. The token never enters the shell's exported
 # environment or a file, and other profiles/commands are delegated untouched.
-#
-# The same injection also has to cover the case where NO profile is selected at
-# all. Omnigent's native-harness terminals deliberately unset
-# DATABRICKS_CONFIG_PROFILE (`_claude_terminal_env_unset`), so an agent running
-# inside a runner sees neither the env selector nor a [DEFAULT] PAT and every
-# CLI call died with "cannot configure default credentials" — which is what made
-# bundle deploys look impossible from Omnigent. Fall back to the broker only
-# when there is genuinely nothing else to authenticate with, so a pasted-PAT
-# container keeps deploying as the human, not as the app service principal.
-use_broker = profile == PROFILE or (
-    not profile
-    and bool(_profile_host())
-    and not _env_has_credentials()
-    and not _default_profile_has_credentials()
-)
-if use_broker:
+if profile == PROFILE:
     token = _broker_token()
     if token:
         env = dict(os.environ)
@@ -547,25 +341,10 @@ if use_broker:
         host = _profile_host()
         if host:
             env["DATABRICKS_HOST"] = host
-        # The wrapper is also safe when invoked directly, rather than only via
-        # _run_host_once's already-scrubbed environment. Keep the profile and
-        # all ambient app-auth selectors from shadowing the injected token.
-        for key in (
-            "DATABRICKS_CONFIG_PROFILE",
-            "DATABRICKS_CLIENT_ID",
-            "DATABRICKS_CLIENT_SECRET",
-            "DATABRICKS_WORKSPACE_ID",
-            "DATABRICKS_APP_NAME",
-            "DATABRICKS_APP_URL",
-            "DATABRICKS_AUTH_TYPE",
-        ):
-            env.pop(key, None)
-        real_cli = _real_cli()
-        forwarded = _strip_profile_flags(args) if explicit_profile == PROFILE else args
-        os.execve(real_cli, [real_cli, *forwarded], env)
+        env.pop("DATABRICKS_CONFIG_PROFILE", None)
+        os.execve(REAL_CLI, [REAL_CLI, *args], env)
 
-_resolved_cli = _real_cli()
-os.execv(_resolved_cli, [_resolved_cli, *args])
+os.execv(REAL_CLI, [REAL_CLI, *args])
 '''
     wrapper_path.write_text(source)
     wrapper_path.chmod(0o700)

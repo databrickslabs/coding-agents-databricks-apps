@@ -863,6 +863,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
         for key in self.headers:
             if key.lower() not in ("host", "content-length", "transfer-encoding"):
                 headers[key] = self.headers[key]
+        # The Anthropic SDK sends x-api-key, but the Databricks gateway accepts
+        # only the Authorization bearer injected below. Never forward both.
+        for key in tuple(headers):
+            if key.lower() == "x-api-key":
+                headers.pop(key, None)
         headers["Content-Length"] = str(len(body))
 
         # Override auth with fresh token from disk — OpenCode's cached token

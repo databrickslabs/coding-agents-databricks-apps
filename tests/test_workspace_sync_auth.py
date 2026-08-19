@@ -73,7 +73,7 @@ def _write_cfg(tmp_path, monkeypatch, body):
 
 def test_prefers_default_pat(tmp_path, monkeypatch, fake_sdk):
     calls, created = fake_sdk
-    monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "omnigents-host")
+    monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "ambient-profile")
     _write_cfg(
         tmp_path,
         monkeypatch,
@@ -90,31 +90,30 @@ def test_prefers_default_pat(tmp_path, monkeypatch, fake_sdk):
     assert "DATABRICKS_CLIENT_ID" not in env
 
 
-def test_falls_back_to_broker_profile_when_no_pat(tmp_path, monkeypatch, fake_sdk):
-    """The SP-broker case: profile has a host but no token."""
+def test_discovers_a_named_profile_when_no_pat(tmp_path, monkeypatch, fake_sdk):
+    """A non-PAT config section is selected without a hard-coded name."""
     calls, created = fake_sdk
     _write_cfg(
         tmp_path,
         monkeypatch,
-        "[omnigents-host]\n"
+        "[service-principal]\n"
         "host = https://example.databricks.com\n"
         "auth_type = databricks-cli\n",
     )
 
     env, client = utils.workspace_sync_auth()
 
-    assert calls == [f"profile:{utils.SYNC_FALLBACK_PROFILE}"]
-    assert env["DATABRICKS_CONFIG_PROFILE"] == utils.SYNC_FALLBACK_PROFILE
+    assert calls == ["profile:service-principal"]
+    assert env["DATABRICKS_CONFIG_PROFILE"] == "service-principal"
 
 
-def test_falls_back_when_databrickscfg_absent(tmp_path, monkeypatch, fake_sdk):
+def test_rejects_missing_databrickscfg(tmp_path, monkeypatch, fake_sdk):
     calls, _ = fake_sdk
     monkeypatch.setenv("HOME", str(tmp_path))  # no ~/.databrickscfg at all
 
-    env, _ = utils.workspace_sync_auth()
-
-    assert calls == [f"profile:{utils.SYNC_FALLBACK_PROFILE}"]
-    assert env["DATABRICKS_CONFIG_PROFILE"] == utils.SYNC_FALLBACK_PROFILE
+    with pytest.raises(RuntimeError, match="profile"):
+        utils.workspace_sync_auth()
+    assert calls == []
 
 
 def test_honours_explicit_config_profile(tmp_path, monkeypatch, fake_sdk):
@@ -135,6 +134,6 @@ def test_partial_default_profile_is_not_treated_as_pat(tmp_path, monkeypatch, fa
         tmp_path, monkeypatch, "[DEFAULT]\nhost = https://example.databricks.com\n"
     )
 
-    _, _ = utils.workspace_sync_auth()
-
-    assert calls == [f"profile:{utils.SYNC_FALLBACK_PROFILE}"]
+    with pytest.raises(RuntimeError, match="profile"):
+        utils.workspace_sync_auth()
+    assert calls == []

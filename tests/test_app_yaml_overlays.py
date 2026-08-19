@@ -48,13 +48,7 @@ def _tracked_app_yamls() -> list[Path]:
         text=True,
         check=True,
     ).stdout.split()
-    # The workshop overlay is deliberately held back from this publication
-    # branch. Its separate fleet contract is not part of the public subset.
-    return [
-        REPO_ROOT / name
-        for name in out
-        if name != "app.yaml.workshop" and (REPO_ROOT / name).is_file()
-    ]
+    return [REPO_ROOT / name for name in out if (REPO_ROOT / name).is_file()]
 
 
 def _env_names(path: Path) -> set[str]:
@@ -66,7 +60,7 @@ def test_finds_the_overlays():
     """Sanity check — a silent empty list would make the tests below vacuous."""
     names = {p.name for p in _tracked_app_yamls()}
     assert "app.yaml" in names
-    assert len(names) >= 2, f"expected several overlays, found {sorted(names)}"
+    assert len(names) >= 3, f"expected several overlays, found {sorted(names)}"
 
 
 @pytest.mark.parametrize(

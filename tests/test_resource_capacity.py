@@ -405,7 +405,7 @@ def test_status_projection_does_not_include_host_details(monkeypatch):
     module = _fresh_app(limit=10)
     with mock.patch.object(module, "check_authorization", return_value=(True, "operator")):
         body = module.app.test_client().get("/api/capacity").get_json()
-    assert "omnigent" not in body
+    assert "runner" not in body
 
 
 def test_status_projection_marks_telemetry_unavailable():

@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 
 from enterprise_config import deepwiki_mcp_url, exa_mcp_url, npm_env
+from cli_auth import _atomic_write_text
 from gateway_models import (
     claude_model_capabilities,
     discover_model_catalog,
@@ -43,9 +44,8 @@ requested_model = os.environ.get("ANTHROPIC_MODEL", "system.ai.claude-sonnet-5")
 local_bin = home / ".local" / "bin"
 local_bin.mkdir(parents=True, exist_ok=True)
 opencode_bin = local_bin / "opencode"
-# Omnigent's opencode-native harness pins a version *window* and reports the
-# host as `version-too-low` for anything outside it, which fails session launch
-# with "harness 'opencode-native' is not configured on host". Both ends matter:
+# The supported integration pins a version *window* and rejects anything
+# outside it, which fails session launch. Both ends matter:
 # npm's `latest` tag for opencode-ai points at a `0.0.0-<snapshot>` build (below
 # every real release) while the newest stable is 1.18.x (above the window), and
 # the image may already ship an out-of-range binary. So compare the installed
@@ -55,7 +55,7 @@ OPENCODE_MAX_VERSION_EXCLUSIVE = (
     os.environ.get("OPENCODE_MAX_VERSION_EXCLUSIVE", "1.18.0").strip() or "1.18.0"
 )
 # `~1.17.7` is npm for `>=1.17.7 <1.18.0` — the same window, so npm resolves the
-# newest patch Omnigent accepts.
+# newest patch in the supported window.
 OPENCODE_SPEC = f"opencode-ai@~{OPENCODE_MIN_VERSION}"
 current_version = installed_cli_version(opencode_bin) if opencode_bin.exists() else None
 if version_in_range(current_version, OPENCODE_MIN_VERSION, OPENCODE_MAX_VERSION_EXCLUSIVE):
@@ -168,7 +168,11 @@ providers = {
         "npm": "@ai-sdk/anthropic",
         "name": "Databricks Anthropic Gateway",
         "options": {
-            "baseURL": base_urls["anthropic"],
+            # Route Anthropic messages through the local proxy so it resolves
+            # a fresh broker/PAT credential per request. The proxy maps
+            # /v1/messages back to the workspace Anthropic gateway and strips
+            # the SDK's x-api-key header in favour of Authorization.
+            "baseURL": f"{CONTENT_FILTER_PROXY_URL}/v1",
             "apiKey": token,
             "headers": auth_headers,
         },
@@ -241,19 +245,18 @@ config = {
 config_dir = home / ".config" / "opencode"
 config_dir.mkdir(parents=True, exist_ok=True)
 config_path = config_dir / "opencode.json"
-config_path.write_text(json.dumps(config, indent=2))
-config_path.chmod(0o600)
+_atomic_write_text(str(config_path), json.dumps(config, indent=2))
 
 # Auth keys match provider names; cli_auth rotates every API credential entry.
 auth_dir = home / ".local" / "share" / "opencode"
 auth_dir.mkdir(parents=True, exist_ok=True)
 auth_path = auth_dir / "auth.json"
-auth_path.write_text(
+_atomic_write_text(
+    str(auth_path),
     json.dumps(
         {name: opencode_api_credential(token) for name in providers},
         indent=2,
     )
 )
-auth_path.chmod(0o600)
 print(f"OpenCode configured: {config_path}")
 print(f"OpenCode default: databricks-anthropic/{active_model}")

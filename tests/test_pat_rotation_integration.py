@@ -99,6 +99,35 @@ class TestPATStatusAccessible:
 
 
 class TestBootstrapPATDegradedRefresh:
+    def test_bootstrap_rejects_when_exchange_mints_nothing(self):
+        with mock.patch("app.initialize_app"):
+            import app as app_module
+
+        original_token = os.environ.get("DATABRICKS_TOKEN")
+        original_current = app_module.pat_rotator._current_token
+        original_id = app_module.pat_rotator._current_token_id
+        validation = mock.Mock(status_code=200)
+        validation.json.return_value = {"userName": "owner@example.com"}
+
+        try:
+            with mock.patch.object(app_module.requests, "get", return_value=validation), \
+                 mock.patch.object(app_module.pat_rotator, "_rotate_once", return_value=False), \
+                 mock.patch.object(app_module.pat_rotator, "start") as start, \
+                 mock.patch.object(app_module, "_configure_all_cli_auth") as configure:
+                ok, payload, status = app_module._bootstrap_pat("dapi-bootstrap")
+
+            assert (ok, status) == (False, 503)
+            assert payload == {"error": "Token exchange unavailable"}
+            start.assert_not_called()
+            configure.assert_not_called()
+        finally:
+            app_module.pat_rotator._current_token = original_current
+            app_module.pat_rotator._current_token_id = original_id
+            if original_token is None:
+                os.environ.pop("DATABRICKS_TOKEN", None)
+            else:
+                os.environ["DATABRICKS_TOKEN"] = original_token
+
     def test_minted_token_remains_authoritative_when_refresh_degrades(self):
         with mock.patch("app.initialize_app"):
             import app as app_module

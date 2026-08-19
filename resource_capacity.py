@@ -16,10 +16,9 @@ kernel evicts on demand long before it OOM-kills anything.  Only anonymous
 and kernel memory (which cannot be reclaimed without swap or an OOM kill)
 counts as pressure.
 
-This guard is deliberately independent of the Omnigent host runner cap
-(``OMNIGENT_HOST_MAX_RUNNERS``) and of the Omnigent managed lease's durable
-session cap.  All three consume the same container memory budget, so the
-memory gate can reduce currently available browser capacity below
+This guard is deliberately independent of any external runner or durable
+session cap. Multiple controls can consume the same container memory budget,
+so the memory gate can reduce currently available browser capacity below
 ``MAX_CONCURRENT_SESSIONS``.
 
 Pressure uses a latch whose set and clear conditions are exact complements,

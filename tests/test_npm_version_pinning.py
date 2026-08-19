@@ -346,15 +346,15 @@ class TestNpmVersionLive:
 class TestVersionFloor:
     """npm's `latest` can point at a 0.0.0 snapshot, below every real release.
 
-    Omnigent's opencode-native harness enforces a floor and reports a host as
-    `version-too-low` when the CLI is older, which fails session launch — so the
-    installer has to compare versions, not just check that a file exists.
+    The supported integration enforces a release window and rejects a CLI
+    outside it, which fails session launch — so the installer has to compare
+    versions, not just check that a file exists.
     """
 
     @pytest.mark.parametrize(
         "actual,minimum,exclusive_max,expected",
         [
-            # Omnigent accepts 1.17.x only: 1.18.x is refused like a too-old build.
+            # The supported window accepts 1.17.x only: 1.18.x is refused too.
             ("1.17.7", "1.17.7", "1.18.0", True),
             ("1.17.20", "1.17.7", "1.18.0", True),
             ("1.18.11", "1.17.7", "1.18.0", False),
@@ -369,7 +369,7 @@ class TestVersionFloor:
 
         assert version_in_range(actual, minimum, exclusive_max) is expected
 
-    def test_setup_opencode_requests_the_omnigent_window(self):
+    def test_setup_opencode_requests_the_supported_window(self):
         """`~1.17.7` is npm for >=1.17.7 <1.18.0 — the exact accepted window."""
         source = (Path(__file__).parents[1] / "setup_opencode.py").read_text()
         assert 'OPENCODE_SPEC = f"opencode-ai@~{OPENCODE_MIN_VERSION}"' in source
