@@ -61,3 +61,21 @@ record.
 - The public decision record now documents the merge evidence, validation, and
   the runner-scheduling limitation. `.isaac/` remains preserved and no private
   or Omnigent repository was modified.
+
+## 2026-08-24 — aws-fevm deployment
+
+- Confirmed the `aws-fevm` profile is valid for
+  `https://fe-sandbox-classic-sandbox-ceeij9.cloud.databricks.com` and had no
+  existing Apps before deployment.
+- Created the fresh `coding-agents` CoDA app at MEDIUM compute; app ID
+  `4de231de-9e3a-45d2-a1c3-5c4c3b9c3e21`.
+- Synced the tracked contents of commit `737a0f4` to
+  `/Workspace/Users/david.okeeffe@databricks.com/apps/coding-agents` using a
+  temporary `git archive` staging directory, preserving unrelated local
+  untracked files from deployment.
+- Deployment `01f19f57b36511f68bcbda3d32d2b506` completed with `SUCCEEDED`; the
+  app is `RUNNING` and compute is `ACTIVE`.
+- Boot logs verified gunicorn startup, owner resolution, loopback SP token
+  broker startup, secret-free Omnigent profile creation, and normal resource
+  monitoring. The deployed app URL is
+  `https://coding-agents-7474656066902749.aws.databricksapps.com`.
