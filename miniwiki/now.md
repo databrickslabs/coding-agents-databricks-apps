@@ -101,3 +101,24 @@ record.
   hook recorded `SKIP` because this checkout is outside `/Users/david.okeeffe/projects`.
   Pre-existing untracked `.beads.retired-2026-08-19/` and
   `docs/omnigent-sandbox-architecture-gtm.md` remain untouched.
+
+## 2026-08-27 — system.ai discovery follow-up
+
+- Commit `8cac5b6` changes Codex and Gemini (plus Claude/Pi manifest seeds) to
+  `system.ai` model-service defaults, discovers live provider-compatible models
+  through `gateway_models.py`, and routes Codex/Gemini through the workspace AI
+  Gateway paths used by ucode.
+- Commit `57c2849` makes broker-only setup refresh-safe: Codex uses a per-request
+  auth command and Gemini uses a launcher wrapper that resolves the shared token
+  helper before each process. Static broker bearers are not persisted.
+- Additional hardening handles malformed model-service responses and reuses one
+  foundation-model metadata snapshot per catalog build. Auth documentation and
+  focused runtime tests were updated.
+- Verification: `73 passed` focused tests; `815 passed, 1 skipped` in the
+  non-Docker suite excluding the unrelated `tests/test_apikey_helper.py`; ruff,
+  compileall, YAML assertions, and diff checks pass. Final independent reviewer
+  reruns were unavailable because all three provider calls returned OpenAI API
+  `401 Invalid Token`; this is recorded as unavailable, not approval.
+- The user explicitly authorized publication to `databrickslabs` remote. No
+  remote push has yet been performed in this checkpoint; next action is push the
+  reviewed commits and verify `origin/main`.

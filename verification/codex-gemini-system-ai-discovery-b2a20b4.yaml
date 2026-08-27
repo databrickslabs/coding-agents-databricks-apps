@@ -1,0 +1,170 @@
+handoff_artifact: verification/codex-gemini-system-ai-discovery-b2a20b4.yaml
+handoff_security:
+  classification: "public configuration and model-routing verification"
+  authorized_audience: ["repository maintainers", "code reviewers"]
+  owner: "CoDA maintainer"
+  retention: "repository history"
+verification_identity:
+  repository: "databrickslabs/coding-agents-databricks-apps"
+  base_revision: "b2a20b4fbfeb1c1eeeef701c3426752399514175"
+  head_revision: "57c284967714cb48729dffcf0cd2bbeb7f395b1d"
+  dirty_state_digest: "source commit verified; artifact and miniwiki update pending"
+repository_policy:
+  source: "AGENTS.md -> docs/agent-instructions.md; CONTRIBUTING.md"
+  pr_required: true
+  required_checks_source: "CONTRIBUTING.md and repository workflow files"
+external_action_authorizations:
+  - action: "push committed hotfix changes to origin/main on databrickslabs/coding-agents-databricks-apps"
+    actor: "user explicit request in current session"
+    target: "origin/main"
+    scope: "reviewed hotfix commits 8f7d18f, 8cac5b6, and 57c2849 plus verification record"
+    evidence: "user request: needs to be in databrickslabs remote"
+    timestamp: "2026-08-27T09:08:23Z"
+    expiry: "current hotfix session"
+contract:
+  intended_outcomes:
+    - "Keep Codex and Gemini enabled by default in all supported manifests."
+    - "Use system.ai model-service request names as portable defaults for Claude, Pi, Codex, and Gemini."
+    - "Have Codex and Gemini setup discover live system.ai model services and select a served provider-compatible model when the request is unavailable."
+    - "Use workspace-origin AI Gateway routes matching ucode: /ai-gateway/codex/v1 and /ai-gateway/gemini/v1beta."
+    - "Use broker-aware, refresh-safe token resolution so SP/no-PAT boot configures and continues to serve both agents."
+  observable_checks:
+    - "All supported YAML manifests parse and contain system.ai defaults and quoted true toggles."
+    - "Setup tests prove discovery remapping, route selection, broker-only auth, and fresh-token wrapper/helper behavior."
+    - "Malformed model-service payloads do not crash discovery; foundation metadata is fetched once per catalog build."
+    - "Focused tests, lint, compile, and the non-Docker suite pass subject to recorded baseline failures."
+  non_goals:
+    - "No gateway endpoint provisioning or live Databricks deployment."
+    - "No Hermes routing redesign; Hermes remains on its existing proxy/model contract."
+  human_reserved_decisions:
+    - "Whether protected-branch policy permits direct push or requires a PR."
+impact_map:
+  affected_surfaces:
+    - "gateway_models.py"
+    - "setup_codex.py"
+    - "setup_gemini.py"
+    - "token_helper.py"
+    - "app.yaml, app.yaml.template, app.yaml.workshop"
+    - "README.md, docs/deployment.md, docs/agent-instructions.md, docs/auth-and-identity.md"
+    - "tests/test_gateway_models.py, tests/test_gateway_discovery.py, tests/test_app_yaml_overlays.py"
+  dependencies:
+    - "Target workspace must expose system.ai model services and the advertised provider API types."
+    - "SP/no-PAT deployments must expose a working token broker/profile for broker-aware setup."
+  users: ["CoDA deployers", "CoDA terminal users"]
+deterministic_plan:
+  - "Run focused gateway, setup, discovery, and overlay tests."
+  - "Run ruff and compileall on changed Python files."
+  - "Parse all manifests and assert system.ai defaults and enabled toggles."
+  - "Run the non-Docker suite and preserve unrelated baseline failures."
+  - "Review exact diff, credential-shaped additions, and remote state before push."
+command_results:
+  - command: "uv run pytest tests/test_gateway_models.py tests/test_gateway_discovery.py tests/test_app_yaml_overlays.py -q"
+    exit_code: 0
+    result: "73 passed"
+  - command: "uv run ruff check gateway_models.py setup_codex.py setup_gemini.py token_helper.py tests/test_gateway_models.py tests/test_gateway_discovery.py tests/test_app_yaml_overlays.py"
+    exit_code: 0
+    result: "All checks passed"
+  - command: "uv run python -m compileall -q gateway_models.py setup_codex.py setup_gemini.py token_helper.py"
+    exit_code: 0
+    result: "passed"
+  - command: "uv run pytest tests/ -q --ignore=tests/integration --ignore=tests/e2e --ignore=tests/test_apikey_helper.py"
+    exit_code: 0
+    result: "815 passed, 1 skipped"
+  - command: "uv run python YAML assertion over app.yaml, app.yaml.template, app.yaml.workshop"
+    exit_code: 0
+    result: "all three report system.ai defaults, Codex=true, and Gemini=true"
+  - command: "git diff --check"
+    exit_code: 0
+    result: "passed"
+  - command: "uv run pytest tests/ -q --ignore=tests/integration --ignore=tests/e2e"
+    exit_code: 1
+    result: "810 passed, 1 skipped, 11 failed in pre-existing tests/test_apikey_helper.py because its source extractor cannot find the current token_helper.py literal"
+reviewer_reports:
+  - role: "requirements-reviewer"
+    run_id: "f78f0ea5"
+    result: "Initial re-review confirmed system.ai defaults/routes and identified stale verification plus auth documentation; the artifact and auth docs were subsequently updated."
+  - role: "edge-case-reviewer"
+    run_id: "24f4329b"
+    result: "Initial re-review identified malformed pagination-token handling and known-incompatible explicit-model fallback. Malformed payload handling was fixed; the explicit-model behavior remains intentional fallback when no compatible bucket exists."
+  - role: "reviewer-security-triage"
+    run_id: "07abd291"
+    result: "Identified static broker bearer persistence in Codex/Gemini setup. Fixed by Codex auth command and Gemini launcher wrapper using token_helper; final re-review provider call was unavailable."
+  - role: "regression-reviewer"
+    run_id: "94bf40b2"
+    result: "Identified broker-only static-token expiry and stale auth documentation. Fixed with refresh-safe helper/wrapper paths and docs updates."
+  - role: "security-final"
+    run_id: "bb39daec"
+    result: "UNAVAILABLE: reviewer provider returned OpenAI API 401 Invalid Token before inspection. No approval inferred."
+  - role: "regression-final"
+    run_id: "929a8cf2"
+    result: "UNAVAILABLE: reviewer provider returned OpenAI API 401 Invalid Token before inspection. No approval inferred."
+  - role: "edge-final"
+    run_id: "6543c362"
+    result: "UNAVAILABLE: reviewer provider returned OpenAI API 401 Invalid Token before inspection. No approval inferred."
+finding_reproductions:
+  - finding: "Codex/Gemini setup persisted broker-issued short-lived tokens"
+    disposition: "fixed"
+    evidence: "setup_codex.py configures a ucode-style auth command invoking token_helper per request/TTL; setup_gemini.py installs a launcher wrapper invoking the helper before every process. Tests verify no static bearer is written and execute both helper paths with a temporary token source."
+  - finding: "Model-services payload with model_services=null could crash discovery"
+    disposition: "fixed"
+    evidence: "gateway_models.py now treats a non-list service collection as an empty/partial result; focused tests cover the malformed payload."
+  - finding: "Foundation metadata is fetched twice per catalog build"
+    disposition: "fixed"
+    evidence: "discover_oss_specs accepts the already-fetched metadata snapshot; catalog test asserts one metadata read."
+  - finding: "Auth documentation described Codex as proxy-routed and omitted Gemini"
+    disposition: "fixed"
+    evidence: "docs/auth-and-identity.md now documents Codex auth command and Gemini launcher wrapper."
+  - finding: "Direct serving-endpoint route comments were stale"
+    disposition: "fixed"
+    evidence: "setup_gemini.py, app.yaml.template, and deployment docs now describe workspace-origin gateway routes and system.ai discovery."
+  - finding: "Known-family model fallback when capability metadata is unavailable"
+    disposition: "accepted residual for ucode parity"
+    evidence: "gateway_models.py intentionally preserves known system.ai family IDs when capability metadata is absent, matching ucode's graceful fallback; explicit incompatible metadata is filtered."
+fixes_and_re_review:
+  - revision: "8cac5b6"
+    fixes: "Added workspace-origin Codex/Gemini routes, system.ai defaults, live catalog selection, metadata reuse, malformed service-list handling, and tests."
+    validation: "69 then 73 focused tests; lint and compile passed."
+  - revision: "57c2849"
+    fixes: "Added broker-aware credential resolution, Codex per-request auth helper, Gemini per-process refresh wrapper, static-token cleanup, auth docs, and runtime tests."
+    validation: "73 focused tests, 815 non-Docker tests excluding the unrelated broken token-helper extractor, lint, compile, YAML, and diff checks passed."
+    affected_lenses: ["requirements-reviewer", "edge-case-reviewer", "reviewer-security-triage", "regression-reviewer"]
+adjudication:
+  actor: "CoDA maintainer"
+  decision: "READY_FOR_HUMAN_REVIEW"
+  basis: "Requested defaults, ucode-style system.ai discovery, workspace gateway routing, and broker-refresh behavior are implemented and deterministically verified. Final independent re-review calls were unavailable due provider authentication failure; no reviewer approval is inferred."
+unavailable_checks:
+  - check: "Final independent security/regression/edge re-review after auth fix"
+    reason: "All three final reviewer runs failed before inspection with OpenAI API 401 Invalid Token."
+  - check: "Live Databricks deployment and Codex/Gemini smoke test"
+    reason: "No deployment authorization was provided."
+  - check: "Post-commit Workspace sync"
+    reason: "The repository is under /Users/david.okeeffe/Repos, outside the configured /Users/david.okeeffe/projects sync root; post-commit hook recorded SKIP."
+residual_risks:
+  - "Runtime availability depends on workspace model-service permissions and API-type metadata. When capability metadata is temporarily unavailable, known system.ai family IDs are retained as a graceful ucode-compatible fallback."
+  - "An explicitly configured model positively rejected by the provider metadata is only replaced when another compatible model is discovered; if the compatible bucket is empty, the requested model is retained for non-destructive outage fallback."
+  - "The full suite retains 11 pre-existing tests/test_apikey_helper failures due to token_helper source-shape drift; the non-Docker suite excluding that file passes."
+  - "The Gemini wrapper assumes the installed CLI is the CoDA-managed binary and keeps the real binary at ~/.local/bin/gemini.coda-real; a manually replaced binary should be reinstalled through setup."
+human_approvals: []
+pr_release_gate:
+  pr: "not-applicable pending direct-push/protected-branch decision"
+  state: "not-applicable"
+  reviewed_revision: "57c284967714cb48729dffcf0cd2bbeb7f395b1d"
+  required_checks_source: "pending provider/rule-set evidence"
+  required_checks: []
+  post_approval_diff: "pending"
+  merge_revision: "not-applicable"
+lifecycle_history:
+  - state: "record-created"
+    actor: "CoDA maintainer"
+    timestamp: "2026-08-27T09:08:23Z"
+    identity: "b2a20b4fbfeb1c1eeeef701c3426752399514175"
+    evidence: "contract, impact map, and explicit push authorization recorded"
+  - state: "implemented-and-verified"
+    actor: "CoDA maintainer"
+    timestamp: "2026-08-27T09:08:23Z"
+    identity: "57c284967714cb48729dffcf0cd2bbeb7f395b1d"
+    evidence: "source commits, deterministic validation, review findings, and fixes recorded"
+final_decision:
+  state: "READY_FOR_HUMAN_REVIEW"
+  owner: "repository maintainer"
+  next_action: "Review final re-review unavailability, then push the authorized commits to origin/main and verify the remote revision."
