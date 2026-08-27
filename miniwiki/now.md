@@ -134,3 +134,12 @@ record.
   is required before retrying the push.
 - Local `main` retains the verified commits through `5867aa2`; `origin/main`
   remains at `737a0f4`. No remote state was changed.
+
+## 2026-08-27 — publication completed
+
+- After the user completed GitHub SAML SSO authorization, `git push origin main`
+  succeeded and advanced `origin/main` from `737a0f4` to `4195a55`.
+- A fresh fetch verified local `HEAD` and `origin/main` are identical at
+  `4195a550c16a5ed01e86aeeda1e428a20e831ed0`.
+- The remote reported 11 existing Dependabot vulnerabilities on its default
+  branch (9 high, 2 moderate); this was not part of the Codex/Gemini hotfix.
