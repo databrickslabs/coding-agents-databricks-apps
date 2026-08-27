@@ -1,8 +1,8 @@
 # Auth & identity on a CoDA box
 
 Reference for who does what on a running CoDA host (e.g. `coda-01`..`coda-08`),
-how each agent authenticates its model calls, and the known zero-PAT gap for
-OpenCode / Hermes. Written 2026-07-11.
+how each agent authenticates its model calls. All bundled agents now support
+zero-PAT SP-OAuth model authentication. Written 2026-08-27.
 
 ## TL;DR — two identities, don't confuse them
 
@@ -36,7 +36,8 @@ token helper). The shell/tools do not.
 | **Pi** | `!command` apiKey in `~/.pi/agent/models.json` (same `token_helper.py`) | yes |
 | **OpenCode** | `baseURL` → local **content-filter proxy** (`127.0.0.1:4000`), which injects a fresh token per request | yes |
 | **Hermes** | routes via the **content-filter proxy** too (same fresh-token injection) | yes |
-| **Codex** | content-filter proxy | yes |
+| **Codex** | provider `auth` command invokes the shared `token_helper.py` per request/TTL | yes |
+| **Gemini** | `gemini` launcher wrapper invokes the shared `token_helper.py` before each process | yes |
 
 ### Browser-terminal secret boundary
 
@@ -58,6 +59,6 @@ needs separate identities or container/UID isolation.
 
 - `sp_token_broker.py` — loopback-only app-SP token broker.
 - `token_helper.py` — shared broker/SP-OAuth/PAT resolver for agent helpers.
-- `content_filter_proxy.py` — local proxy for OpenCode/Hermes/Codex.
+- `content_filter_proxy.py` — local proxy for OpenCode and Hermes.
 - `omnigents_host.py` — host supervision and spawned-runner refresh wiring.
 - `pat_rotator.py` — optional user-PAT fallback and rotation.

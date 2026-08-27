@@ -7,19 +7,20 @@ Databricks provides a Google-native route through the workspace AI Gateway.
 PR #11893 (by Databricks engineer AarushiShah) added auto-detection of *.databricks.com
 URLs, switching to Bearer token auth automatically.
 
-Auth: GEMINI_API_KEY_AUTH_MECHANISM=bearer sends Databricks PAT as Bearer token.
+Auth: GEMINI_API_KEY_AUTH_MECHANISM=bearer sends a fresh helper-resolved token.
 
 Opt-out:
   Set ENABLE_GEMINI=false in app.yaml to skip installation entirely.
 """
-import os
 import json
+import os
 import subprocess
+import sys
 from pathlib import Path
 
 from cli_auth import _atomic_write_text
 from gateway_models import discover_model_catalog, gemini_base_url
-from token_helper import resolve_databricks_token
+from token_helper import resolve_databricks_token, write_token_helper
 from utils import adapt_instructions_file, ensure_https, get_npm_version
 
 # Opt-out: allow operators to disable Gemini bundling without removing the file.
@@ -43,6 +44,7 @@ requested_model = os.environ.get("GEMINI_MODEL", "system.ai.gemini-3-flash")
 local_bin = home / ".local" / "bin"
 local_bin.mkdir(parents=True, exist_ok=True)
 gemini_bin = local_bin / "gemini"
+gemini_real_bin = local_bin / "gemini.coda-real"
 
 MAX_RETRIES = 3
 RETRY_DELAY = 5  # seconds
@@ -99,12 +101,42 @@ if gemini_models:
         print(f"GEMINI_MODEL={requested_model} not served here, using {gemini_model}")
 
 gemini_url = gemini_base_url(host)
-auth_token = token
 print(f"Using workspace AI Gateway Gemini API: {gemini_url}")
 
 # 3. Create ~/.gemini directory and configure environment
 gemini_dir = home / ".gemini"
 gemini_dir.mkdir(exist_ok=True)
+
+# Gemini CLI has no ucode-style auth-command provider field. Keep the same
+# broker boundary by placing a tiny wrapper at the public `gemini` path; it
+# resolves a fresh token through the shared helper before every CLI process.
+helper_path = write_token_helper(gemini_dir)
+if not gemini_real_bin.exists() and gemini_bin.exists():
+    gemini_bin.rename(gemini_real_bin)
+wrapper_content = f'''#!{sys.executable}
+import os
+import subprocess
+import sys
+
+helper = {str(helper_path)!r}
+real_gemini = {str(gemini_real_bin)!r}
+try:
+    token = subprocess.check_output(
+        [sys.executable, helper], text=True, stderr=subprocess.PIPE
+    ).strip()
+except (OSError, subprocess.CalledProcessError) as exc:
+    print(f"Gemini token helper failed: {{exc}}", file=sys.stderr)
+    raise SystemExit(1)
+if not token:
+    print("Gemini token helper returned no token", file=sys.stderr)
+    raise SystemExit(1)
+env = os.environ.copy()
+env["GEMINI_API_KEY"] = token
+os.execvpe(real_gemini, [real_gemini, *sys.argv[1:]], env)
+'''
+if gemini_real_bin.exists():
+    gemini_bin.write_text(wrapper_content)
+    gemini_bin.chmod(0o700)
 
 # Pre-trust ~/projects/ so Gemini CLI loads .env and project settings.
 # Without this, Gemini's security engine silently skips .env loading in
@@ -134,7 +166,6 @@ env_content = f"""# Databricks Model Serving - Google Gemini native endpoint
 GEMINI_MODEL={gemini_model}
 GOOGLE_GEMINI_BASE_URL={gemini_url}
 GEMINI_API_KEY_AUTH_MECHANISM=bearer
-GEMINI_API_KEY={auth_token}
 """
 
 env_path = gemini_dir / ".env"

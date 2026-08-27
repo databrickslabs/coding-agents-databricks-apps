@@ -1,6 +1,9 @@
 import json
+import os
 import runpy
 import stat
+import subprocess
+import sys
 from pathlib import Path
 from unittest import mock
 
@@ -193,6 +196,10 @@ def test_setup_codex_discovers_model_and_uses_workspace_gateway(monkeypatch, tmp
     assert 'model = "system.ai.gpt-5-5"' in config
     assert 'base_url = "' + WORKSPACE + '/ai-gateway/codex/v1"' in config
     assert 'wire_api = "responses"' in config
+    import tomllib
+    parsed = tomllib.loads(config)
+    assert parsed["model_providers"]["databricks"]["auth"]["command"]
+    assert parsed["model_providers"]["databricks"]["auth"]["refresh_interval_ms"] == 900000
 
 
 def test_setup_gemini_discovers_model_and_uses_workspace_gateway(monkeypatch, tmp_path):
@@ -221,8 +228,20 @@ def test_setup_codex_uses_broker_token_without_pat(monkeypatch, tmp_path):
     monkeypatch.setattr(token_helper, "resolve_databricks_token", lambda: "broker-token")
     runpy.run_path(str(Path(__file__).parents[1] / "setup_codex.py"), run_name="__main__")
 
-    env = (tmp_path / ".codex/.env").read_text()
-    assert "OPENAI_API_KEY=broker-token" in env
+    config = (tmp_path / ".codex/config.toml").read_text()
+    assert "OPENAI_API_KEY" not in config
+    assert "auth = { command =" in config
+    assert "broker-token" not in config
+    (tmp_path / ".databrickscfg").write_text("[DEFAULT]\ntoken = broker-token\n")
+    helper = tmp_path / ".codex/anthropic-token-helper.py"
+    result = subprocess.run(
+        [sys.executable, str(helper)],
+        env={**os.environ, "HOME": str(tmp_path), "CODA_SP_TOKEN_BROKER_URL": ""},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout == "broker-token"
 
 
 def test_setup_gemini_uses_broker_token_without_pat(monkeypatch, tmp_path):
@@ -237,7 +256,20 @@ def test_setup_gemini_uses_broker_token_without_pat(monkeypatch, tmp_path):
     runpy.run_path(str(Path(__file__).parents[1] / "setup_gemini.py"), run_name="__main__")
 
     env = (tmp_path / ".gemini/.env").read_text()
-    assert "GEMINI_API_KEY=broker-token" in env
+    assert "GEMINI_API_KEY=" not in env
+    wrapper = (tmp_path / ".local/bin/gemini").read_text()
+    assert "anthropic-token-helper.py" in wrapper
+    assert "broker-token" not in wrapper
+
+    (tmp_path / ".databrickscfg").write_text("[DEFAULT]\ntoken = broker-token\n")
+    real = tmp_path / ".local/bin/gemini.coda-real"
+    real.write_text('#!/bin/sh\nprintf "%s" "$GEMINI_API_KEY" > "$HOME/seen-token"\n')
+    real.chmod(real.stat().st_mode | stat.S_IEXEC)
+    env_vars = dict(os.environ, HOME=str(tmp_path))
+    env_vars.pop("CODA_SP_TOKEN_BROKER_URL", None)
+    result = subprocess.run([str(tmp_path / ".local/bin/gemini"), "--version"], env=env_vars)
+    assert result.returncode == 0
+    assert (tmp_path / "seen-token").read_text() == "broker-token"
 
 
 def test_setup_opencode_writes_ucode_provider_buckets(monkeypatch, tmp_path):

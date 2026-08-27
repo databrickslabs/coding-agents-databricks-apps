@@ -1,8 +1,8 @@
 """Shared writer for the Databricks bearer-token helper script.
 
-Both Claude Code (via ``apiKeyHelper`` in settings.json) and Pi (via a
-``!command`` apiKey in models.json) resolve their model-auth token by running
-this helper *per request / per TTL*. Centralising the writer keeps a single
+Claude Code (via ``apiKeyHelper`` in settings.json), Pi (via a
+``!command`` apiKey in models.json), and Gemini CLI (via CoDA's launcher
+wrapper) resolve their model-auth token by running this helper *per request / per TTL*. Centralising the writer keeps a single
 source of truth for the token-resolution logic and its interpreter wiring, so
 the two agents can never drift apart.
 
@@ -76,7 +76,7 @@ def resolve_databricks_token() -> str | None:
         return None
 
 _HELPER_SRC = r'''#!/usr/bin/env python3
-"""Print a Databricks bearer token for Claude Code / Pi token resolution.
+"""Print a Databricks bearer token for Claude Code / Pi / Gemini resolution.
 
 stdout MUST be the token only -- both callers use it verbatim.
 """
