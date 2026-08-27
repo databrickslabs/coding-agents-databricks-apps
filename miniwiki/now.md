@@ -122,3 +122,14 @@ record.
 - The user explicitly authorized publication to `databrickslabs` remote. No
   remote push has yet been performed in this checkpoint; next action is push the
   reviewed commits and verify `origin/main`.
+
+## 2026-08-27 — publication blocked by GitHub SSO
+
+- Attempted `git push origin main` after the discovery/auth fixes. GitHub
+  rejected the push with HTTP 403 because `databrickslabs` requires SAML SSO
+  authorization for the active GitHub CLI OAuth application.
+- `gh auth refresh --hostname github.com --scopes repo` issued device code
+  `AED2-D6EC` at `https://github.com/login/device` and waited for browser
+  authorization. User action is required before retrying the push.
+- Local `main` retains the verified commits through `5867aa2`; `origin/main`
+  remains at `737a0f4`. No remote state was changed.

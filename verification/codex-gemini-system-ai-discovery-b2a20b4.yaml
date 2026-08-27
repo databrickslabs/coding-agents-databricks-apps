@@ -17,7 +17,7 @@ external_action_authorizations:
   - action: "push committed hotfix changes to origin/main on databrickslabs/coding-agents-databricks-apps"
     actor: "user explicit request in current session"
     target: "origin/main"
-    scope: "reviewed hotfix commits 8f7d18f, 8cac5b6, and 57c2849 plus verification record"
+    scope: "reviewed hotfix commits 8f7d18f, 8cac5b6, 57c2849, and 5867aa2 plus verification record"
     evidence: "user request: needs to be in databrickslabs remote"
     timestamp: "2026-08-27T09:08:23Z"
     expiry: "current hotfix session"
@@ -79,6 +79,12 @@ command_results:
   - command: "uv run pytest tests/ -q --ignore=tests/integration --ignore=tests/e2e"
     exit_code: 1
     result: "810 passed, 1 skipped, 11 failed in pre-existing tests/test_apikey_helper.py because its source extractor cannot find the current token_helper.py literal"
+  - command: "git push origin main"
+    exit_code: 128
+    result: "blocked: GitHub returned 403 because the databrickslabs organization requires SAML SSO authorization for the active OAuth application"
+  - command: "gh auth refresh --hostname github.com --scopes repo"
+    exit_code: "pending user action"
+    result: "GitHub device flow issued code AED2-D6EC at https://github.com/login/device; command timed out awaiting browser authorization"
 reviewer_reports:
   - role: "requirements-reviewer"
     run_id: "f78f0ea5"
@@ -139,6 +145,8 @@ unavailable_checks:
     reason: "No deployment authorization was provided."
   - check: "Post-commit Workspace sync"
     reason: "The repository is under /Users/david.okeeffe/Repos, outside the configured /Users/david.okeeffe/projects sync root; post-commit hook recorded SKIP."
+  - check: "Push to databrickslabs origin/main"
+    reason: "Requires the user to complete GitHub SAML SSO authorization for the dgokeeffe OAuth token."
 residual_risks:
   - "Runtime availability depends on workspace model-service permissions and API-type metadata. When capability metadata is temporarily unavailable, known system.ai family IDs are retained as a graceful ucode-compatible fallback."
   - "An explicitly configured model positively rejected by the provider metadata is only replaced when another compatible model is discovered; if the compatible bucket is empty, the requested model is retained for non-destructive outage fallback."
@@ -164,7 +172,12 @@ lifecycle_history:
     timestamp: "2026-08-27T09:08:23Z"
     identity: "57c284967714cb48729dffcf0cd2bbeb7f395b1d"
     evidence: "source commits, deterministic validation, review findings, and fixes recorded"
+  - state: "push-blocked-pending-user-sso"
+    actor: "CoDA maintainer"
+    timestamp: "2026-08-27T09:08:23Z"
+    identity: "5867aa28c59ab40fccc5d30e967cfca1b59ee562"
+    evidence: "origin rejected push with 403 SAML SSO requirement; gh device code issued for user authorization"
 final_decision:
-  state: "READY_FOR_HUMAN_REVIEW"
+  state: "BLOCKED_PENDING_USER_SSO"
   owner: "repository maintainer"
-  next_action: "Review final re-review unavailability, then push the authorized commits to origin/main and verify the remote revision."
+  next_action: "Complete GitHub device authorization at https://github.com/login/device using code AED2-D6EC, then retry git push origin main and verify origin/main."
