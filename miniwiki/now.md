@@ -79,3 +79,25 @@ record.
   broker startup, secret-free Omnigent profile creation, and normal resource
   monitoring. The deployed app URL is
   `https://coding-agents-7474656066902749.aws.databricksapps.com`.
+
+## 2026-08-27 — Codex/Gemini default hotfix
+
+- On local `main`, commit `8f7d18f` re-enables Codex and Gemini by default in
+  `app.yaml`, `app.yaml.template`, and `app.yaml.workshop`.
+- Codex defaults are aligned to `databricks-gpt-5-3-codex`, and the setup
+  fallback plus README/deployment documentation now describe the Responses-API
+  requirement. Overlay tests cover all three replacement manifests and assert
+  both enabled flags.
+- Deterministic evidence: focused configuration/model tests pass (`47 passed`);
+  the non-Docker suite passes (`809 passed, 1 skipped`) when excluding the
+  unrelated broken `tests/test_apikey_helper.py`. The literal full non-Docker
+  suite remains `810 passed, 1 skipped, 11 failed` because that test file's
+  extractor cannot find the current `token_helper.py` source literal.
+- Independent requirements, edge-case, security triage, and regression reviews
+  completed. Hotfix-relevant findings were fixed; workspace endpoint
+  availability and pre-existing installer/model-override risks remain recorded
+  in `verification/hotfix-codex-gemini-defaults-72832c5.yaml`.
+- No Databricks deployment or public push was performed. The post-commit sync
+  hook recorded `SKIP` because this checkout is outside `/Users/david.okeeffe/projects`.
+  Pre-existing untracked `.beads.retired-2026-08-19/` and
+  `docs/omnigent-sandbox-architecture-gtm.md` remain untouched.

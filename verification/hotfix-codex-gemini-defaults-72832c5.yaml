@@ -1,0 +1,134 @@
+handoff_artifact: verification/hotfix-codex-gemini-defaults-72832c5.yaml
+handoff_security:
+  classification: "public configuration verification"
+  authorized_audience: ["repository maintainers", "code reviewers"]
+  owner: "CoDA maintainer"
+  retention: "repository history"
+verification_identity:
+  repository: "databrickslabs/coding-agents-databricks-apps"
+  base_revision: "72832c547b7efcdda51971db249bdf928f480d3c"
+  head_revision: "8f7d18f175a61e5831683a22982cab2821ad7e73"
+  dirty_state_digest: "source commit verified; unrelated pre-existing untracked files preserved"
+repository_policy:
+  source: "AGENTS.md -> docs/agent-instructions.md; CONTRIBUTING.md"
+  pr_required: true
+  required_checks_source: "CONTRIBUTING.md and repository workflow files"
+external_action_authorizations: []
+contract:
+  intended_outcomes:
+    - "Enable Codex and Gemini installation by default in the base CoDA configuration."
+    - "Enable both agents in the copyable template and workshop overlay so supported overlays do not silently disable them."
+    - "Use the Responses-API Codex model name in defaults and documentation."
+  observable_checks:
+    - "All three YAML configurations parse and declare ENABLE_CODEX=true and ENABLE_GEMINI=true."
+    - "Codex defaults use databricks-gpt-5-3-codex, a *-codex Responses-API model."
+    - "Focused configuration/model tests pass."
+    - "No unrelated tracked files are modified."
+  non_goals:
+    - "No gateway endpoint provisioning or Databricks deployment."
+    - "No changes to setup gating semantics or authentication."
+  human_reserved_decisions:
+    - "Whether and when to deploy or publish the hotfix."
+impact_map:
+  affected_surfaces:
+    - "app.yaml"
+    - "app.yaml.template"
+    - "app.yaml.workshop"
+    - "setup_codex.py default model"
+    - "README.md, docs/deployment.md, and docs/agent-instructions.md"
+    - "tests/test_gateway_models.py and tests/test_app_yaml_overlays.py"
+  dependencies:
+    - "Databricks workspace must serve a compatible Codex Responses API endpoint and Gemini endpoint for runtime success."
+  users: ["CoDA deployers", "CoDA terminal users"]
+deterministic_plan:
+  - "Parse all three YAML files with PyYAML and assert the two enable flags are true and the Codex model ends in -codex."
+  - "Run focused configuration/model tests."
+  - "Run the non-Docker unit suite and record unrelated baseline failures."
+  - "Run diff, credential-shaped-line, and compile checks."
+command_results:
+  - command: "git diff --check"
+    exit_code: 0
+    result: "passed"
+  - command: "uv run pytest tests/test_gateway_models.py tests/test_app_yaml_overlays.py -q"
+    exit_code: 0
+    result: "47 passed"
+  - command: "uv run pytest tests/ -q --ignore=tests/integration --ignore=tests/e2e --ignore=tests/test_apikey_helper.py"
+    exit_code: 0
+    result: "809 passed, 1 skipped"
+  - command: "uv run pytest tests/ -q --ignore=tests/integration --ignore=tests/e2e"
+    exit_code: 1
+    result: "810 passed, 1 skipped, 11 failed in pre-existing tests/test_apikey_helper.py because its source extractor cannot find the current token_helper.py literal; no failures were in the hotfix surface"
+  - command: "uv run python YAML assertion over app.yaml, app.yaml.template, app.yaml.workshop"
+    exit_code: 0
+    result: "all three report Codex=true, Gemini=true, CODEX_MODEL=databricks-gpt-5-3-codex"
+  - command: "uv run python -m compileall -q setup_codex.py setup_gemini.py"
+    exit_code: 0
+    result: "passed"
+  - command: "added-line credential-shaped scan over git diff"
+    exit_code: 0
+    result: "no credential-shaped additions"
+reviewer_reports:
+  - role: "requirements-reviewer"
+    run_id: "ca5d4bc4"
+    result: "Initially identified missing tests for the three-file default and fallback-model contract. Reproduced by inspection; fixed by covering app.yaml.workshop, asserting both true flags, and asserting the fallback model suffix."
+  - role: "edge-case-reviewer"
+    run_id: "81bba61f"
+    result: "Confirmed current defaults parse as quoted strings and use a compatible Codex model. Reported pre-existing installer-failure and empty-override behavior as out of scope residual risks."
+  - role: "reviewer-security-triage"
+    run_id: "67981fdf"
+    result: "Found no added credential or workspace-specific value. Reported pre-existing unpinned npm fallback and Gemini trust-folder behavior as residual supply-chain/operational risks increased in relevance by enablement."
+  - role: "regression-reviewer"
+    run_id: "6a099cd3"
+    result: "Initially identified workshop exclusion from overlay coverage, fallback-model test coverage, and stale active-agent documentation. All hotfix-relevant findings were fixed and rechecked."
+finding_reproductions:
+  - finding: "Overlay tests did not protect workshop or true defaults"
+    disposition: "fixed"
+    evidence: "tests/test_app_yaml_overlays.py now includes app.yaml.workshop and asserts ENABLE_CODEX=true, ENABLE_GEMINI=true, and a -codex model for every supported replacement manifest."
+  - finding: "Fallback Codex model lacked a regression assertion"
+    disposition: "fixed"
+    evidence: "tests/test_app_yaml_overlays.py asserts setup_codex.py falls back to databricks-gpt-5-3-codex."
+  - finding: "Active-agent documentation was stale"
+    disposition: "fixed"
+    evidence: "docs/agent-instructions.md now lists Codex and Gemini as enabled by default with explicit endpoint-dependent opt-outs."
+fixes_and_re_review:
+  - revision: "8f7d18f175a61e5831683a22982cab2821ad7e73"
+    fixes: "Enabled both toggles in all three manifests, aligned Codex model defaults/docs, expanded overlay tests, and updated active-agent documentation."
+    rerun: "Focused tests, YAML assertions, compileall, diff check, and non-Docker suite excluding unrelated broken token-helper tests passed."
+    affected_lenses: ["requirements-reviewer", "edge-case-reviewer", "reviewer-security-triage", "regression-reviewer"]
+adjudication:
+  actor: "CoDA maintainer"
+  decision: "READY_FOR_HUMAN_REVIEW"
+  basis: "The requested static defaults and compatibility guard are implemented and deterministically verified. Runtime endpoint availability remains workspace-dependent and was not deployed here."
+unavailable_checks:
+  - check: "Live Databricks deployment and Codex/Gemini smoke test"
+    reason: "No external deployment authorization was provided."
+  - check: "Post-commit Workspace sync"
+    reason: "The repository is under /Users/david.okeeffe/Repos, outside the configured /Users/david.okeeffe/projects sync root; post-commit hook recorded SKIP."
+residual_risks:
+  - "A workspace without the compatible Codex Responses API or Gemini endpoint will install the CLIs but fail when that agent is used; the documented per-CLI false opt-outs remain available."
+  - "Existing setup-script behavior still permits unpinned npm fallback versions, trusts configured Gemini folders, and treats empty model overrides as explicit values; these were pre-existing and not changed by this hotfix."
+  - "The full suite retains 11 pre-existing test_apikey_helper failures due to token_helper source-shape drift."
+human_approvals: []
+pr_release_gate:
+  pr: "not-applicable pending maintainer publication decision"
+  state: "not-applicable"
+  reviewed_revision: "8f7d18f175a61e5831683a22982cab2821ad7e73"
+  required_checks_source: "pending provider/rule-set evidence"
+  required_checks: []
+  post_approval_diff: "none"
+  merge_revision: "not-applicable"
+lifecycle_history:
+  - state: "record-created"
+    actor: "CoDA maintainer"
+    timestamp: "2026-08-24T00:00:00Z"
+    identity: "72832c547b7efcdda51971db249bdf928f480d3c"
+    evidence: "initial contract and impact map"
+  - state: "implemented-and-verified"
+    actor: "CoDA maintainer"
+    timestamp: "2026-08-27T00:15:27Z"
+    identity: "8f7d18f175a61e5831683a22982cab2821ad7e73"
+    evidence: "commit, focused tests, full non-Docker test result, YAML assertions, review squad"
+final_decision:
+  state: "READY_FOR_HUMAN_REVIEW"
+  owner: "repository maintainer"
+  next_action: "Review the commit and decide whether to push/open/merge and deploy."
