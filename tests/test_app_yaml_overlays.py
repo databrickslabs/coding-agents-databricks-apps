@@ -40,10 +40,10 @@ CLI_TOGGLES = frozenset(
 
 
 def _tracked_app_yamls() -> list[Path]:
-    """Return the explicitly supported public overlay set."""
+    """Return the explicitly supported replacement-manifest set."""
     return [
         REPO_ROOT / name
-        for name in ("app.yaml", "app.yaml.template")
+        for name in ("app.yaml", "app.yaml.template", "app.yaml.workshop")
         if (REPO_ROOT / name).is_file()
     ]
 
@@ -57,7 +57,7 @@ def test_finds_the_overlays():
     """Sanity check — a silent empty list would make the tests below vacuous."""
     names = {p.name for p in _tracked_app_yamls()}
     assert "app.yaml" in names
-    assert names == {"app.yaml", "app.yaml.template"}
+    assert names == {"app.yaml", "app.yaml.template", "app.yaml.workshop"}
 
 
 @pytest.mark.parametrize(
@@ -85,6 +85,26 @@ def test_toggle_values_are_quoted_booleans(path: Path):
                 f"{path.name}: {entry['name']} is {entry['value']!r}; expected the "
                 f'quoted string "true" or "false"'
             )
+
+
+@pytest.mark.parametrize(
+    "path", _tracked_app_yamls(), ids=lambda p: p.name
+)
+def test_codex_and_gemini_are_enabled_with_compatible_defaults(path: Path):
+    """Every supported replacement manifest installs the two default agents."""
+    env = {
+        entry["name"]: entry.get("value")
+        for entry in (yaml.safe_load(path.read_text()) or {}).get("env", [])
+    }
+    assert env["ENABLE_CODEX"] == "true"
+    assert env["ENABLE_GEMINI"] == "true"
+    assert str(env["CODEX_MODEL"]).endswith("-codex")
+
+
+def test_codex_fallback_model_matches_responses_api_requirement():
+    """The no-env setup path must not fall back to chat-completions-only GPT."""
+    source = (REPO_ROOT / "setup_codex.py").read_text()
+    assert 'os.environ.get("CODEX_MODEL", "databricks-gpt-5-3-codex")' in source
 
 
 def test_toggles_match_code():

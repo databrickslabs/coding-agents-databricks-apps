@@ -214,20 +214,21 @@ def test_setup_proxy_source_pins_workspace_mlflow_route():
     assert "{gateway_host}/mlflow/v1" not in source
 
 
-def test_app_yaml_enables_the_three_supported_harnesses_on_system_ai_defaults():
-    """The installed set is Claude Code, Pi and OpenCode.
+def test_app_yaml_enables_the_default_harnesses():
+    """The base CoDA config installs all default harnesses except Hermes.
 
     Claude Code is the default harness, so a participant who never opens the
-    picker must still land on a working agent. The harnesses this workspace
-    cannot serve (Hermes, Codex, Gemini) stay off, and every enabled harness
-    defaults to the same `system.ai` sonnet model.
+    picker must still land on a working agent. Codex and Gemini are enabled by
+    default now that compatible endpoints are available; Hermes remains opt-in.
     """
     source = (Path(__file__).parents[1] / "app.yaml").read_text()
     assert source.count("value: system.ai.claude-sonnet-5") == 2
     assert '- name: ENABLE_CLAUDE\n    value: "true"' in source
     assert '- name: ENABLE_PI\n    value: "true"' in source
     assert '- name: ENABLE_OPENCODE\n    value: "true"' in source
-    for disabled in ("ENABLE_HERMES", "ENABLE_CODEX", "ENABLE_GEMINI", "ENABLE_FABLE_MODELS"):
+    assert '- name: ENABLE_CODEX\n    value: "true"' in source
+    assert '- name: ENABLE_GEMINI\n    value: "true"' in source
+    for disabled in ("ENABLE_HERMES", "ENABLE_FABLE_MODELS"):
         assert f'- name: {disabled}\n    value: "false"' in source, disabled
 
 

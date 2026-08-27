@@ -58,8 +58,10 @@ live in `README.md` — read it for feature/onboarding detail; this file is
 operating rules only.
 
 **Active agents** (as configured in `app.yaml`; gateway/workspace dependent):
-Claude Code, Hermes Agent, OpenCode. Codex and Gemini are disabled when the
-workspace serves no compatible gateway endpoints (see comments in `app.yaml`).
+Claude Code, Codex, Gemini CLI, Hermes Agent, and OpenCode. Codex and Gemini
+are enabled by default, but operators can disable either with its
+`ENABLE_CODEX` or `ENABLE_GEMINI` toggle when the workspace does not serve a
+compatible endpoint (see comments in `app.yaml`).
 
 **Skills catalog** under `.claude/skills/` tracks the [ai-dev-kit](https://github.com/databricks-solutions/ai-dev-kit)
 `databricks-skills/` upstream — refresh with the `refresh-databricks-skills`

@@ -410,7 +410,9 @@ Open [http://localhost:8000](http://localhost:8000) — type `claude`, `codex`, 
 | `ANTHROPIC_MODEL` | No | Claude model name (default: `databricks-claude-opus-4-8`) |
 | `PI_MODEL` | No | Pi model name — same `/anthropic` gateway route as Claude (default: `databricks-claude-opus-4-8`) |
 | `ENABLE_PI` | No | Set `false` to skip installing the Pi coding agent (default: `true`) |
-| `CODEX_MODEL` | No | Codex model name (default: `databricks-gpt-5-5`) |
+| `ENABLE_CODEX` | No | Set `false` to skip installing Codex (default: `true`) |
+| `CODEX_MODEL` | No | Codex Responses-API model name (default: `databricks-gpt-5-3-codex`) |
+| `ENABLE_GEMINI` | No | Set `false` to skip installing Gemini CLI (default: `true`) |
 | `GEMINI_MODEL` | No | Gemini model name (default: `databricks-gemini-2-5-pro`) |
 | `HERMES_MODEL` | No | Hermes model name (default: `databricks-claude-opus-4-6`) |
 | `HERMES_FALLBACK_MODEL` | No | Fallback model if `HERMES_MODEL` is unavailable in this workspace's geo |

@@ -12,6 +12,10 @@ env:
     value: databricks-claude-opus-4-8
   - name: GEMINI_MODEL
     value: databricks-gemini-2-5-pro
+  # Codex uses the Responses API, so use a *-codex model rather than a
+  # chat-completions-only GPT model.
+  - name: CODEX_MODEL
+    value: databricks-gpt-5-3-codex
   - name: HERMES_MODEL
     value: databricks-claude-opus-4-8
   - name: HERMES_FALLBACK_MODEL
@@ -30,15 +34,12 @@ env:
     value: "true"
   - name: ENABLE_OPENCODE
     value: "true"
-  # Codex and Gemini default to "false" here because most workspaces don't
-  # serve endpoints they can talk to — Codex needs a Responses-API (*-codex)
-  # endpoint and Gemini needs a served Gemini model. Installing them anyway
-  # just costs boot time and produces agents that fail on first request.
-  # Flip to "true" once your gateway serves a compatible endpoint.
+  # Codex and Gemini are enabled by default. Set either toggle to "false" to
+  # skip that CLI when the deploying workspace does not serve its API.
   - name: ENABLE_CODEX
-    value: "false"
+    value: "true"
   - name: ENABLE_GEMINI
-    value: "false"
+    value: "true"
   # OPTIONAL: pin the Databricks AI Gateway. Leave commented and the app derives
   # the gateway from your workspace and probes it for reachability
   # (utils.get_gateway_host tier 2), falling back to
