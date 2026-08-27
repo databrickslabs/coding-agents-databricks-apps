@@ -84,7 +84,7 @@ command_results:
     result: "blocked: GitHub returned 403 because the databrickslabs organization requires SAML SSO authorization for the active OAuth application"
   - command: "gh auth refresh --hostname github.com --scopes repo"
     exit_code: "pending user action"
-    result: "GitHub device flow issued code AED2-D6EC at https://github.com/login/device; command timed out awaiting browser authorization"
+    result: "GitHub device flow issued a one-time code at https://github.com/login/device; command timed out awaiting browser authorization. The code is intentionally not recorded."
 reviewer_reports:
   - role: "requirements-reviewer"
     run_id: "f78f0ea5"
@@ -180,4 +180,4 @@ lifecycle_history:
 final_decision:
   state: "BLOCKED_PENDING_USER_SSO"
   owner: "repository maintainer"
-  next_action: "Complete GitHub device authorization at https://github.com/login/device using code AED2-D6EC, then retry git push origin main and verify origin/main."
+  next_action: "Complete the GitHub device authorization currently shown by gh auth refresh, then retry git push origin main and verify origin/main."

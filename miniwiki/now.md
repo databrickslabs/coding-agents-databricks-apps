@@ -128,8 +128,9 @@ record.
 - Attempted `git push origin main` after the discovery/auth fixes. GitHub
   rejected the push with HTTP 403 because `databrickslabs` requires SAML SSO
   authorization for the active GitHub CLI OAuth application.
-- `gh auth refresh --hostname github.com --scopes repo` issued device code
-  `AED2-D6EC` at `https://github.com/login/device` and waited for browser
-  authorization. User action is required before retrying the push.
+- `gh auth refresh --hostname github.com --scopes repo` issued a one-time device
+  authorization at `https://github.com/login/device` and waited for browser
+  authorization. The one-time code is intentionally not recorded. User action
+  is required before retrying the push.
 - Local `main` retains the verified commits through `5867aa2`; `origin/main`
   remains at `737a0f4`. No remote state was changed.
