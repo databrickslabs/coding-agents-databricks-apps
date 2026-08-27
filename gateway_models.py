@@ -81,12 +81,22 @@ def normalize_workspace(workspace: str) -> str:
     return f"https://{parsed.netloc}"
 
 
+def codex_base_url(workspace: str) -> str:
+    """Return the workspace AI Gateway Responses API route used by Codex."""
+    return normalize_workspace(workspace) + "/ai-gateway/codex/v1"
+
+
+def gemini_base_url(workspace: str) -> str:
+    """Return the workspace AI Gateway Gemini-native route used by Gemini CLI."""
+    return normalize_workspace(workspace) + "/ai-gateway/gemini/v1beta"
+
+
 def opencode_base_urls(workspace: str) -> dict[str, str]:
     workspace = normalize_workspace(workspace)
     return {
         "anthropic": workspace + "/ai-gateway/anthropic/v1",
-        "gemini": workspace + "/ai-gateway/gemini/v1beta",
-        "openai": workspace + "/ai-gateway/codex/v1",
+        "gemini": gemini_base_url(workspace),
+        "openai": codex_base_url(workspace),
         "oss": workspace + "/ai-gateway/mlflow/v1",
     }
 
@@ -95,8 +105,8 @@ def pi_base_urls(workspace: str) -> dict[str, str]:
     workspace = normalize_workspace(workspace)
     return {
         "claude": workspace + "/ai-gateway/anthropic",
-        "gemini": workspace + "/ai-gateway/gemini/v1beta",
-        "openai": workspace + "/ai-gateway/codex/v1",
+        "gemini": gemini_base_url(workspace),
+        "openai": codex_base_url(workspace),
         "oss": workspace + "/ai-gateway/mlflow/v1",
     }
 
@@ -131,7 +141,10 @@ def list_model_services(workspace: str, token: str, *, max_pages: int = 20) -> l
         )
         if not isinstance(payload, dict):
             break
-        for service in payload.get("model_services", []):
+        services = payload.get("model_services", [])
+        if not isinstance(services, list):
+            break
+        for service in services:
             if not isinstance(service, dict):
                 continue
             name = service.get("name")
@@ -313,9 +326,18 @@ def serves_api_type(metadata: dict[str, dict[str, Any]], model: str, api_type: s
     return not entry["api_types"] or api_type in entry["api_types"]
 
 
-def discover_oss_specs(workspace: str, token: str) -> list[dict[str, Any]]:
-    """Return chat-completions-only model capabilities from live metadata."""
-    metadata = fetch_foundation_models(workspace, token)
+def discover_oss_specs(
+    workspace: str,
+    token: str,
+    metadata: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Return chat-completions-only model capabilities from live metadata.
+
+    ``metadata`` lets a full catalog build reuse its one foundation-model
+    snapshot instead of issuing a second read during parallel setup.
+    """
+    if metadata is None:
+        metadata = fetch_foundation_models(workspace, token)
     specs: dict[str, dict[str, Any]] = {}
     for canonical, entry in metadata.items():
         if (
@@ -379,7 +401,7 @@ def discover_model_catalog(workspace: str, token: str) -> dict[str, Any]:
             and serves_api_type(metadata, model, "gemini/v1/generateContent")
         ]
     )
-    specs = discover_oss_specs(workspace, token)
+    specs = discover_oss_specs(workspace, token, metadata)
     specs_by_id = {_canonical(spec["id"]): spec for spec in specs}
     oss: list[str] = []
     normalized_specs: list[dict[str, Any]] = []

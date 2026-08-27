@@ -406,14 +406,14 @@ Open [http://localhost:8000](http://localhost:8000) — type `claude`, `codex`, 
 | `DATABRICKS_TOKEN` | No | Optional. If not set, the app prompts for a token on first session (or use `/api/inject-pat`). Auto-rotated every 10 minutes |
 | `CODA_BOOTSTRAP_SECRET` | No | Enables the `/api/inject-pat` endpoint and is the shared secret required to call it. Unset ⇒ endpoint returns 404. Use a distinct secret per CoDA when provisioning many. Run `setup_pat_provisioner.sh` once to create an OAuth service principal (with CAN_USE on the apps, `workspace-access`, and token rights), then `provision_coda_pats.sh` to bulk-inject. `provision_coda_pats.sh` mints PATs restricted to REST **API scopes** (platform-enforced). By default it grants **all safe scopes** (incl. `secrets` for lab config) and excludes the dangerous ones (`access-management`, `authentication`, `identity`, `scim`, `settings`, `global-init-scripts`, `networking`); override with `--scopes a,b,c` or `--all-scopes` |
 | `CODA_INSTANCE_NAME` | No | Names this CoDA so auto-rotated PATs are tagged `coda-auto-rotated:<name>` (attribution when many CoDAs share one identity). Falls back to `DATABRICKS_APP_NAME`/app URL host |
-| `DATABRICKS_GATEWAY_HOST` | No | AI Gateway URL override. Three distinct states: **unset** → derive from `DATABRICKS_WORKSPACE_ID` (or an Azure `DATABRICKS_HOST`) and probe for reachability — the default, and correct for most deploys; **set to a URL** → trusted with *no* probe, so a stale or placeholder value makes every model call fail with `400 Invalid Token`; **set to `""`** → explicitly disable the gateway and use `{DATABRICKS_HOST}/serving-endpoints` |
-| `ANTHROPIC_MODEL` | No | Claude model name (default: `databricks-claude-opus-4-8`) |
-| `PI_MODEL` | No | Pi model name — same `/anthropic` gateway route as Claude (default: `databricks-claude-opus-4-8`) |
+| `DATABRICKS_GATEWAY_HOST` | No | Optional AI Gateway URL override for legacy/proxy components. Three distinct states: **unset** → derive from `DATABRICKS_WORKSPACE_ID` (or an Azure `DATABRICKS_HOST`) and probe for reachability; **set to a URL** → trusted with *no* probe; **set to `""`** → explicitly disable the legacy gateway path. Native Claude, Codex, Gemini, Pi, and OpenCode setup uses workspace-origin AI Gateway routes with live `system.ai` discovery. |
+| `ANTHROPIC_MODEL` | No | Requested Claude model-service name; setup auto-selects a served Claude model (default: `system.ai.claude-sonnet-5`) |
+| `PI_MODEL` | No | Requested Pi model-service name; setup auto-selects a served Claude model (default: `system.ai.claude-sonnet-5`) |
 | `ENABLE_PI` | No | Set `false` to skip installing the Pi coding agent (default: `true`) |
 | `ENABLE_CODEX` | No | Set `false` to skip installing Codex (default: `true`) |
-| `CODEX_MODEL` | No | Codex Responses-API model name (default: `databricks-gpt-5-3-codex`) |
+| `CODEX_MODEL` | No | Requested Codex model-service name; setup auto-selects a served Responses model (default: `system.ai.gpt-5`) |
 | `ENABLE_GEMINI` | No | Set `false` to skip installing Gemini CLI (default: `true`) |
-| `GEMINI_MODEL` | No | Gemini model name (default: `databricks-gemini-2-5-pro`) |
+| `GEMINI_MODEL` | No | Requested Gemini model-service name; setup auto-selects a served Gemini model (default: `system.ai.gemini-3-flash`) |
 | `HERMES_MODEL` | No | Hermes model name (default: `databricks-claude-opus-4-6`) |
 | `HERMES_FALLBACK_MODEL` | No | Fallback model if `HERMES_MODEL` is unavailable in this workspace's geo |
 | `ENABLE_HERMES` | No | Set to `"false"` to skip Hermes Agent install. Other CLIs are unaffected. Default `"true"` |

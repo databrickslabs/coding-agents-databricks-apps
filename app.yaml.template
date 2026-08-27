@@ -7,15 +7,15 @@ env:
   - name: DATABRICKS_TOKEN
     valueFrom: DATABRICKS_TOKEN
   - name: ANTHROPIC_MODEL
-    value: databricks-claude-opus-4-8
+    value: system.ai.claude-sonnet-5
   - name: PI_MODEL
-    value: databricks-claude-opus-4-8
+    value: system.ai.claude-sonnet-5
   - name: GEMINI_MODEL
-    value: databricks-gemini-2-5-pro
-  # Codex uses the Responses API, so use a *-codex model rather than a
-  # chat-completions-only GPT model.
+    value: system.ai.gemini-3-flash
+  # These are system.ai model-service names. Setup discovers the models served
+  # by this workspace and replaces unavailable requests with a compatible one.
   - name: CODEX_MODEL
-    value: databricks-gpt-5-3-codex
+    value: system.ai.gpt-5
   - name: HERMES_MODEL
     value: databricks-claude-opus-4-8
   - name: HERMES_FALLBACK_MODEL
@@ -40,11 +40,11 @@ env:
     value: "true"
   - name: ENABLE_GEMINI
     value: "true"
-  # OPTIONAL: pin the Databricks AI Gateway. Leave commented and the app derives
-  # the gateway from your workspace and probes it for reachability
-  # (utils.get_gateway_host tier 2), falling back to
-  # {DATABRICKS_HOST}/serving-endpoints if there isn't one — which is what you
-  # want in almost all cases.
+  # OPTIONAL: pin the Databricks AI Gateway for components that still consume
+  # DATABRICKS_GATEWAY_HOST. The Codex, Gemini, Claude, Pi, and OpenCode setup
+  # paths use workspace-origin AI Gateway routes and discover system.ai models
+  # directly, so they do not require a committed gateway URL. Leave this
+  # commented for portable deployments.
   #
   # Do NOT leave this uncommented with the placeholder still in it: a set value
   # is TRUSTED with no reachability probe (tier 1), so an unfilled template

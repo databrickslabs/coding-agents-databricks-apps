@@ -154,15 +154,15 @@ your user (owner-gated `POST /api/omnigent-host/share`).
 |----------|----------|-------------|
 | `DATABRICKS_TOKEN` | No | Optional. If not set, the app prompts for a token on first session. Auto-rotated every 10 minutes |
 | `HOME` | Yes | Set to `/app/python/source_code` in app.yaml |
-| `ANTHROPIC_MODEL` | No | Claude model name (default: `databricks-claude-opus-4-8`) |
-| `PI_MODEL` | No | Pi model name — same `/anthropic` gateway route as Claude (default: `databricks-claude-opus-4-8`) |
+| `ANTHROPIC_MODEL` | No | Requested Claude model-service name; setup auto-selects a served Claude model (default: `system.ai.claude-sonnet-5`) |
+| `PI_MODEL` | No | Requested Pi model-service name; setup auto-selects a served Claude model (default: `system.ai.claude-sonnet-5`) |
 | `ENABLE_PI` | No | Set `false` to skip installing the Pi coding agent (default: `true`) |
 | `ENABLE_CODEX` | No | Set `false` to skip installing Codex (default: `true`) |
-| `CODEX_MODEL` | No | Codex Responses-API model name (default: `databricks-gpt-5-3-codex`) |
+| `CODEX_MODEL` | No | Requested Codex model-service name; setup auto-selects a served Responses model (default: `system.ai.gpt-5`) |
 | `ENABLE_GEMINI` | No | Set `false` to skip installing Gemini CLI (default: `true`) |
-| `GEMINI_MODEL` | No | Gemini model name (default: `databricks-gemini-2-5-pro`) |
+| `GEMINI_MODEL` | No | Requested Gemini model-service name; setup auto-selects a served Gemini model (default: `system.ai.gemini-3-flash`) |
 | `HERMES_MODEL` | No | Hermes model name (default: `databricks-claude-opus-4-8`) |
-| `DATABRICKS_GATEWAY_HOST` | No | AI Gateway URL override. Auto-discovered from `DATABRICKS_WORKSPACE_ID` if unset. Falls back to direct model serving if neither is available |
+| `DATABRICKS_GATEWAY_HOST` | No | Optional AI Gateway URL override for legacy/proxy components. Native Claude, Codex, Gemini, Pi, and OpenCode setup uses workspace-origin AI Gateway routes with live `system.ai` model discovery |
 | `MAX_CONCURRENT_SESSIONS` | No | Browser PTY hard cap per worker (default `5`) |
 | `CODA_MEMORY_HIGH_WATERMARK_PERCENT` / `CODA_MEMORY_RESUME_THRESHOLD_PERCENT` | No | cgroup admission hysteresis (defaults `80` / `70`) |
 | `CODA_BROWSER_SESSION_RESERVE_MB` | No | Reserve required for each new browser PTY (default `768` MB) |

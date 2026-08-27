@@ -1,9 +1,8 @@
 #!/usr/bin/env python
 """Configure OpenAI Codex CLI with Databricks Model Serving.
 
-Codex CLI is OpenAI's coding agent that uses OpenAI-compatible chat endpoints.
-Databricks provides an OpenAI-compatible endpoint at /serving-endpoints/openai
-or via the AI Gateway at /openai/v1.
+Codex CLI is OpenAI's coding agent and uses the Responses API.
+Databricks provides the Responses API through the workspace AI Gateway.
 
 Config: ~/.codex/config.toml with custom model_providers for Databricks.
 Auth: Bearer token via DATABRICKS_TOKEN environment variable.
@@ -18,6 +17,8 @@ import subprocess
 from pathlib import Path
 
 from cli_auth import _atomic_write_text
+from gateway_models import codex_base_url, discover_model_catalog
+from token_helper import resolve_databricks_token
 from utils import (
     adapt_instructions_file,
     ensure_https,
@@ -37,8 +38,10 @@ if not os.environ.get("HOME") or os.environ["HOME"] == "/":
 home = Path(os.environ["HOME"])
 
 host = os.environ.get("DATABRICKS_HOST", "")
-token = os.environ.get("DATABRICKS_TOKEN", "")
-codex_model = os.environ.get("CODEX_MODEL", "databricks-gpt-5-3-codex")
+# Use the same broker-aware credential resolution as Claude, Pi, and OpenCode
+# so SP-authenticated boot works without requiring a pasted PAT.
+token = resolve_databricks_token() or ""
+requested_model = os.environ.get("CODEX_MODEL", "system.ai.gpt-5")
 
 # 1. Install Codex CLI into ~/.local/bin (always, even without token)
 local_bin = home / ".local" / "bin"
@@ -89,15 +92,20 @@ if not host or not token:
 # Strip trailing slash and ensure https:// prefix
 host = ensure_https(host.rstrip("/"))
 
-# Codex speaks the Responses API (wire_api="responses" below). Only the
-# workspace's /serving-endpoints/v1/responses path serves it — the AI Gateway's
-# /openai/v1 route is Chat Completions and 404s on /responses. So pin the base
-# URL to serving-endpoints/v1 unconditionally; codex appends "/responses".
-# (Chat-completions models 400 with "only supports the Responses API" here, so
-# CODEX_MODEL must be a -codex endpoint, e.g. databricks-gpt-5-3-codex.)
-codex_base_url = f"{host}/serving-endpoints/v1"
+# Codex speaks the Responses API (wire_api="responses" below). Discover the
+# system.ai model services that advertise the Responses dialect and select the
+# newest compatible model when the configured request is not served here.
+catalog = discover_model_catalog(host, token)
+openai_models = catalog["openai"]
+codex_model = requested_model
+if openai_models:
+    codex_model = requested_model if requested_model in openai_models else openai_models[0]
+    if codex_model != requested_model:
+        print(f"CODEX_MODEL={requested_model} not served here, using {codex_model}")
+
+codex_url = codex_base_url(host)
 auth_token = token
-print(f"Using Databricks serving-endpoints Responses API: {codex_base_url}")
+print(f"Using workspace AI Gateway Responses API: {codex_url}")
 
 # 3. Create ~/.codex directory and write config.toml
 codex_dir = home / ".codex"
@@ -133,7 +141,7 @@ web_search = "disabled"
 # Databricks custom provider
 [model_providers.databricks]
 name = "Databricks Model Serving"
-base_url = "{codex_base_url}"
+base_url = "{codex_url}"
 env_key = "OPENAI_API_KEY"
 wire_api = "responses"
 """
@@ -238,6 +246,6 @@ adapt_instructions_file(
 print("\nCodex CLI ready! Usage:")
 print("  codex                              # Start Codex CLI")
 print("  codex 'explain this codebase'      # Run with prompt")
-print(f"\nEndpoint: {codex_base_url}")
+print(f"\nEndpoint: {codex_url}")
 print(f"Model: {codex_model}")
-print("Auth: Bearer token (Databricks PAT via OPENAI_API_KEY)")
+print("Auth: Bearer token (Databricks token via OPENAI_API_KEY)")

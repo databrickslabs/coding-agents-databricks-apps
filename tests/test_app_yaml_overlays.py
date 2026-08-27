@@ -98,13 +98,18 @@ def test_codex_and_gemini_are_enabled_with_compatible_defaults(path: Path):
     }
     assert env["ENABLE_CODEX"] == "true"
     assert env["ENABLE_GEMINI"] == "true"
-    assert str(env["CODEX_MODEL"]).endswith("-codex")
+    # The generic system.ai request is resolved to the newest Responses-capable
+    # model from the workspace catalog during setup.
+    assert str(env["ANTHROPIC_MODEL"]).startswith("system.ai.claude-")
+    assert str(env["PI_MODEL"]).startswith("system.ai.claude-")
+    assert str(env["CODEX_MODEL"]).startswith("system.ai.gpt-")
+    assert str(env["GEMINI_MODEL"]).startswith("system.ai.gemini-")
 
 
-def test_codex_fallback_model_matches_responses_api_requirement():
-    """The no-env setup path must not fall back to chat-completions-only GPT."""
+def test_codex_fallback_model_uses_system_ai_discovery_seed():
+    """The no-env setup path starts from the system.ai discovery namespace."""
     source = (REPO_ROOT / "setup_codex.py").read_text()
-    assert 'os.environ.get("CODEX_MODEL", "databricks-gpt-5-3-codex")' in source
+    assert 'os.environ.get("CODEX_MODEL", "system.ai.gpt-5")' in source
 
 
 def test_toggles_match_code():

@@ -2,8 +2,7 @@
 """Configure Gemini CLI with Databricks Model Serving.
 
 Gemini CLI uses the Google Generative Language API protocol, not OpenAI-compatible.
-Databricks provides a Google-native endpoint at /serving-endpoints/google
-(similar to /serving-endpoints/anthropic for Claude).
+Databricks provides a Google-native route through the workspace AI Gateway.
 
 PR #11893 (by Databricks engineer AarushiShah) added auto-detection of *.databricks.com
 URLs, switching to Bearer token auth automatically.
@@ -19,7 +18,9 @@ import subprocess
 from pathlib import Path
 
 from cli_auth import _atomic_write_text
-from utils import adapt_instructions_file, ensure_https, get_gateway_host, get_npm_version
+from gateway_models import discover_model_catalog, gemini_base_url
+from token_helper import resolve_databricks_token
+from utils import adapt_instructions_file, ensure_https, get_npm_version
 
 # Opt-out: allow operators to disable Gemini bundling without removing the file.
 if os.environ.get("ENABLE_GEMINI", "true").strip().lower() in ("false", "0", "no"):
@@ -33,8 +34,10 @@ if not os.environ.get("HOME") or os.environ["HOME"] == "/":
 home = Path(os.environ["HOME"])
 
 host = os.environ.get("DATABRICKS_HOST", "")
-token = os.environ.get("DATABRICKS_TOKEN", "")
-gemini_model = os.environ.get("GEMINI_MODEL", "databricks-gemini-2-5-pro")
+# Use the same broker-aware credential resolution as Claude, Pi, and OpenCode
+# so SP-authenticated boot works without requiring a pasted PAT.
+token = resolve_databricks_token() or ""
+requested_model = os.environ.get("GEMINI_MODEL", "system.ai.gemini-3-flash")
 
 # 1. Install Gemini CLI into ~/.local/bin (always, even without token)
 local_bin = home / ".local" / "bin"
@@ -84,20 +87,20 @@ if not host or not token:
 # Strip trailing slash and ensure https:// prefix
 host = ensure_https(host.rstrip("/"))
 
-gateway_host = get_gateway_host()
-gateway_token = os.environ.get("DATABRICKS_TOKEN", "") if gateway_host else ""
-if gateway_host and not gateway_token:
-    print("Warning: AI Gateway resolved but DATABRICKS_TOKEN missing, falling back to DATABRICKS_HOST")
-    gateway_host = ""
+# Discover system.ai model services that advertise the native Gemini dialect.
+# Prefer the configured request when it is served, otherwise select the newest
+# compatible model returned by the gateway catalog.
+catalog = discover_model_catalog(host, token)
+gemini_models = catalog["gemini"]
+gemini_model = requested_model
+if gemini_models:
+    gemini_model = requested_model if requested_model in gemini_models else gemini_models[0]
+    if gemini_model != requested_model:
+        print(f"GEMINI_MODEL={requested_model} not served here, using {gemini_model}")
 
-if gateway_host:
-    gemini_base_url = f"{gateway_host}/gemini"
-    auth_token = gateway_token
-    print(f"Using Databricks AI Gateway: {gateway_host}")
-else:
-    gemini_base_url = f"{host}/serving-endpoints/google"
-    auth_token = token
-    print(f"Using Databricks Host: {host}")
+gemini_url = gemini_base_url(host)
+auth_token = token
+print(f"Using workspace AI Gateway Gemini API: {gemini_url}")
 
 # 3. Create ~/.gemini directory and configure environment
 gemini_dir = home / ".gemini"
@@ -126,10 +129,10 @@ except Exception as e:
 
 # Write .env file with Databricks endpoint configuration
 # Gemini CLI auto-loads env from ~/.gemini/.env
-# The Google-native endpoint on Databricks mirrors /serving-endpoints/anthropic
+# The Google-native route is the workspace AI Gateway Gemini v1beta path.
 env_content = f"""# Databricks Model Serving - Google Gemini native endpoint
 GEMINI_MODEL={gemini_model}
-GOOGLE_GEMINI_BASE_URL={gemini_base_url}
+GOOGLE_GEMINI_BASE_URL={gemini_url}
 GEMINI_API_KEY_AUTH_MECHANISM=bearer
 GEMINI_API_KEY={auth_token}
 """
@@ -180,5 +183,5 @@ adapt_instructions_file(
 
 print("\nGemini CLI ready! Usage:")
 print("  gemini                                    # Start Gemini CLI")
-print(f"\nEndpoint: {gemini_base_url}")
+print(f"\nEndpoint: {gemini_url}")
 print("Auth: Bearer token (Databricks PAT)")

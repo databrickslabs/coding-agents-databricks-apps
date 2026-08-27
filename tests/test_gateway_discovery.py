@@ -6,7 +6,6 @@ import sys
 from pathlib import Path
 from unittest import mock
 
-import pytest
 
 # ---------------------------------------------------------------------------
 # Unit tests for get_gateway_host()
@@ -246,18 +245,11 @@ class TestEndpointConstruction:
 
     @mock.patch("utils._probe_gateway", return_value=True)
     def test_codex_gateway_url_construction(self, mock_probe):
-        """Codex endpoint should use gateway /openai/v1 path."""
-        from utils import get_gateway_host
-        with mock.patch.dict(os.environ, {
-            "DATABRICKS_WORKSPACE_ID": "1234567890123456",
-        }, clear=False):
-            env = os.environ.copy()
-            env.pop("DATABRICKS_GATEWAY_HOST", None)
-            env.pop("_GATEWAY_RESOLVED", None)
-            with mock.patch.dict(os.environ, env, clear=True):
-                gw = get_gateway_host()
-                codex_url = f"{gw}/openai/v1"
-                assert codex_url == f"{gw}/openai/v1"
+        """Codex uses the workspace AI Gateway Responses route."""
+        from gateway_models import codex_base_url
+        assert codex_base_url("https://workspace.example.test") == (
+            "https://workspace.example.test/ai-gateway/codex/v1"
+        )
 
     @mock.patch("utils._probe_gateway", return_value=True)
     def test_gemini_gateway_url_construction(self, mock_probe):

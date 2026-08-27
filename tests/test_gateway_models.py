@@ -55,6 +55,8 @@ CATALOG_WITH_SPECS = {
 
 
 def test_ucode_workspace_gateway_urls_never_use_external_gateway_host():
+    assert gm.codex_base_url(WORKSPACE) == WORKSPACE + "/ai-gateway/codex/v1"
+    assert gm.gemini_base_url(WORKSPACE) == WORKSPACE + "/ai-gateway/gemini/v1beta"
     assert gm.opencode_base_urls(WORKSPACE) == {
         "anthropic": WORKSPACE + "/ai-gateway/anthropic/v1",
         "gemini": WORKSPACE + "/ai-gateway/gemini/v1beta",
@@ -114,6 +116,37 @@ def test_model_services_pages_and_filters_to_system_ai(monkeypatch):
     assert "page_token=next" in get.call_args_list[1].args[0]
 
 
+def test_model_services_ignores_malformed_service_list(monkeypatch):
+    monkeypatch.setattr(gm, "_get_json", lambda *_args, **_kwargs: {"model_services": None})
+    assert gm.list_model_services(WORKSPACE, "token") == []
+
+
+def test_catalog_reuses_foundation_metadata_for_oss_discovery(monkeypatch):
+    model = "system.ai.kimi-k2-7-code"
+    metadata = {
+        "kimi-k2-7-code": {
+            "id": model,
+            "api_types": {"mlflow/v1/chat/completions"},
+            "gateway_v2": True,
+            "description": "context window of 128K",
+            "capabilities": {},
+            "reasoning": True,
+        }
+    }
+    metadata_reads = 0
+
+    def fetch_metadata(*_args):
+        nonlocal metadata_reads
+        metadata_reads += 1
+        return metadata
+
+    monkeypatch.setattr(gm, "list_model_services", lambda *_: [model])
+    monkeypatch.setattr(gm, "fetch_foundation_models", fetch_metadata)
+    catalog = gm.discover_model_catalog(WORKSPACE, "token")
+    assert catalog["oss"] == [model]
+    assert metadata_reads == 1
+
+
 def test_catalog_buckets_provider_dialects_with_native_precedence(monkeypatch):
     ids = [
         "system.ai.claude-opus-5",
@@ -144,6 +177,67 @@ def test_catalog_buckets_provider_dialects_with_native_precedence(monkeypatch):
         "system.ai.gpt-oss-120b",
         "system.ai.kimi-k2-7-code",
     ]
+
+
+def test_setup_codex_discovers_model_and_uses_workspace_gateway(monkeypatch, tmp_path):
+    _seed_binary(tmp_path, "codex")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("DATABRICKS_HOST", WORKSPACE)
+    monkeypatch.setenv("DATABRICKS_TOKEN", "test-token")
+    monkeypatch.setenv("ENABLE_CODEX", "true")
+    monkeypatch.setenv("CODEX_MODEL", "system.ai.gpt-5")
+    monkeypatch.setattr(gm, "discover_model_catalog", lambda *_: CATALOG)
+    runpy.run_path(str(Path(__file__).parents[1] / "setup_codex.py"), run_name="__main__")
+
+    config = (tmp_path / ".codex/config.toml").read_text()
+    assert 'model = "system.ai.gpt-5-5"' in config
+    assert 'base_url = "' + WORKSPACE + '/ai-gateway/codex/v1"' in config
+    assert 'wire_api = "responses"' in config
+
+
+def test_setup_gemini_discovers_model_and_uses_workspace_gateway(monkeypatch, tmp_path):
+    _seed_binary(tmp_path, "gemini")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("DATABRICKS_HOST", WORKSPACE)
+    monkeypatch.setenv("DATABRICKS_TOKEN", "test-token")
+    monkeypatch.setenv("ENABLE_GEMINI", "true")
+    monkeypatch.setenv("GEMINI_MODEL", "system.ai.gemini-2-5-pro")
+    monkeypatch.setattr(gm, "discover_model_catalog", lambda *_: CATALOG)
+    runpy.run_path(str(Path(__file__).parents[1] / "setup_gemini.py"), run_name="__main__")
+
+    env = (tmp_path / ".gemini/.env").read_text()
+    assert "GEMINI_MODEL=system.ai.gemini-3-flash" in env
+    assert "GOOGLE_GEMINI_BASE_URL=" + WORKSPACE + "/ai-gateway/gemini/v1beta" in env
+
+
+def test_setup_codex_uses_broker_token_without_pat(monkeypatch, tmp_path):
+    _seed_binary(tmp_path, "codex")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("DATABRICKS_HOST", WORKSPACE)
+    monkeypatch.delenv("DATABRICKS_TOKEN", raising=False)
+    monkeypatch.setenv("ENABLE_CODEX", "true")
+    monkeypatch.setattr(gm, "discover_model_catalog", lambda *_: CATALOG)
+    import token_helper
+    monkeypatch.setattr(token_helper, "resolve_databricks_token", lambda: "broker-token")
+    runpy.run_path(str(Path(__file__).parents[1] / "setup_codex.py"), run_name="__main__")
+
+    env = (tmp_path / ".codex/.env").read_text()
+    assert "OPENAI_API_KEY=broker-token" in env
+
+
+def test_setup_gemini_uses_broker_token_without_pat(monkeypatch, tmp_path):
+    _seed_binary(tmp_path, "gemini")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("DATABRICKS_HOST", WORKSPACE)
+    monkeypatch.delenv("DATABRICKS_TOKEN", raising=False)
+    monkeypatch.setenv("ENABLE_GEMINI", "true")
+    monkeypatch.setattr(gm, "discover_model_catalog", lambda *_: CATALOG)
+    import token_helper
+    monkeypatch.setattr(token_helper, "resolve_databricks_token", lambda: "broker-token")
+    runpy.run_path(str(Path(__file__).parents[1] / "setup_gemini.py"), run_name="__main__")
+
+    env = (tmp_path / ".gemini/.env").read_text()
+    assert "GEMINI_API_KEY=broker-token" in env
 
 
 def test_setup_opencode_writes_ucode_provider_buckets(monkeypatch, tmp_path):
@@ -223,6 +317,8 @@ def test_app_yaml_enables_the_default_harnesses():
     """
     source = (Path(__file__).parents[1] / "app.yaml").read_text()
     assert source.count("value: system.ai.claude-sonnet-5") == 2
+    assert "value: system.ai.gpt-5" in source
+    assert "value: system.ai.gemini-3-flash" in source
     assert '- name: ENABLE_CLAUDE\n    value: "true"' in source
     assert '- name: ENABLE_PI\n    value: "true"' in source
     assert '- name: ENABLE_OPENCODE\n    value: "true"' in source

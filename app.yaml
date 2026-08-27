@@ -11,13 +11,13 @@ env:
   - name: PI_MODEL
     value: system.ai.claude-sonnet-5
   - name: GEMINI_MODEL
-    value: databricks-gemini-2-5-pro
-  # Must be a *-codex model served via the Responses API — the Codex harness
-  # (and CLI) speaks wire_api="responses", which only the -codex endpoints
-  # support. A general chat-completions model (e.g. databricks-gpt-5-5) 400s on
-  # /responses. See setup_codex.py base_url handling.
+    value: system.ai.gemini-3-flash
+  # The setup script discovers system.ai models served via the Responses API
+  # and replaces this request with the newest compatible model when needed.
+  # Codex speaks wire_api="responses"; chat-completions-only models are
+  # filtered out by gateway model discovery.
   - name: CODEX_MODEL
-    value: databricks-gpt-5-3-codex
+    value: system.ai.gpt-5
   - name: HERMES_MODEL
     value: databricks-claude-opus-4-8
   - name: HERMES_FALLBACK_MODEL
