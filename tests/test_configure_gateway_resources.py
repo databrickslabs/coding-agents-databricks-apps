@@ -1,5 +1,6 @@
 from configure_gateway_resources import (
     discover_gateway_endpoint_names,
+    endpoint_model_id,
     gateway_resource_name,
     merge_resources,
 )
@@ -33,6 +34,10 @@ def test_discovers_only_ready_foundation_model_chat_endpoints():
     ]
 
 
+def test_endpoint_names_map_to_routable_model_ids():
+    assert endpoint_model_id("databricks-claude-sonnet-5") == "system.ai.claude-sonnet-5"
+
+
 def test_gateway_resource_names_are_stable_and_fit_apps_limit():
     name = gateway_resource_name("databricks-claude-sonnet-5")
     assert name == gateway_resource_name("databricks-claude-sonnet-5")
@@ -50,7 +55,9 @@ def test_merge_preserves_unrelated_resources_and_replaces_managed_set():
     ]
 
     merged = [resource.as_dict() for resource in merge_resources(
-        current, ["databricks-claude-sonnet-5"]
+        current,
+        ["databricks-claude-sonnet-5"],
+        catalog_secret_key="coda-model-catalog",
     )]
     by_name = {resource["name"]: resource for resource in merged}
 
@@ -60,4 +67,9 @@ def test_merge_preserves_unrelated_resources_and_replaces_managed_set():
     assert by_name[resource_name]["serving_endpoint"] == {
         "name": "databricks-claude-sonnet-5",
         "permission": "CAN_QUERY",
+    }
+    assert by_name["gateway-model-catalog"]["secret"] == {
+        "scope": "coda-gateway",
+        "key": "coda-model-catalog",
+        "permission": "READ",
     }
