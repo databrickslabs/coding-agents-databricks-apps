@@ -1967,62 +1967,26 @@ def omnigent_host_lease():
     from omnigents_host import acquire_lease
 
     ok, lease = acquire_lease(owner, lease_id)
-    # The caller needs only the generation fence. Owner identity and lease
-    # timestamps remain process-internal and never cross the control API.
-    return jsonify({"lease_id": lease.get("lease_id"), "acquired": ok}), (200 if ok else 409)
-
-
-def _repository_workspace_args(data):
-    """Return optional protocol-v2 repository metadata from a control request."""
-    fields = ("repo_url", "repo_branch", "repo_name")
-    requested = any(data.get(field) is not None for field in fields)
-    if requested and data.get("workspace_protocol_version") != 2:
-        raise ValueError("repository workspace protocol version 2 is required")
-    return requested, {field: data.get(field) for field in fields}
+    return jsonify(lease), (200 if ok else 409)
 
 
 @app.route("/api/omnigent-host/workspaces", methods=["POST"])
 def omnigent_host_workspace():
-    """Allocate, materialize, or release a distinct session workspace."""
+    """Allocate a distinct session directory under the active lease."""
     if not _managed_omnigent_enabled():
         return jsonify({"error": "Managed OmniGENT mode is disabled"}), 404
     if not _omnigent_server_request_authorized():
         return jsonify({"error": "Forbidden"}), 403
     data = request.get_json(silent=True) or {}
-    from omnigents_host import (
-        WorkspaceAllocationError,
-        allocate_workspace,
-        release_workspace,
-    )
+    from omnigents_host import allocate_workspace
 
-    lease_id = str(data.get("lease_id") or "")
-    session_id = str(data.get("session_id") or "")
     try:
-        if data.get("action") == "release":
-            released = release_workspace(lease_id, session_id)
-            return jsonify(
-                {
-                    "released": released,
-                    "workspace_protocol_version": 2,
-                }
-            )
-        repository_requested, repository = _repository_workspace_args(data)
         workspace = allocate_workspace(
-            lease_id,
-            session_id,
-            **repository,
+            str(data.get("lease_id") or ""), str(data.get("session_id") or "")
         )
-    except WorkspaceAllocationError as exc:
-        return jsonify({"error": str(exc)}), exc.status_code
     except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-    return jsonify(
-        {
-            "workspace": workspace,
-            "workspace_protocol_version": 2,
-            "repository_materialized": repository_requested,
-        }
-    )
+        return jsonify({"error": str(exc)}), 409
+    return jsonify({"workspace": workspace})
 
 
 @app.route("/api/omnigent-host/runner-log/<session_id>")
@@ -2030,7 +1994,7 @@ def omnigent_host_runner_log(session_id):
     """Return a bounded runner log tail to the configured server SP."""
     if not _managed_omnigent_enabled():
         return jsonify({"error": "Managed OmniGENT mode is disabled"}), 404
-    if not _omnigent_server_request_authorized():
+    if not _omnigent_server_request_authorized() and get_request_user() != app_owner:
         return jsonify({"error": "Forbidden"}), 403
     from omnigents_host import runner_log_tail
 
@@ -2055,87 +2019,54 @@ def omnigent_host_connect():
     if configured_server_url and server_url.rstrip("/") != configured_server_url.rstrip("/"):
         return jsonify({"error": "server_url does not match configured Omnigent server"}), 409
 
-    from omnigents_host import (
-        WorkspaceAllocationError,
-        active_lease,
-        allocate_workspace,
-        connect_host,
-        release_workspace,
-    )
+    from omnigents_host import active_lease, connect_host
 
-    lease_id = str(data.get("lease_id") or "")
     lease = active_lease()
-    if lease is None or lease.get("lease_id") != lease_id:
+    if lease is None or lease.get("lease_id") != data.get("lease_id"):
         return jsonify({"error": "stale or missing lease"}), 409
     host_config = data.get("host_config")
     if host_config is not None and not isinstance(host_config, dict):
         return jsonify({"error": "host_config must be an object"}), 400
-    allocated_session_id = None
-    try:
-        repository_requested, repository = _repository_workspace_args(data)
-        session_id = str(data.get("session_id") or "")
-        if repository_requested and not session_id:
-            return jsonify({"error": "repository workspace protocol upgrade required"}), 426
-        if session_id:
-            workspace = allocate_workspace(
-                lease_id,
-                session_id,
-                **repository,
-            )
-            allocated_session_id = session_id
-        else:
-            # Older servers cannot identify an isolated opening workspace.
-            workspace = os.environ.get("HOME", "/app/python/source_code")
-        ok, status = connect_host(
-            server_url,
-            _omnigent_sp_creds,
-            host_token=(data.get("host_token") or None),
-            host_id=(data.get("host_id") or None),
-            host_name=(data.get("host_name") or None),
-            host_config=host_config,
-            lease_id=(data.get("lease_id") or None),
-        )
-    except WorkspaceAllocationError as exc:
-        return jsonify({"error": str(exc)}), exc.status_code
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-    except Exception:
-        if allocated_session_id is not None:
-            try:
-                release_workspace(lease_id, allocated_session_id)
-            except WorkspaceAllocationError:
-                pass
-        raise
+    ok, status = connect_host(
+        server_url,
+        _omnigent_sp_creds,
+        host_token=(data.get("host_token") or None),
+        host_id=(data.get("host_id") or None),
+        host_name=(data.get("host_name") or None),
+        host_config=host_config,
+        lease_id=(data.get("lease_id") or None),
+    )
     if not ok:
-        if allocated_session_id is not None:
-            try:
-                release_workspace(lease_id, allocated_session_id)
-            except WorkspaceAllocationError:
-                pass
         code = 409 if status.get("last_error") == "host already running" else 400
-        return jsonify({"error": "host connection failed"}), code
-    status["workspace"] = workspace
-    status["workspace_protocol_version"] = 2
-    status["repository_materialized"] = repository_requested
+        return jsonify(status), code
+    status["workspace"] = os.environ.get("HOME", "/app/python/source_code")
     return jsonify(status), 202
 
 
 @app.route("/api/omnigent-host/disconnect", methods=["POST"])
 def omnigent_host_disconnect():
-    """Release and scrub only the matching managed lease generation."""
+    """Stop an external host or release the matching managed lease."""
     if not _managed_omnigent_enabled():
         return jsonify({"error": "Managed OmniGENT mode is disabled"}), 404
     if not _omnigent_server_request_authorized():
         return jsonify({"error": "Forbidden"}), 403
     data = request.get_json(silent=True) or {}
     lease_id = str(data.get("lease_id") or "")
-    from omnigents_host import release_managed_lease
+    from omnigents_host import (
+        _scrub_session_workspaces,
+        active_lease,
+        disconnect_host,
+        release_lease,
+    )
 
-    released, status = release_managed_lease(lease_id)
-    if status.get("stale"):
-        return jsonify(status)
-    if not released:
-        return jsonify(status), 503
+    lease = active_lease()
+    if lease is None or lease.get("lease_id") != lease_id:
+        return jsonify({"released": False, "stale": True})
+    status = disconnect_host()
+    if data.get("scrub"):
+        _scrub_session_workspaces()
+    release_lease(lease_id)
+    status["released"] = True
     return jsonify(status)
 
 
