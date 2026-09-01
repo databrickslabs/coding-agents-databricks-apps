@@ -229,7 +229,21 @@ def _update_step(step_id, **kwargs):
 
 def _get_setup_state_snapshot():
     with setup_lock:
-        return copy.deepcopy(setup_state)
+        snapshot = copy.deepcopy(setup_state)
+    warnings = []
+    agents_need_gateway = any(
+        os.environ.get(name, "true").strip().lower() not in ("false", "0", "no")
+        for name in ("ENABLE_CLAUDE", "ENABLE_PI")
+    )
+    if agents_need_gateway and not os.environ.get("CODA_GATEWAY_MODEL_CATALOG", "").strip():
+        warnings.append(
+            "AI Gateway model access is not provisioned for this app. Deploy with "
+            "the repository Make targets, or run `make configure-gateway-resources "
+            "PROFILE=<profile> APP_NAME=<app>` before redeploying. App resources "
+            "alone do not grant Unity model-service EXECUTE."
+        )
+    snapshot["warnings"] = warnings
+    return snapshot
 
 
 # Single-user security: only the token owner can access the terminal
@@ -2446,6 +2460,13 @@ def close_session():
 def initialize_app(local_dev=False):
     """One-time init: detect owner, start cleanup thread."""
     global app_owner, _omnigent_sp_creds, _sp_token_broker_server
+
+    if not os.environ.get("CODA_GATEWAY_MODEL_CATALOG", "").strip():
+        logger.warning(
+            "AI Gateway model access is not provisioned: deploy with the repository "
+            "Make targets or run `make configure-gateway-resources PROFILE=<profile> "
+            "APP_NAME=<app>`; Apps YAML alone cannot grant model-service EXECUTE"
+        )
 
     global _sp_token_broker_atexit_registered
     if not _sp_token_broker_atexit_registered:

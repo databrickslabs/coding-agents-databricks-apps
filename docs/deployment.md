@@ -20,7 +20,7 @@ The app pulls the code directly from Git. To update later, just re-deploy — it
 
 > **Note:** On first startup, the app automatically removes the template's `.git` history and reinitializes a clean, remote-free git repo. This prevents accidental pushes back to the template repo from the in-browser terminal.
 
-> **AI Gateway setup:** CLI deployment targets automatically discover READY Foundation Model chat endpoints and attach them to the app with `CAN_QUERY`. This is required because Gateway visibility and invocation are identity-scoped; a model visible to the deployer may otherwise return a masked 404 to the app service principal. Set `AUTO_CONFIGURE_GATEWAY=false` only when permissions are managed externally.
+> **Required AI Gateway setup:** deploy through this repository's `make deploy`, `make redeploy`, or `make deploy-git` targets. They grant the app SP `USE CATALOG` on `system`, `USE SCHEMA` on `system.ai`, and `EXECUTE` on each selected Unity AI Gateway v3 model service; they also attach legacy `CAN_QUERY` resources and publish the app-visible model inventory. A plain Apps UI deploy cannot express the v3 UC grants and leaves Pi/Claude returning a masked `404 '<model>' does not exist`. Set `AUTO_CONFIGURE_GATEWAY=false` only when equivalent UC grants are managed externally.
 
 ## Alternative: Deploy with CLI
 
