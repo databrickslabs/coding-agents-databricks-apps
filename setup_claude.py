@@ -83,17 +83,32 @@ if token:
     served = catalog["anthropic"]
     print(f"Discovered {len(served)} anthropic-dialect model services")
 
-    requested_model = os.environ.get("ANTHROPIC_MODEL", "system.ai.claude-sonnet-5")
-    sonnet_model = family_model("sonnet", served, fallback=requested_model)
+    if not served:
+        print(
+            "ERROR: the CoDA service principal discovered no Anthropic-dialect "
+            "Gateway models; attach serving-endpoint resources with CAN_QUERY"
+        )
+        raise SystemExit(1)
+    requested_model = os.environ.get("ANTHROPIC_MODEL", "").strip()
+    sonnet_model = family_model("sonnet", served, fallback=served[0])
     opus_model = family_model("opus", served, fallback=sonnet_model)
     haiku_model = family_model("haiku", served, fallback=sonnet_model)
-    active_model = requested_model if requested_model in served else sonnet_model
-    if served and active_model != requested_model:
-        print(f"ANTHROPIC_MODEL={requested_model} not served here, using {active_model}")
+    if requested_model and requested_model not in served:
+        print(f"Ignoring unavailable ANTHROPIC_MODEL={requested_model}")
 
     settings.setdefault("env", {})
-    settings["env"]["ANTHROPIC_MODEL"] = active_model
+    # Match ucode's contract: native Gateway discovery plus modelOverrides owns
+    # the picker. ANTHROPIC_MODEL must remain absent or Claude collapses the
+    # picker to that one static row.
+    settings["env"].pop("ANTHROPIC_MODEL", None)
     settings["env"]["ANTHROPIC_BASE_URL"] = anthropic_base_url
+    settings["env"]["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] = "1"
+    settings["env"]["CLAUDE_CODE_USE_GATEWAY"] = "1"
+    settings["modelOverrides"] = {
+        model.removeprefix("system.ai."): model
+        for model in served
+        if model.startswith("system.ai.claude-")
+    }
 
     # Token source (spec C): by default install an apiKeyHelper that fetches a
     # fresh token per-TTL -- Claude Code re-runs it on the interval below, so

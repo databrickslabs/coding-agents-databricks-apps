@@ -9,12 +9,9 @@ env:
   #   valueFrom: omnigent-server-client-id
   - name: HOME
     value: /app/python/source_code
-  - name: ANTHROPIC_MODEL
-    value: system.ai.claude-sonnet-5
-  # Pi routes to the same /anthropic gateway route as Claude Code; PI_MODEL is
-  # the serving-endpoint name it addresses (validated against in-geo models).
-  - name: PI_MODEL
-    value: system.ai.claude-sonnet-5
+  # Claude and Pi discover their model inventory from this workspace at setup
+  # time. Do not pin ANTHROPIC_MODEL or PI_MODEL here: a static value collapses
+  # Claude's picker and can select a model the app SP cannot query.
   - name: GEMINI_MODEL
     value: system.ai.gemini-3-flash
   # The setup script discovers system.ai models served via the Responses API

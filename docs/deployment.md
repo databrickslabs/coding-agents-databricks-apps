@@ -20,7 +20,7 @@ The app pulls the code directly from Git. To update later, just re-deploy — it
 
 > **Note:** On first startup, the app automatically removes the template's `.git` history and reinitializes a clean, remote-free git repo. This prevents accidental pushes back to the template repo from the in-browser terminal.
 
-> **Optional (Highly Recommended):** If you use [Databricks AI Gateway](https://docs.databricks.com/aws/en/ai-gateway/), also add `DATABRICKS_GATEWAY_HOST` as a secret or environment variable. Otherwise the app falls back to direct model serving endpoints.
+> **AI Gateway setup:** CLI deployment targets automatically discover READY Foundation Model chat endpoints and attach them to the app with `CAN_QUERY`. This is required because Gateway visibility and invocation are identity-scoped; a model visible to the deployer may otherwise return a masked 404 to the app service principal. Set `AUTO_CONFIGURE_GATEWAY=false` only when permissions are managed externally.
 
 ## Alternative: Deploy with CLI
 
@@ -75,8 +75,8 @@ make configure-git APP_NAME=coda-04 PROFILE=<profile>
 gh auth token | make configure-git-credential APP_NAME=coda-04 PROFILE=<profile>
 
 # 3. Deploy from a ref (branch | tag | commit)
-make deploy-git   APP_NAME=coda-04 PROFILE=<profile> GIT_REF=main
-make redeploy-git APP_NAME=coda-04 PROFILE=<profile> GIT_REF=main   # + (re)grant Omnigent IAM
+make deploy-git   APP_NAME=coda-04 PROFILE=<profile> GIT_REF=main # refresh Gateway CAN_QUERY resources
+make redeploy-git APP_NAME=coda-04 PROFILE=<profile> GIT_REF=main # + (re)grant Omnigent IAM
 ```
 
 Overridable vars: `GIT_URL`, `GIT_PROVIDER` (`gitHub`, `gitLab`, …), `GIT_REF`,
