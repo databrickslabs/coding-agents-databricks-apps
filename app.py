@@ -229,7 +229,21 @@ def _update_step(step_id, **kwargs):
 
 def _get_setup_state_snapshot():
     with setup_lock:
-        return copy.deepcopy(setup_state)
+        snapshot = copy.deepcopy(setup_state)
+    warnings = []
+    agents_need_gateway = any(
+        os.environ.get(name, "true").strip().lower() not in ("false", "0", "no")
+        for name in ("ENABLE_CLAUDE", "ENABLE_PI")
+    )
+    if agents_need_gateway and not os.environ.get("CODA_GATEWAY_MODEL_CATALOG", "").strip():
+        warnings.append(
+            "AI Gateway model access is not provisioned for this app. Deploy with "
+            "the repository Make targets, or run `make configure-gateway-resources "
+            "PROFILE=<profile> APP_NAME=<app>` before redeploying. App resources "
+            "alone do not grant Unity model-service EXECUTE."
+        )
+    snapshot["warnings"] = warnings
+    return snapshot
 
 
 # Single-user security: only the token owner can access the terminal
@@ -1953,26 +1967,62 @@ def omnigent_host_lease():
     from omnigents_host import acquire_lease
 
     ok, lease = acquire_lease(owner, lease_id)
-    return jsonify(lease), (200 if ok else 409)
+    # The caller needs only the generation fence. Owner identity and lease
+    # timestamps remain process-internal and never cross the control API.
+    return jsonify({"lease_id": lease.get("lease_id"), "acquired": ok}), (200 if ok else 409)
+
+
+def _repository_workspace_args(data):
+    """Return optional protocol-v2 repository metadata from a control request."""
+    fields = ("repo_url", "repo_branch", "repo_name")
+    requested = any(data.get(field) is not None for field in fields)
+    if requested and data.get("workspace_protocol_version") != 2:
+        raise ValueError("repository workspace protocol version 2 is required")
+    return requested, {field: data.get(field) for field in fields}
 
 
 @app.route("/api/omnigent-host/workspaces", methods=["POST"])
 def omnigent_host_workspace():
-    """Allocate a distinct session directory under the active lease."""
+    """Allocate, materialize, or release a distinct session workspace."""
     if not _managed_omnigent_enabled():
         return jsonify({"error": "Managed OmniGENT mode is disabled"}), 404
     if not _omnigent_server_request_authorized():
         return jsonify({"error": "Forbidden"}), 403
     data = request.get_json(silent=True) or {}
-    from omnigents_host import allocate_workspace
+    from omnigents_host import (
+        WorkspaceAllocationError,
+        allocate_workspace,
+        release_workspace,
+    )
 
+    lease_id = str(data.get("lease_id") or "")
+    session_id = str(data.get("session_id") or "")
     try:
+        if data.get("action") == "release":
+            released = release_workspace(lease_id, session_id)
+            return jsonify(
+                {
+                    "released": released,
+                    "workspace_protocol_version": 2,
+                }
+            )
+        repository_requested, repository = _repository_workspace_args(data)
         workspace = allocate_workspace(
-            str(data.get("lease_id") or ""), str(data.get("session_id") or "")
+            lease_id,
+            session_id,
+            **repository,
         )
+    except WorkspaceAllocationError as exc:
+        return jsonify({"error": str(exc)}), exc.status_code
     except ValueError as exc:
-        return jsonify({"error": str(exc)}), 409
-    return jsonify({"workspace": workspace})
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(
+        {
+            "workspace": workspace,
+            "workspace_protocol_version": 2,
+            "repository_materialized": repository_requested,
+        }
+    )
 
 
 @app.route("/api/omnigent-host/runner-log/<session_id>")
@@ -1980,7 +2030,7 @@ def omnigent_host_runner_log(session_id):
     """Return a bounded runner log tail to the configured server SP."""
     if not _managed_omnigent_enabled():
         return jsonify({"error": "Managed OmniGENT mode is disabled"}), 404
-    if not _omnigent_server_request_authorized() and get_request_user() != app_owner:
+    if not _omnigent_server_request_authorized():
         return jsonify({"error": "Forbidden"}), 403
     from omnigents_host import runner_log_tail
 
@@ -2005,54 +2055,87 @@ def omnigent_host_connect():
     if configured_server_url and server_url.rstrip("/") != configured_server_url.rstrip("/"):
         return jsonify({"error": "server_url does not match configured Omnigent server"}), 409
 
-    from omnigents_host import active_lease, connect_host
+    from omnigents_host import (
+        WorkspaceAllocationError,
+        active_lease,
+        allocate_workspace,
+        connect_host,
+        release_workspace,
+    )
 
+    lease_id = str(data.get("lease_id") or "")
     lease = active_lease()
-    if lease is None or lease.get("lease_id") != data.get("lease_id"):
+    if lease is None or lease.get("lease_id") != lease_id:
         return jsonify({"error": "stale or missing lease"}), 409
     host_config = data.get("host_config")
     if host_config is not None and not isinstance(host_config, dict):
         return jsonify({"error": "host_config must be an object"}), 400
-    ok, status = connect_host(
-        server_url,
-        _omnigent_sp_creds,
-        host_token=(data.get("host_token") or None),
-        host_id=(data.get("host_id") or None),
-        host_name=(data.get("host_name") or None),
-        host_config=host_config,
-        lease_id=(data.get("lease_id") or None),
-    )
+    allocated_session_id = None
+    try:
+        repository_requested, repository = _repository_workspace_args(data)
+        session_id = str(data.get("session_id") or "")
+        if repository_requested and not session_id:
+            return jsonify({"error": "repository workspace protocol upgrade required"}), 426
+        if session_id:
+            workspace = allocate_workspace(
+                lease_id,
+                session_id,
+                **repository,
+            )
+            allocated_session_id = session_id
+        else:
+            # Older servers cannot identify an isolated opening workspace.
+            workspace = os.environ.get("HOME", "/app/python/source_code")
+        ok, status = connect_host(
+            server_url,
+            _omnigent_sp_creds,
+            host_token=(data.get("host_token") or None),
+            host_id=(data.get("host_id") or None),
+            host_name=(data.get("host_name") or None),
+            host_config=host_config,
+            lease_id=(data.get("lease_id") or None),
+        )
+    except WorkspaceAllocationError as exc:
+        return jsonify({"error": str(exc)}), exc.status_code
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception:
+        if allocated_session_id is not None:
+            try:
+                release_workspace(lease_id, allocated_session_id)
+            except WorkspaceAllocationError:
+                pass
+        raise
     if not ok:
+        if allocated_session_id is not None:
+            try:
+                release_workspace(lease_id, allocated_session_id)
+            except WorkspaceAllocationError:
+                pass
         code = 409 if status.get("last_error") == "host already running" else 400
-        return jsonify(status), code
-    status["workspace"] = os.environ.get("HOME", "/app/python/source_code")
+        return jsonify({"error": "host connection failed"}), code
+    status["workspace"] = workspace
+    status["workspace_protocol_version"] = 2
+    status["repository_materialized"] = repository_requested
     return jsonify(status), 202
 
 
 @app.route("/api/omnigent-host/disconnect", methods=["POST"])
 def omnigent_host_disconnect():
-    """Stop an external host or release the matching managed lease."""
+    """Release and scrub only the matching managed lease generation."""
     if not _managed_omnigent_enabled():
         return jsonify({"error": "Managed OmniGENT mode is disabled"}), 404
     if not _omnigent_server_request_authorized():
         return jsonify({"error": "Forbidden"}), 403
     data = request.get_json(silent=True) or {}
     lease_id = str(data.get("lease_id") or "")
-    from omnigents_host import (
-        _scrub_session_workspaces,
-        active_lease,
-        disconnect_host,
-        release_lease,
-    )
+    from omnigents_host import release_managed_lease
 
-    lease = active_lease()
-    if lease is None or lease.get("lease_id") != lease_id:
-        return jsonify({"released": False, "stale": True})
-    status = disconnect_host()
-    if data.get("scrub"):
-        _scrub_session_workspaces()
-    release_lease(lease_id)
-    status["released"] = True
+    released, status = release_managed_lease(lease_id)
+    if status.get("stale"):
+        return jsonify(status)
+    if not released:
+        return jsonify(status), 503
     return jsonify(status)
 
 
@@ -2596,6 +2679,13 @@ def close_session():
 def initialize_app(local_dev=False):
     """One-time init: detect owner, start cleanup thread."""
     global app_owner, _omnigent_sp_creds, _sp_token_broker_server
+
+    if not os.environ.get("CODA_GATEWAY_MODEL_CATALOG", "").strip():
+        logger.warning(
+            "AI Gateway model access is not provisioned: deploy with the repository "
+            "Make targets or run `make configure-gateway-resources PROFILE=<profile> "
+            "APP_NAME=<app>`; Apps YAML alone cannot grant model-service EXECUTE"
+        )
 
     global _sp_token_broker_atexit_registered
     if not _sp_token_broker_atexit_registered:

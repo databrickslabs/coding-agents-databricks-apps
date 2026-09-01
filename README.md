@@ -263,10 +263,10 @@ The managed endpoints require the configured Omnigent server SP and return `404`
 1. Click [**Use this template**](https://github.com/datasciencemonkey/coding-agents-databricks-apps/generate) to create your own repo
 2. Go to **Databricks → Apps → Create App**
 3. Choose **Custom App** and connect your new repo
-4. Deploy
-5. Open the app — paste a short-lived PAT when prompted on first terminal session
+4. From your checkout, run `make configure-gateway-resources PROFILE=<profile> APP_NAME=<app>`
+5. Deploy, then open the app and paste a short-lived PAT if prompted
 
-That's it. No secrets to configure, no pre-deployment setup.
+> **Required:** a plain Apps UI deployment cannot grant Unity AI Gateway v3 model-service privileges. The configuration target grants the app SP `USE CATALOG`, `USE SCHEMA`, and least-privilege `EXECUTE`; without it Pi and Claude report `404 '<model>' does not exist`. The repository's normal `make deploy`, `make redeploy`, and `make deploy-git` workflows run it automatically.
 
 [→ Full deployment guide](docs/deployment.md) — environment variables, gateway config, and advanced options.
 
