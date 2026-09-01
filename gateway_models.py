@@ -374,6 +374,20 @@ def discover_model_catalog(workspace: str, token: str) -> dict[str, Any]:
     """
     ids = list_model_services(workspace, token)
     metadata = fetch_foundation_models(workspace, token)
+    # Match ucode's Gateway-only union: an app SP may have CAN_QUERY through
+    # attached serving-endpoint resources while lacking UC browse permission.
+    # In that case model-services is empty, but the app-SP-visible Foundation
+    # Models catalogue is authoritative. Project endpoint IDs back to the
+    # routable system.ai aliases used in request bodies.
+    gateway_ids = {
+        "system.ai." + canonical
+        for canonical, entry in metadata.items()
+        if entry.get("gateway_v2") is True
+        and isinstance(entry.get("id"), str)
+        and entry["id"].startswith("databricks-")
+        and not any(marker in canonical for marker in NON_CHAT_MARKERS)
+    }
+    ids = sorted(set(ids) | gateway_ids)
     # Every served version of each offered family, newest first — not just the
     # newest per family. A picker that lists one model per family cannot switch
     # to an older opus the workspace still serves, which is the whole point of
