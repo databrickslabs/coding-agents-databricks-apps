@@ -16,6 +16,7 @@ from collections.abc import Iterable
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import ResourceAlreadyExists
 from databricks.sdk.service.apps import App, AppResource
+from databricks.sdk.service.catalog import PermissionsChange, Privilege
 
 _RESOURCE_PREFIX = "coda-gw-"
 _CATALOG_RESOURCE = "gateway-model-catalog"
@@ -102,6 +103,25 @@ def configure(profile: str, app_name: str) -> list[str]:
     except ResourceAlreadyExists:
         pass
     model_ids = [endpoint_model_id(name) for name in endpoint_names]
+    principal = app.service_principal_client_id
+    if not principal:
+        raise RuntimeError(f"app {app_name} has no service principal client ID")
+    w.grants.update(
+        "catalog",
+        "system",
+        changes=[PermissionsChange(principal=principal, add=[Privilege.USE_CATALOG])],
+    )
+    w.grants.update(
+        "schema",
+        "system.ai",
+        changes=[PermissionsChange(principal=principal, add=[Privilege.USE_SCHEMA])],
+    )
+    for model_id in model_ids:
+        w.grants.update(
+            "model_service",
+            model_id,
+            changes=[PermissionsChange(principal=principal, add=[Privilege.EXECUTE])],
+        )
     w.secrets.put_secret(
         _CATALOG_SCOPE,
         catalog_secret_key,
@@ -121,7 +141,10 @@ def main() -> None:
     parser.add_argument("--app", required=True)
     args = parser.parse_args()
     endpoints = configure(args.profile, args.app)
-    print(f"Attached {len(endpoints)} READY chat endpoints to {args.app} with CAN_QUERY:")
+    print(
+        f"Configured {len(endpoints)} READY chat models for {args.app} "
+        "(UC EXECUTE + legacy CAN_QUERY):"
+    )
     for endpoint in endpoints:
         print(f"  {endpoint}")
 
