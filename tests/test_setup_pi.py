@@ -1,9 +1,9 @@
 """Tests for setup_pi.py — verify the Pi models.json config is written correctly.
 
 Runs the real setup_pi.py as a subprocess against a fake HOME. A fake `pi`
-binary is pre-seeded so the npm install is skipped. Model-services discovery
-fails closed against the fake workspace, so only the requested system.ai model
-is configured and the write path remains deterministic without inference.
+binary is pre-seeded so the npm install is skipped. A sitecustomize fixture
+provides a deterministic catalogue; production fails closed when discovery is
+empty rather than writing an invalid fallback model.
 """
 
 import json
@@ -30,11 +30,18 @@ def _seed_fake_pi_binary(home: Path):
 
 
 def run_setup_pi(tmp_path, env_overrides=None):
+    (tmp_path / "sitecustomize.py").write_text(
+        "import gateway_models\n"
+        "gateway_models.discover_model_catalog = lambda *_a, **_k: {"
+        "'anthropic':['system.ai.claude-sonnet-5','system.ai.claude-opus-5'],"
+        "'anthropic_specs':[], 'openai':[], 'gemini':[], 'oss':[], 'oss_specs':[]}\n"
+    )
     env = {
         "HOME": str(tmp_path),
         "DATABRICKS_HOST": "https://workspace.example.test",
         "DATABRICKS_TOKEN": "dapi_test_token",
         "PATH": os.environ.get("PATH", ""),
+        "PYTHONPATH": os.pathsep.join((str(tmp_path), str(SETUP_PI.parent))),
         "_GATEWAY_RESOLVED": "",
     }
     if env_overrides:
@@ -69,15 +76,21 @@ class TestSetupPiConfig:
         assert provider["baseUrl"] == "https://workspace.example.test/ai-gateway/anthropic"
         assert ".ai-gateway." not in provider["baseUrl"]
         assert provider["compat"] == {"supportsEagerToolInputStreaming": False}
-        assert [m["id"] for m in provider["models"]] == ["system.ai.claude-opus-5"]
+        assert [m["id"] for m in provider["models"]] == [
+            "system.ai.claude-sonnet-5",
+            "system.ai.claude-opus-5",
+        ]
         # Limits and thinking come from the shared Claude version policy: opus 5
         # is a >= 4.6 tier, so 1M/128k with adaptive thinking. Without
         # forceAdaptiveThinking Pi sends `thinking: {type: "enabled"}` and the
         # endpoint answers 400 "thinking.type.enabled is not supported".
-        assert provider["models"][0]["reasoning"] is True
-        assert provider["models"][0]["compat"] == {"forceAdaptiveThinking": True}
-        assert provider["models"][0]["contextWindow"] == 1_000_000
-        assert provider["models"][0]["maxTokens"] == 128_000
+        opus = {model["id"]: model for model in provider["models"]}[
+            "system.ai.claude-opus-5"
+        ]
+        assert opus["reasoning"] is True
+        assert opus["compat"] == {"forceAdaptiveThinking": True}
+        assert opus["contextWindow"] == 1_000_000
+        assert opus["maxTokens"] == 128_000
 
     def test_models_json_is_chmod_600(self, tmp_path):
         _seed_fake_pi_binary(tmp_path)
