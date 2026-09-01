@@ -221,7 +221,7 @@ redeploy-git: grant-omnigent-host deploy-git ## (Re)grant Omnigent host IAM, the
 
 AUTO_CONFIGURE_GATEWAY ?= true
 
-configure-gateway-resources: ## Grant the app SP CAN_QUERY on READY Foundation Model chat endpoints
+configure-gateway-resources: ## Grant app SP UC EXECUTE (v3) + CAN_QUERY (legacy) on READY chat models
 	@if [ "$(AUTO_CONFIGURE_GATEWAY)" = "true" ]; then \
 		echo "==> Configuring AI Gateway model resources for '$(APP_NAME)'..."; \
 		python3 configure_gateway_resources.py --profile $(PROFILE) --app $(APP_NAME); \
