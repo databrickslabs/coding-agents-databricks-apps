@@ -9,12 +9,20 @@ preserved, embeddings are excluded, and repeated runs are idempotent.
 from __future__ import annotations
 
 import argparse
+import hashlib
 from collections.abc import Iterable
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.apps import App, AppResource
 
-_RESOURCE_PREFIX = "gateway-model-"
+_RESOURCE_PREFIX = "coda-gw-"
+
+
+def gateway_resource_name(endpoint_name: str) -> str:
+    """Return a deterministic Apps resource name within the 30-char limit."""
+    slug = endpoint_name.removeprefix("databricks-").replace("_", "-")
+    digest = hashlib.sha256(endpoint_name.encode()).hexdigest()[:8]
+    return f"{_RESOURCE_PREFIX}{slug[:13]}-{digest}"
 
 
 def discover_gateway_endpoint_names(endpoints: Iterable[object]) -> list[str]:
@@ -50,7 +58,7 @@ def merge_resources(current: list[dict], endpoint_names: list[str]) -> list[AppR
         and not resource["name"].startswith(_RESOURCE_PREFIX)
     }
     for endpoint_name in endpoint_names:
-        resource_name = _RESOURCE_PREFIX + endpoint_name.removeprefix("databricks-")
+        resource_name = gateway_resource_name(endpoint_name)
         by_name[resource_name] = {
             "name": resource_name,
             "description": "ucode-compatible AI Gateway model access",

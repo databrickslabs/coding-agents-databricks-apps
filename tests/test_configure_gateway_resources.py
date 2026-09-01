@@ -1,4 +1,8 @@
-from configure_gateway_resources import discover_gateway_endpoint_names, merge_resources
+from configure_gateway_resources import (
+    discover_gateway_endpoint_names,
+    gateway_resource_name,
+    merge_resources,
+)
 
 
 def _endpoint(name, *, task="llm/v1/chat", ready="READY", entity=None):
@@ -29,11 +33,18 @@ def test_discovers_only_ready_foundation_model_chat_endpoints():
     ]
 
 
+def test_gateway_resource_names_are_stable_and_fit_apps_limit():
+    name = gateway_resource_name("databricks-claude-sonnet-5")
+    assert name == gateway_resource_name("databricks-claude-sonnet-5")
+    assert len(name) <= 30
+    assert name != gateway_resource_name("databricks-claude-sonnet-4-5")
+
+
 def test_merge_preserves_unrelated_resources_and_replaces_managed_set():
     current = [
         {"name": "challenge", "secret": {"scope": "s", "key": "k", "permission": "READ"}},
         {
-            "name": "gateway-model-stale",
+            "name": "coda-gw-stale",
             "serving_endpoint": {"name": "databricks-stale", "permission": "CAN_QUERY"},
         },
     ]
@@ -44,8 +55,9 @@ def test_merge_preserves_unrelated_resources_and_replaces_managed_set():
     by_name = {resource["name"]: resource for resource in merged}
 
     assert "challenge" in by_name
-    assert "gateway-model-stale" not in by_name
-    assert by_name["gateway-model-claude-sonnet-5"]["serving_endpoint"] == {
+    assert "coda-gw-stale" not in by_name
+    resource_name = gateway_resource_name("databricks-claude-sonnet-5")
+    assert by_name[resource_name]["serving_endpoint"] == {
         "name": "databricks-claude-sonnet-5",
         "permission": "CAN_QUERY",
     }
