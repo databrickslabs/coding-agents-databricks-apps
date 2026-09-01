@@ -29,6 +29,17 @@ def _make_client(app_module):
 
 
 # ---------------------------------------------------------------------------
+def test_managed_control_is_disabled_by_default(monkeypatch):
+    """A stale server-SP resource cannot enable managed control on its own."""
+    app_module = _get_app_module()
+    monkeypatch.delenv("CODA_OMNIGENT_MODE", raising=False)
+    monkeypatch.setenv("OMNIGENT_SERVER_SP_CLIENT_ID", "server-sp")
+
+    with app_module.app.test_request_context():
+        assert app_module._managed_omnigent_enabled() is False
+        assert app_module._omnigent_server_request_authorized() is False
+
+
 def test_connect_endpoint_requires_allowlisted_server_sp(monkeypatch):
     """The M2M host-connect route accepts only the configured server SP."""
     import base64
@@ -39,6 +50,7 @@ def test_connect_endpoint_requires_allowlisted_server_sp(monkeypatch):
         json.dumps({"sub": "server-sp"}).encode()
     ).decode().rstrip("=")
     token = f"header.{payload}.signature"
+    monkeypatch.setenv("CODA_OMNIGENT_MODE", "managed")
     monkeypatch.setenv("OMNIGENT_SERVER_SP_CLIENT_ID", "server-sp")
 
     with app_module.app.test_request_context(

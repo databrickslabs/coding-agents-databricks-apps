@@ -2,9 +2,12 @@ command:
   - gunicorn
   - app:app
 env:
-  # M2M caller allowed to use /api/omnigent-host/connect.
-  - name: OMNIGENT_SERVER_SP_CLIENT_ID
-    valueFrom: omnigent-server-client-id
+  # Managed OmniGENT host leasing is opt-in. To enable it, set
+  # CODA_OMNIGENT_MODE=managed and attach the omnigent-server-client-id
+  # resource, then uncomment this entry. Persistent host mode remains the
+  # default and does not expose the managed control plane.
+  # - name: OMNIGENT_SERVER_SP_CLIENT_ID
+  #   valueFrom: omnigent-server-client-id
   - name: HOME
     value: /app/python/source_code
   - name: ANTHROPIC_MODEL
@@ -139,8 +142,13 @@ env:
   # Enable CODA_DISABLE_OWNER_CHECK only in a dedicated, approved workshop overlay.
 
   # ─── Omnigent host integration ────────────────────────────────────────────
+  # Host mode defaults to "external": existing deployments register one
+  # persistent host at boot when the resources below are attached. Managed
+  # leasing, workspace isolation, cleanup and server control APIs are enabled
+  # only when an approved deployment explicitly changes this to "managed" and
+  # configures OMNIGENT_SERVER_SP_CLIENT_ID above.
   - name: CODA_OMNIGENT_MODE
-    value: "managed"
+    value: "external"
   # Register this app as a persistent Omnigent host on boot:
   # initialize_app() -> start_host() dials the server as the app SP, so the
   # deployed app self-registers as an always-on host on every restart/redeploy.

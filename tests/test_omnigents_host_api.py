@@ -11,8 +11,9 @@ def _import_app():
         import omnigents_host
 
         omnigents_host.reset_for_tests()
-        # Endpoint behavior is exercised here; M2M authorization has dedicated
-        # coverage in test_auth_enforcement.py.
+        # Managed endpoint behavior is exercised here; feature gating and M2M
+        # authorization have dedicated coverage in test_auth_enforcement.py.
+        module._managed_omnigent_enabled = lambda: True
         module._omnigent_server_request_authorized = lambda: True
         return module
 
@@ -45,6 +46,40 @@ def test_browser_status_omits_logs_and_error_details(monkeypatch):
         "running": True,
         "server_url": "https://omnigent.example.com",
         "stage": "running",
+    }
+
+
+def test_managed_endpoints_are_unavailable_in_external_mode(monkeypatch):
+    app_module = _import_app()
+    monkeypatch.setattr(app_module, "_managed_omnigent_enabled", lambda: False)
+
+    with app_module.app.test_client() as client:
+        response = client.post("/api/omnigent-host/lease", json={})
+
+    assert response.status_code == 404
+
+
+def test_external_mode_preserves_runtime_connect(monkeypatch):
+    app_module = _import_app()
+    monkeypatch.setattr(app_module, "_managed_omnigent_enabled", lambda: False)
+    app_module._omnigent_sp_creds = {"client_id": "c"}
+    called = {}
+
+    def fake_connect(url, sp_creds):
+        called.update(url=url, sp_creds=sp_creds)
+        return True, {"stage": "starting"}
+
+    monkeypatch.setattr("omnigents_host.connect_host", fake_connect)
+    with app_module.app.test_client() as client:
+        response = client.post(
+            "/api/omnigent-host/connect",
+            json={"server_url": "https://omnigent.example.com"},
+        )
+
+    assert response.status_code == 200
+    assert called == {
+        "url": "https://omnigent.example.com",
+        "sp_creds": app_module._omnigent_sp_creds,
     }
 
 

@@ -1879,19 +1879,27 @@ def omnigents_status():
 
 @app.route("/api/omnigent-host/status")
 def omnigent_host_status():
-    """Report runtime Omnigent host state to the configured server SP."""
-    if not _omnigent_server_request_authorized():
+    """Report runtime host state; require server-SP auth in managed mode."""
+    if _managed_omnigent_enabled() and not _omnigent_server_request_authorized():
         return jsonify({"error": "Forbidden"}), 403
     from omnigents_host import get_status
     return jsonify(get_status())
+
+
+def _managed_omnigent_enabled() -> bool:
+    """Return whether server-managed host leasing is explicitly enabled."""
+    return os.environ.get("CODA_OMNIGENT_MODE", "external").strip().lower() == "managed"
 
 
 def _omnigent_server_request_authorized() -> bool:
     """Authorize the configured Omnigent server service principal.
 
     Databricks Apps validates the forwarded bearer before it reaches Flask;
-    this check narrows the M2M endpoint to the configured server SP.
+    this check narrows the M2M endpoint to the configured server SP. Managed
+    control is default-off even if a stale server-SP resource remains attached.
     """
+    if not _managed_omnigent_enabled():
+        return False
     expected = os.environ.get("OMNIGENT_SERVER_SP_CLIENT_ID", "").strip()
     if not expected:
         return False
@@ -1918,6 +1926,8 @@ def _omnigent_server_request_authorized() -> bool:
 @app.route("/api/omnigent-host/lease", methods=["POST"])
 def omnigent_host_lease():
     """Acquire or adopt the single user-scoped managed lease."""
+    if not _managed_omnigent_enabled():
+        return jsonify({"error": "Managed OmniGENT mode is disabled"}), 404
     if not _omnigent_server_request_authorized():
         return jsonify({"error": "Forbidden"}), 403
     data = request.get_json(silent=True) or {}
@@ -1938,6 +1948,8 @@ def omnigent_host_lease():
 @app.route("/api/omnigent-host/workspaces", methods=["POST"])
 def omnigent_host_workspace():
     """Allocate a distinct session directory under the active lease."""
+    if not _managed_omnigent_enabled():
+        return jsonify({"error": "Managed OmniGENT mode is disabled"}), 404
     if not _omnigent_server_request_authorized():
         return jsonify({"error": "Forbidden"}), 403
     data = request.get_json(silent=True) or {}
@@ -1955,6 +1967,8 @@ def omnigent_host_workspace():
 @app.route("/api/omnigent-host/runner-log/<session_id>")
 def omnigent_host_runner_log(session_id):
     """Return a bounded runner log tail to the configured server SP."""
+    if not _managed_omnigent_enabled():
+        return jsonify({"error": "Managed OmniGENT mode is disabled"}), 404
     if not _omnigent_server_request_authorized() and get_request_user() != app_owner:
         return jsonify({"error": "Forbidden"}), 403
     from omnigents_host import runner_log_tail
@@ -1967,13 +1981,21 @@ def omnigent_host_runner_log(session_id):
 
 @app.route("/api/omnigent-host/connect", methods=["POST"])
 def omnigent_host_connect():
-    """Start a runtime Omnigent host tunnel for a supplied server URL."""
-    if not _omnigent_server_request_authorized():
-        return jsonify({"error": "Forbidden"}), 403
+    """Start a runtime host tunnel, with leases only in managed mode."""
     data = request.get_json(silent=True) or {}
     server_url = (data.get("server_url") or "").strip()
     if not server_url:
         return jsonify({"error": "server_url required"}), 400
+    if not _managed_omnigent_enabled():
+        from omnigents_host import connect_host
+
+        ok, status = connect_host(server_url, _omnigent_sp_creds)
+        if not ok:
+            code = 409 if status.get("last_error") == "host already running" else 400
+            return jsonify(status), code
+        return jsonify(status)
+    if not _omnigent_server_request_authorized():
+        return jsonify({"error": "Forbidden"}), 403
     configured_server_url = os.environ.get("OMNIGENTS_SERVER_URL", "").strip()
     if configured_server_url and server_url.rstrip("/") != configured_server_url.rstrip("/"):
         return jsonify({"error": "server_url does not match configured Omnigent server"}), 409
@@ -2004,7 +2026,11 @@ def omnigent_host_connect():
 
 @app.route("/api/omnigent-host/disconnect", methods=["POST"])
 def omnigent_host_disconnect():
-    """Release and scrub only the matching managed lease generation."""
+    """Stop an external host or release the matching managed lease."""
+    if not _managed_omnigent_enabled():
+        from omnigents_host import disconnect_host
+
+        return jsonify(disconnect_host())
     if not _omnigent_server_request_authorized():
         return jsonify({"error": "Forbidden"}), 403
     data = request.get_json(silent=True) or {}
@@ -2585,7 +2611,8 @@ def initialize_app(local_dev=False):
     # No-op / returns None when disabled or creds absent. See omnigents_host.py.
     from omnigents_host import capture_sp_credentials, start_host, start_lease_reaper
     _omnigent_sp_creds = capture_sp_credentials()
-    start_lease_reaper()
+    if _managed_omnigent_enabled():
+        start_lease_reaper()
 
     # Resolve owner: Apps API (app.creator via SP) > PAT (current_user.me)
     app_owner = get_token_owner()
