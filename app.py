@@ -1879,8 +1879,10 @@ def omnigents_status():
 
 @app.route("/api/omnigent-host/status")
 def omnigent_host_status():
-    """Report runtime host state; require server-SP auth in managed mode."""
-    if _managed_omnigent_enabled() and not _omnigent_server_request_authorized():
+    """Report managed runtime host state to the configured server SP."""
+    if not _managed_omnigent_enabled():
+        return jsonify({"error": "Managed OmniGENT mode is disabled"}), 404
+    if not _omnigent_server_request_authorized():
         return jsonify({"error": "Forbidden"}), 403
     from omnigents_host import get_status
     return jsonify(get_status())
@@ -1888,7 +1890,7 @@ def omnigent_host_status():
 
 def _managed_omnigent_enabled() -> bool:
     """Return whether server-managed host leasing is explicitly enabled."""
-    return os.environ.get("CODA_OMNIGENT_MODE", "external").strip().lower() == "managed"
+    return os.environ.get("CODA_OMNIGENT_MODE", "disabled").strip().lower() == "managed"
 
 
 def _omnigent_server_request_authorized() -> bool:
@@ -1987,13 +1989,7 @@ def omnigent_host_connect():
     if not server_url:
         return jsonify({"error": "server_url required"}), 400
     if not _managed_omnigent_enabled():
-        from omnigents_host import connect_host
-
-        ok, status = connect_host(server_url, _omnigent_sp_creds)
-        if not ok:
-            code = 409 if status.get("last_error") == "host already running" else 400
-            return jsonify(status), code
-        return jsonify(status)
+        return jsonify({"error": "Managed OmniGENT mode is disabled"}), 404
     if not _omnigent_server_request_authorized():
         return jsonify({"error": "Forbidden"}), 403
     configured_server_url = os.environ.get("OMNIGENTS_SERVER_URL", "").strip()
@@ -2028,9 +2024,7 @@ def omnigent_host_connect():
 def omnigent_host_disconnect():
     """Stop an external host or release the matching managed lease."""
     if not _managed_omnigent_enabled():
-        from omnigents_host import disconnect_host
-
-        return jsonify(disconnect_host())
+        return jsonify({"error": "Managed OmniGENT mode is disabled"}), 404
     if not _omnigent_server_request_authorized():
         return jsonify({"error": "Forbidden"}), 403
     data = request.get_json(silent=True) or {}

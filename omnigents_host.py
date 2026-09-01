@@ -1461,18 +1461,15 @@ def disconnect_host() -> dict[str, object]:
 
 
 def start_host(sp_creds: dict[str, str] | None) -> None:
-    """Legacy boot-time wrapper around :func:`connect_host`.
+    """Initialise managed mode without registering a persistent boot host.
 
-    Runtime control should call :func:`connect_host` directly. This remains so
-    older app.yaml deployments with ``OMNIGENTS_SERVER_URL`` still behave.
+    The OmniGENT server connects this host only after acquiring a fenced lease.
+    Any value other than the explicit ``managed`` mode leaves integration off.
     """
-    if os.environ.get("CODA_OMNIGENT_MODE", "external").strip().lower() == "managed":
-        _set(stage="idle")
+    if os.environ.get("CODA_OMNIGENT_MODE", "disabled").strip().lower() != "managed":
+        _set(configured=False, running=False, stage="disabled", pid=None)
         return
-    if not omnigents_host_enabled():
-        _set(stage="idle")
-        return
-    connect_host(os.environ["OMNIGENTS_SERVER_URL"], sp_creds)
+    _set(stage="idle")
 
 
 def _sp_bearer(sp_creds: dict[str, str]) -> str:

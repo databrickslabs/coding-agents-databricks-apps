@@ -185,26 +185,26 @@ Tracing setup is skipped gracefully when `APP_OWNER` is not set (e.g., local dev
 
 ## Omnigent Host Integration
 
-CoDA can register itself as a persistent **[Omnigent](https://github.com/omnigent-ai/omnigent) agent host** — an always-on target the Omnigent server can drive coding-agent sessions into. Those sessions run *inside this container* and use the same filesystem as browser terminals. They authenticate to Databricks as the CoDA app service principal, not as the interactive browser user, so their Unity Catalog authority may differ. A deployed CoDA app becomes both an interactive terminal **and** a headless host that survives restarts and redeploys.
+CoDA can act as a managed **[Omnigent](https://github.com/omnigent-ai/omnigent) agent host**. The Omnigent server acquires a fenced lease before connecting the host and launching coding-agent sessions inside the container. Each session receives a separate workspace, and abandoned idle leases are reaped automatically. Runners authenticate to Databricks as the CoDA app service principal, not as the interactive browser user, so their Unity Catalog authority may differ.
 
-**Off by default.** With `OMNIGENTS_SERVER_URL` unset, none of this runs and CoDA behaves exactly as before. This is opt-in, environment-specific wiring — the committed `app.yaml` keeps it commented out.
+**Disabled by default.** Attached resources or `OMNIGENTS_SERVER_URL` alone do not activate the integration. CoDA exposes the managed control plane only when `CODA_OMNIGENT_MODE=managed`; persistent boot-host registration is not supported.
 
 ### Turning it on
 
-Set three variables in your deployed `app.yaml` (see `app.yaml.workshop` for a ready-to-copy overlay template):
+Set managed mode and configure the server identity and host artifacts through app resources (the `attach-omnigent-resources` target attaches all three):
 
 ```yaml
 # app.yaml
 env:
-  # The Omnigent server this app registers against on boot.
+  - name: CODA_OMNIGENT_MODE
+    value: "managed"
+  # Client ID of the only Omnigent server SP allowed to control this host.
+  - name: OMNIGENT_SERVER_SP_CLIENT_ID
+    valueFrom: omnigent-server-client-id
   - name: OMNIGENTS_SERVER_URL
-    value: "https://<your-omnigent-app>.<region>.databricksapps.com"
-  # UC Volume holding the omnigent host wheels (app SP needs READ_VOLUME).
+    valueFrom: omnigent-server-url
   - name: OMNIGENTS_WHEEL_SPEC
-    value: "/Volumes/<catalog>/<schema>/artifacts/wheels"
-  # Optional: force-reinstall the host CLI on boot while rolling out a new wheel.
-  - name: OMNIGENTS_FORCE_REINSTALL
-    value: "1"
+    valueFrom: omnigent-wheels
 ```
 
 Before deploying, grant the CoDA app service principal `CAN_USE` on the
@@ -216,7 +216,7 @@ the complete prerequisite set:
 make grant-omnigent-host PROFILE=<profile> APP_NAME=<coda-app>
 ```
 
-On boot, `initialize_app()` calls `start_host()`, which — only when `OMNIGENTS_SERVER_URL` is set — installs the `omnigents host` CLI from the wheel volume and launches it as a supervised background process that dials the server over an outbound WSS tunnel.
+On boot, CoDA captures its service-principal credentials and waits in `idle`. The authorised Omnigent server acquires a lease and then asks CoDA to launch the supervised outbound WSS host tunnel. A stale lease generation cannot connect, disconnect, or scrub a newer allocation.
 
 ### Two credentials, two jobs
 
@@ -238,15 +238,17 @@ The non-obvious part of this design is that the host uses **two separate credent
 
 ### Runtime controls
 
-Beyond boot registration, the host can be driven at runtime:
+The managed endpoints require the configured Omnigent server SP and return `404` while managed mode is disabled:
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/api/omnigents-status` | GET | Host-integration state (FR-9 observability) |
-| `/api/omnigent-host/status` | GET | Current runtime host state |
-| `/api/omnigent-host/connect` | POST | Start a host tunnel for a supplied `server_url` |
-| `/api/omnigent-host/disconnect` | POST | Stop the active host tunnel |
-| `/api/omnigent-host/share` | POST | Share the SP-owned host with a connecting user |
+| `/api/omnigents-status` | GET | Sanitised browser-visible integration state |
+| `/api/omnigent-host/status` | GET | Current managed-host state |
+| `/api/omnigent-host/lease` | POST | Acquire or adopt the fenced user lease |
+| `/api/omnigent-host/workspaces` | POST | Allocate a session-specific workspace |
+| `/api/omnigent-host/connect` | POST | Connect the leased host tunnel |
+| `/api/omnigent-host/disconnect` | POST | Release and optionally scrub the matching lease |
+| `/api/omnigent-host/runner-log/<session-id>` | GET | Return a bounded runner diagnostic tail |
 
 ### Related
 

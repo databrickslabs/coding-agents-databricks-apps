@@ -4,8 +4,7 @@ command:
 env:
   # Managed OmniGENT host leasing is opt-in. To enable it, set
   # CODA_OMNIGENT_MODE=managed and attach the omnigent-server-client-id
-  # resource, then uncomment this entry. Persistent host mode remains the
-  # default and does not expose the managed control plane.
+  # resource, then uncomment this entry. Integration is disabled by default.
   # - name: OMNIGENT_SERVER_SP_CLIENT_ID
   #   valueFrom: omnigent-server-client-id
   - name: HOME
@@ -142,24 +141,15 @@ env:
   # Enable CODA_DISABLE_OWNER_CHECK only in a dedicated, approved workshop overlay.
 
   # ─── Omnigent host integration ────────────────────────────────────────────
-  # Host mode defaults to "external": existing deployments register one
-  # persistent host at boot when the resources below are attached. Managed
-  # leasing, workspace isolation, cleanup and server control APIs are enabled
-  # only when an approved deployment explicitly changes this to "managed" and
-  # configures OMNIGENT_SERVER_SP_CLIENT_ID above.
+  # Integration is disabled unless an approved deployment explicitly changes
+  # this to "managed" and configures OMNIGENT_SERVER_SP_CLIENT_ID above.
+  # Managed mode enables fenced leasing, workspace isolation, cleanup and the
+  # server-controlled host APIs; it never registers a persistent boot host.
   - name: CODA_OMNIGENT_MODE
-    value: "external"
-  # Register this app as a persistent Omnigent host on boot:
-  # initialize_app() -> start_host() dials the server as the app SP, so the
-  # deployed app self-registers as an always-on host on every restart/redeploy.
-  #
-  # The host is ON when the two valueFrom resources below are attached to the
-  # app (via `make attach-omnigent-resources` or the UI); it's OFF otherwise —
-  # an unresolved valueFrom yields an empty string and omnigents_host_enabled()
-  # returns False. So the on/off switch is "are the resources attached", not
-  # "did you edit this committed file" — which keeps app.yaml generic and
-  # git-deploy friendly, and satisfies docs/agent-instructions.md §5 (these must
-  # not carry one workspace's values on main).
+    value: "disabled"
+  # The resources below configure managed mode but do not enable it by
+  # themselves. Keeping activation separate prevents stale attached resources
+  # from unexpectedly exposing the managed control plane.
   # See attach_omnigent_resources.sh.
   #
   # OMNIGENTS_SERVER_URL — the Omnigent server app URL for THIS workspace.

@@ -49,7 +49,7 @@ def test_browser_status_omits_logs_and_error_details(monkeypatch):
     }
 
 
-def test_managed_endpoints_are_unavailable_in_external_mode(monkeypatch):
+def test_managed_endpoints_are_unavailable_when_disabled(monkeypatch):
     app_module = _import_app()
     monkeypatch.setattr(app_module, "_managed_omnigent_enabled", lambda: False)
 
@@ -59,28 +59,21 @@ def test_managed_endpoints_are_unavailable_in_external_mode(monkeypatch):
     assert response.status_code == 404
 
 
-def test_external_mode_preserves_runtime_connect(monkeypatch):
+def test_runtime_connect_is_unavailable_when_disabled(monkeypatch):
     app_module = _import_app()
     monkeypatch.setattr(app_module, "_managed_omnigent_enabled", lambda: False)
-    app_module._omnigent_sp_creds = {"client_id": "c"}
-    called = {}
+    monkeypatch.setattr(
+        "omnigents_host.connect_host",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError),
+    )
 
-    def fake_connect(url, sp_creds):
-        called.update(url=url, sp_creds=sp_creds)
-        return True, {"stage": "starting"}
-
-    monkeypatch.setattr("omnigents_host.connect_host", fake_connect)
     with app_module.app.test_client() as client:
         response = client.post(
             "/api/omnigent-host/connect",
             json={"server_url": "https://omnigent.example.com"},
         )
 
-    assert response.status_code == 200
-    assert called == {
-        "url": "https://omnigent.example.com",
-        "sp_creds": app_module._omnigent_sp_creds,
-    }
+    assert response.status_code == 404
 
 
 def test_omnigent_host_status_returns_state(monkeypatch):

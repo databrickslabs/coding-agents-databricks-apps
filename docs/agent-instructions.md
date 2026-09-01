@@ -228,10 +228,13 @@ exist"; stderr swallowed). On workspaces without an Omnigent server, use
 
 ## 5. Omnigent host integration
 
-`OMNIGENTS_SERVER_URL` is the on/off switch — empty/absent means host attach is
-off. Before PRing branch code to `main`, ensure `OMNIGENTS_SERVER_URL`,
-`OMNIGENTS_WHEEL_SPEC`, `OMNIGENTS_FORCE_REINSTALL`, and personal-workspace
-values like `CLAUDE_CODE_OTEL_CATALOG_SCHEMA` are commented out or defaulted off.
+`CODA_OMNIGENT_MODE=managed` is the sole on switch; absent or any other value
+means host integration is disabled. Attached resources alone must never activate
+it, and persistent boot-host registration is unsupported. Before PRing branch
+code to `main`, ensure the mode defaults to `disabled` and that
+`OMNIGENT_SERVER_SP_CLIENT_ID`, `OMNIGENTS_SERVER_URL`, `OMNIGENTS_WHEEL_SPEC`,
+`OMNIGENTS_FORCE_REINSTALL`, and personal-workspace values like
+`CLAUDE_CODE_OTEL_CATALOG_SCHEMA` are commented out or defaulted off.
 
 **Liveness check:** use `GET /api/omnigents-status` on the CoDA app itself
 (`stage=running` + `host_launched=True`). Do **not** use `/v1/hosts` as a health

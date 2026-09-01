@@ -43,15 +43,15 @@ def test_start_host_noop_when_disabled(monkeypatch):
     monkeypatch.setattr(oh.threading, "Thread", _fail("Thread"))
     # Must return cleanly without touching install or threads.
     oh.start_host(sp_creds={"client_id": "x", "client_secret": "y", "host": "h"})
-    assert oh.get_status()["stage"] == "idle"
+    assert oh.get_status()["stage"] == "disabled"
 
 
-def test_start_host_legacy_noop_without_env(monkeypatch):
+def test_start_host_stays_disabled_without_explicit_mode(monkeypatch):
     oh.reset_for_tests()
     monkeypatch.delenv("OMNIGENTS_SERVER_URL", raising=False)
     monkeypatch.setattr(oh, "connect_host", _fail("connect_host"))
     oh.start_host({"client_id": "c", "client_secret": "s", "host": "https://h"})
-    assert oh.get_status()["stage"] == "idle"
+    assert oh.get_status()["stage"] == "disabled"
 
 
 def test_start_host_refuses_without_sp_creds(monkeypatch):
@@ -309,13 +309,22 @@ def test_root_disappearing_during_process_inspection_preserves_lease(monkeypatch
     assert "preserving lease" in caplog.text
 
 
-def test_managed_mode_skips_legacy_boot_registration(monkeypatch) -> None:
+def test_managed_mode_waits_for_a_server_lease(monkeypatch) -> None:
     oh.reset_for_tests()
     monkeypatch.setenv("CODA_OMNIGENT_MODE", "managed")
     monkeypatch.setenv("OMNIGENTS_SERVER_URL", "https://omnigent.example.com")
     monkeypatch.setattr(oh, "connect_host", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError))
     oh.start_host({"client_id": "id"})
     assert oh.get_status()["stage"] == "idle"
+
+
+def test_host_integration_is_disabled_by_default(monkeypatch) -> None:
+    oh.reset_for_tests()
+    monkeypatch.delenv("CODA_OMNIGENT_MODE", raising=False)
+    monkeypatch.setenv("OMNIGENTS_SERVER_URL", "https://omnigent.example.com")
+    monkeypatch.setattr(oh, "connect_host", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError))
+    oh.start_host({"client_id": "id"})
+    assert oh.get_status()["stage"] == "disabled"
 
 
 def test_connect_requires_server_url():
