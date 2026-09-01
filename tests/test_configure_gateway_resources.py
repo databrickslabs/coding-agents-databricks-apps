@@ -1,0 +1,51 @@
+from configure_gateway_resources import discover_gateway_endpoint_names, merge_resources
+
+
+def _endpoint(name, *, task="llm/v1/chat", ready="READY", entity=None):
+    return {
+        "name": name,
+        "task": task,
+        "state": {"ready": ready},
+        "config": {
+            "served_entities": [
+                {"entity_name": entity or f"system.ai.{name}"}
+            ]
+        },
+    }
+
+
+def test_discovers_only_ready_foundation_model_chat_endpoints():
+    endpoints = [
+        _endpoint("databricks-claude-sonnet-5"),
+        _endpoint("databricks-gpt-oss-120b"),
+        _endpoint("databricks-qwen3-embedding", task="llm/v1/embeddings"),
+        _endpoint("databricks-not-ready", ready="NOT_READY"),
+        _endpoint("custom-chat", entity="catalog.schema.model"),
+    ]
+
+    assert discover_gateway_endpoint_names(endpoints) == [
+        "databricks-claude-sonnet-5",
+        "databricks-gpt-oss-120b",
+    ]
+
+
+def test_merge_preserves_unrelated_resources_and_replaces_managed_set():
+    current = [
+        {"name": "challenge", "secret": {"scope": "s", "key": "k", "permission": "READ"}},
+        {
+            "name": "gateway-model-stale",
+            "serving_endpoint": {"name": "databricks-stale", "permission": "CAN_QUERY"},
+        },
+    ]
+
+    merged = [resource.as_dict() for resource in merge_resources(
+        current, ["databricks-claude-sonnet-5"]
+    )]
+    by_name = {resource["name"]: resource for resource in merged}
+
+    assert "challenge" in by_name
+    assert "gateway-model-stale" not in by_name
+    assert by_name["gateway-model-claude-sonnet-5"]["serving_endpoint"] == {
+        "name": "databricks-claude-sonnet-5",
+        "permission": "CAN_QUERY",
+    }

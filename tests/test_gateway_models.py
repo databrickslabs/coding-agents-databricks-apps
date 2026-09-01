@@ -348,7 +348,8 @@ def test_app_yaml_enables_the_default_harnesses():
     default now that compatible endpoints are available; Hermes remains opt-in.
     """
     source = (Path(__file__).parents[1] / "app.yaml").read_text()
-    assert source.count("value: system.ai.claude-sonnet-5") == 2
+    assert "name: ANTHROPIC_MODEL" not in source
+    assert "name: PI_MODEL" not in source
     assert "value: system.ai.gpt-5" in source
     assert "value: system.ai.gemini-3-flash" in source
     assert '- name: ENABLE_CLAUDE\n    value: "true"' in source
@@ -393,10 +394,10 @@ def test_default_model_is_sonnet_not_opus(monkeypatch):
     assert gm.preferred_model("system.ai.claude-opus-5", models) == "system.ai.claude-opus-5"
 
 
-def test_app_yaml_defaults_the_pickers_to_sonnet(monkeypatch):
+def test_app_yaml_does_not_pin_claude_or_pi_picker_models(monkeypatch):
     source = (Path(__file__).parents[1] / "app.yaml").read_text()
-    assert "value: system.ai.claude-sonnet-5" in source
-    assert "value: system.ai.claude-opus-5" not in source
+    assert "name: ANTHROPIC_MODEL" not in source
+    assert "name: PI_MODEL" not in source
     assert 'name: ENABLE_FABLE_MODELS' in source
 
 
@@ -495,7 +496,9 @@ def test_setup_claude_uses_the_workspace_gateway_and_discovered_models():
     assert "pick_in_geo_model" not in source
     assert 'pi_base_urls(databricks_host)["claude"]' in source
     assert "discover_model_catalog" in source
-    assert '"ANTHROPIC_MODEL", "system.ai.claude-sonnet-5"' in source
+    assert 'settings["env"].pop("ANTHROPIC_MODEL", None)' in source
+    assert 'settings["env"]["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] = "1"' in source
+    assert 'settings["env"]["CLAUDE_CODE_USE_GATEWAY"] = "1"' in source
 
 
 def test_family_model_picks_newest_and_falls_back():

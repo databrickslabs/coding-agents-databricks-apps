@@ -79,12 +79,12 @@ help: ## Show this help
 
 # ── Workflows ────────────────────────────────────────
 
-deploy: create-app grant-omnigent-host sync deploy-app ## Full deploy (create app, grant Omnigent host IAM, sync, deploy)
+deploy: create-app configure-gateway-resources grant-omnigent-host sync deploy-app ## Full deploy (create app, attach Gateway models, grant Omnigent IAM, sync, deploy)
 	@echo ""
 	@echo "Deployment complete! App URL:"
 	@databricks apps get $(APP_NAME) --profile $(PROFILE) --output json 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('url','(pending)'))"
 
-redeploy: grant-omnigent-host sync deploy-app ## Redeploy: (re)grant Omnigent host IAM + sync + deploy
+redeploy: configure-gateway-resources grant-omnigent-host sync deploy-app ## Redeploy: refresh Gateway models + Omnigent IAM, sync, deploy
 	@echo ""
 	@echo "Redeployment complete!"
 
@@ -206,7 +206,7 @@ configure-git-credential: ## Add a Git credential to the app SP for private repo
 		&& echo "    Git credential added to SP $$sp_id for '$(APP_NAME)'." \
 		|| echo "    git-credentials create failed (credential may already exist for $(GIT_PROVIDER))."
 
-deploy-git: ## Deploy the app from the configured Git ref ($(GIT_REF_TYPE)=$(GIT_REF))
+deploy-git: configure-gateway-resources ## Attach Gateway models, then deploy from configured Git ref ($(GIT_REF_TYPE)=$(GIT_REF))
 	@echo "==> Deploying '$(APP_NAME)' from Git $(GIT_REF_TYPE)='$(GIT_REF)'..."
 	@databricks apps deploy $(APP_NAME) --profile $(PROFILE) --no-wait \
 		--json '{"git_source":{"$(GIT_REF_TYPE)":"$(GIT_REF)"}}'
@@ -216,6 +216,18 @@ deploy-git: ## Deploy the app from the configured Git ref ($(GIT_REF_TYPE)=$(GIT
 redeploy-git: grant-omnigent-host deploy-git ## (Re)grant Omnigent host IAM, then deploy from Git
 	@echo ""
 	@echo "Git redeployment complete!"
+
+# ── AI Gateway model resources ─────────────────────
+
+AUTO_CONFIGURE_GATEWAY ?= true
+
+configure-gateway-resources: ## Grant the app SP CAN_QUERY on READY Foundation Model chat endpoints
+	@if [ "$(AUTO_CONFIGURE_GATEWAY)" = "true" ]; then \
+		echo "==> Configuring AI Gateway model resources for '$(APP_NAME)'..."; \
+		python3 configure_gateway_resources.py --profile $(PROFILE) --app $(APP_NAME); \
+	else \
+		echo "==> AI Gateway resource configuration disabled (AUTO_CONFIGURE_GATEWAY=$(AUTO_CONFIGURE_GATEWAY))."; \
+	fi
 
 # ── Omnigent host resources ─────────────────────────
 # The generic app.yaml resolves workspace-specific Omnigent values at runtime
