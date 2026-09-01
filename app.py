@@ -301,9 +301,23 @@ def _run_step(step_id, command):
         if result.returncode == 0:
             if step_id == "dbcli" and os.environ.get(BROKER_URL_ENV):
                 _ensure_broker_cli_wrapper()
+            if step_id in {"claude", "pi"}:
+                safe_markers = (
+                    "Using workspace AI Gateway:",
+                    "Discovered ",
+                    "Pi configured:",
+                    "Claude configured:",
+                )
+                summary = [
+                    line.strip()
+                    for line in result.stdout.splitlines()
+                    if line.strip().startswith(safe_markers)
+                ]
+                logger.info("%s setup: %s", step_id, " | ".join(summary) or "complete")
             _update_step(step_id, status="complete", completed_at=time.time())
         else:
             err = result.stderr.strip() or result.stdout.strip() or "Unknown error"
+            logger.error("%s setup failed (rc=%s): %s", step_id, result.returncode, err[-500:])
             _update_step(step_id, status="error", completed_at=time.time(), error=err[:500])
     except subprocess.TimeoutExpired:
         _update_step(step_id, status="error", completed_at=time.time(), error="Timed out after 300s")
