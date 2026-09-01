@@ -6,6 +6,7 @@ URL builders. Harnesses use the workspace origin exclusively; the legacy
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 from typing import Any
@@ -365,6 +366,26 @@ def discover_oss_specs(
     return [specs[key] for key in sorted(specs)]
 
 
+def configured_model_ids() -> list[str]:
+    """Return the deployment-time inventory attached with CAN_QUERY."""
+    raw = os.environ.get("CODA_GATEWAY_MODEL_CATALOG", "").strip()
+    if not raw:
+        return []
+    try:
+        values = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(values, list):
+        return []
+    return sorted(
+        {
+            value.strip()
+            for value in values
+            if isinstance(value, str) and value.strip().startswith("system.ai.")
+        }
+    )
+
+
 def discover_model_catalog(workspace: str, token: str) -> dict[str, Any]:
     """Bucket current model services using ucode's provider precedence.
 
@@ -374,6 +395,20 @@ def discover_model_catalog(workspace: str, token: str) -> dict[str, Any]:
     """
     ids = list_model_services(workspace, token)
     metadata = fetch_foundation_models(workspace, token)
+    # Match ucode's Gateway-only union: an app SP may have CAN_QUERY through
+    # attached serving-endpoint resources while lacking UC browse permission.
+    # In that case model-services is empty, but the app-SP-visible Foundation
+    # Models catalogue is authoritative. Project endpoint IDs back to the
+    # routable system.ai aliases used in request bodies.
+    gateway_ids = {
+        "system.ai." + canonical
+        for canonical, entry in metadata.items()
+        if entry.get("gateway_v2") is True
+        and isinstance(entry.get("id"), str)
+        and entry["id"].startswith("databricks-")
+        and not any(marker in canonical for marker in NON_CHAT_MARKERS)
+    }
+    ids = sorted(set(ids) | gateway_ids | set(configured_model_ids()))
     # Every served version of each offered family, newest first — not just the
     # newest per family. A picker that lists one model per family cannot switch
     # to an older opus the workspace still serves, which is the whole point of
@@ -408,12 +443,15 @@ def discover_model_catalog(workspace: str, token: str) -> dict[str, Any]:
     for model in ids:
         canonical = _canonical(model)
         spec = specs_by_id.get(canonical)
-        if spec is None and any(family in canonical for family in OSS_STATIC_FAMILIES):
+        if spec is None and (
+            any(family in canonical for family in OSS_STATIC_FAMILIES)
+            or canonical in OSS_OUTPUT_LIMITS
+        ):
             spec = {
                 "id": model,
-                "reasoning": True,
+                "reasoning": canonical.startswith(("gpt-oss-", "kimi-", "glm-")),
                 "context_window": 1_000_000 if "glm-5-2" in canonical else 128_000,
-                "max_tokens": 65_536 if "kimi" in canonical or "glm-5-2" in canonical else 8_192,
+                "max_tokens": OSS_OUTPUT_LIMITS.get(canonical, 8_192),
             }
         if spec is not None:
             oss.append(model)

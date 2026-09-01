@@ -105,7 +105,13 @@ if not host or not token:
 
 base_urls = pi_base_urls(host)
 catalog = discover_model_catalog(host, token)
-claude_models = catalog["anthropic"] or [pi_model]
+claude_models = catalog["anthropic"]
+if not claude_models:
+    print(
+        "ERROR: the CoDA service principal discovered no Anthropic-dialect "
+        "Gateway models; attach serving-endpoint resources with CAN_QUERY"
+    )
+    raise SystemExit(1)
 active_model = preferred_model(pi_model, claude_models)
 print(f"Using workspace AI Gateway: {base_urls['claude']}")
 print(

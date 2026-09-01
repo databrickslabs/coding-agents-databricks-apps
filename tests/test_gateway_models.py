@@ -348,7 +348,8 @@ def test_app_yaml_enables_the_default_harnesses():
     default now that compatible endpoints are available; Hermes remains opt-in.
     """
     source = (Path(__file__).parents[1] / "app.yaml").read_text()
-    assert source.count("value: system.ai.claude-sonnet-5") == 2
+    assert "name: ANTHROPIC_MODEL" not in source
+    assert "name: PI_MODEL" not in source
     assert "value: system.ai.gpt-5" in source
     assert "value: system.ai.gemini-3-flash" in source
     assert '- name: ENABLE_CLAUDE\n    value: "true"' in source
@@ -393,10 +394,10 @@ def test_default_model_is_sonnet_not_opus(monkeypatch):
     assert gm.preferred_model("system.ai.claude-opus-5", models) == "system.ai.claude-opus-5"
 
 
-def test_app_yaml_defaults_the_pickers_to_sonnet(monkeypatch):
+def test_app_yaml_does_not_pin_claude_or_pi_picker_models(monkeypatch):
     source = (Path(__file__).parents[1] / "app.yaml").read_text()
-    assert "value: system.ai.claude-sonnet-5" in source
-    assert "value: system.ai.claude-opus-5" not in source
+    assert "name: ANTHROPIC_MODEL" not in source
+    assert "name: PI_MODEL" not in source
     assert 'name: ENABLE_FABLE_MODELS' in source
 
 
@@ -460,6 +461,45 @@ def test_picker_lists_only_models_the_gateway_serves_for_that_dialect(monkeypatc
     assert catalog["gemini"] == ["system.ai.gemini-3-pro"]
 
 
+def test_deployment_catalog_supplies_models_when_app_sp_cannot_list_them(monkeypatch):
+    monkeypatch.setenv(
+        "CODA_GATEWAY_MODEL_CATALOG",
+        '["system.ai.claude-sonnet-5","system.ai.gpt-oss-120b"]',
+    )
+    monkeypatch.setattr(gm, "list_model_services", lambda *_a, **_kw: [])
+    monkeypatch.setattr(gm, "fetch_foundation_models", lambda *_a, **_kw: {})
+
+    catalog = gm.discover_model_catalog(WORKSPACE, "tok")
+
+    assert catalog["anthropic"] == ["system.ai.claude-sonnet-5"]
+    assert catalog["oss"] == ["system.ai.gpt-oss-120b"]
+
+
+def test_gateway_catalog_supplies_models_when_app_sp_cannot_browse_uc(monkeypatch):
+    """CAN_QUERY resources work without broad model-services browse grants."""
+    monkeypatch.setattr(gm, "list_model_services", lambda *_a, **_kw: [])
+    monkeypatch.setattr(
+        gm,
+        "_get_json",
+        lambda *_a, **_kw: _fm_payload(
+            [
+                ("databricks-claude-sonnet-5", ["anthropic/v1/messages"]),
+                ("databricks-claude-opus-5", ["anthropic/v1/messages"]),
+                ("databricks-gpt-oss-120b", ["mlflow/v1/chat/completions"]),
+                ("databricks-qwen3-embedding", ["mlflow/v1/embeddings"]),
+            ]
+        ),
+    )
+
+    catalog = gm.discover_model_catalog(WORKSPACE, "tok")
+
+    assert catalog["anthropic"] == [
+        "system.ai.claude-sonnet-5",
+        "system.ai.claude-opus-5",
+    ]
+    assert catalog["oss"] == ["system.ai.gpt-oss-120b"]
+
+
 def test_unknown_models_are_kept_so_a_picker_never_collapses(monkeypatch):
     """Discovery failure must not silently reduce the picker to nothing."""
     ids = ["system.ai.claude-sonnet-5", "system.ai.claude-opus-5"]
@@ -495,7 +535,9 @@ def test_setup_claude_uses_the_workspace_gateway_and_discovered_models():
     assert "pick_in_geo_model" not in source
     assert 'pi_base_urls(databricks_host)["claude"]' in source
     assert "discover_model_catalog" in source
-    assert '"ANTHROPIC_MODEL", "system.ai.claude-sonnet-5"' in source
+    assert 'settings["env"].pop("ANTHROPIC_MODEL", None)' in source
+    assert 'settings["env"]["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] = "1"' in source
+    assert 'settings["env"]["CLAUDE_CODE_USE_GATEWAY"] = "1"' in source
 
 
 def test_family_model_picks_newest_and_falls_back():

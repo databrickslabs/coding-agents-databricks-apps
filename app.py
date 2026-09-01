@@ -33,7 +33,7 @@ import requests
 import app_state
 import enterprise_config
 from claude_otel import apply_claude_otel_env
-from utils import add_1m_context_suffix, ensure_https, get_gateway_host
+from utils import ensure_https
 from token_helper import write_databricks_token_wrapper
 from pat_rotator import PATRotator
 from sp_token_broker import (
@@ -229,7 +229,21 @@ def _update_step(step_id, **kwargs):
 
 def _get_setup_state_snapshot():
     with setup_lock:
-        return copy.deepcopy(setup_state)
+        snapshot = copy.deepcopy(setup_state)
+    warnings = []
+    agents_need_gateway = any(
+        os.environ.get(name, "true").strip().lower() not in ("false", "0", "no")
+        for name in ("ENABLE_CLAUDE", "ENABLE_PI")
+    )
+    if agents_need_gateway and not os.environ.get("CODA_GATEWAY_MODEL_CATALOG", "").strip():
+        warnings.append(
+            "AI Gateway model access is not provisioned for this app. Deploy with "
+            "the repository Make targets, or run `make configure-gateway-resources "
+            "PROFILE=<profile> APP_NAME=<app>` before redeploying. App resources "
+            "alone do not grant Unity model-service EXECUTE."
+        )
+    snapshot["warnings"] = warnings
+    return snapshot
 
 
 # Single-user security: only the token owner can access the terminal
@@ -301,9 +315,23 @@ def _run_step(step_id, command):
         if result.returncode == 0:
             if step_id == "dbcli" and os.environ.get(BROKER_URL_ENV):
                 _ensure_broker_cli_wrapper()
+            if step_id in {"claude", "pi"}:
+                safe_markers = (
+                    "Using workspace AI Gateway:",
+                    "Discovered ",
+                    "Pi configured:",
+                    "Claude configured:",
+                )
+                summary = [
+                    line.strip()
+                    for line in result.stdout.splitlines()
+                    if line.strip().startswith(safe_markers)
+                ]
+                logger.info("%s setup: %s", step_id, " | ".join(summary) or "complete")
             _update_step(step_id, status="complete", completed_at=time.time())
         else:
             err = result.stderr.strip() or result.stdout.strip() or "Unknown error"
+            logger.error("%s setup failed (rc=%s): %s", step_id, result.returncode, err[-500:])
             _update_step(step_id, status="error", completed_at=time.time(), error=err[:500])
     except subprocess.TimeoutExpired:
         _update_step(step_id, status="error", completed_at=time.time(), error="Timed out after 300s")
@@ -784,13 +812,9 @@ def _configure_all_cli_auth(token):
     claude_dir = os.path.join(home, ".claude")
     os.makedirs(claude_dir, exist_ok=True)
 
-    gateway_host = get_gateway_host()
     databricks_host = ensure_https(os.environ.get("DATABRICKS_HOST", "").rstrip("/"))
-
-    if gateway_host:
-        anthropic_base_url = f"{gateway_host}/anthropic"
-    else:
-        anthropic_base_url = f"{databricks_host}/serving-endpoints/anthropic"
+    from gateway_models import pi_base_urls
+    anthropic_base_url = pi_base_urls(databricks_host)["claude"]
 
     # Read-merge-write to preserve env vars from other setup scripts (e.g. setup_mlflow.py)
     settings_path = os.path.join(claude_dir, "settings.json")
@@ -801,8 +825,10 @@ def _configure_all_cli_auth(token):
         settings = {}
 
     settings.setdefault("env", {})
-    settings["env"]["ANTHROPIC_MODEL"] = os.environ.get("ANTHROPIC_MODEL", "databricks-claude-opus-4-8")
+    settings["env"].pop("ANTHROPIC_MODEL", None)
     settings["env"]["ANTHROPIC_BASE_URL"] = anthropic_base_url
+    settings["env"]["CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY"] = "1"
+    settings["env"]["CLAUDE_CODE_USE_GATEWAY"] = "1"
     # Respect the spec-C apiKeyHelper: when it owns model auth (setup_claude.py
     # installed the "apiKeyHelper" key), don't re-pin a static token here — the
     # helper fetches its own per-TTL. Otherwise write the PAT as before.
@@ -810,11 +836,8 @@ def _configure_all_cli_auth(token):
         settings["env"].pop("ANTHROPIC_AUTH_TOKEN", None)
     else:
         settings["env"]["ANTHROPIC_AUTH_TOKEN"] = token
-    # [1m] suffix requests the 1M context window via the gateway (opus/sonnet
-    # only; see utils.add_1m_context_suffix). Keep in sync with setup_claude.py.
-    settings["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = add_1m_context_suffix("databricks-claude-opus-4-8")
-    settings["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = add_1m_context_suffix("databricks-claude-sonnet-4-6")
-    settings["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = "databricks-claude-haiku-4-5"
+    # Model inventory and family defaults are owned by setup_claude.py. Token
+    # rotation must not replace them with stale static model ids.
     settings["env"]["ANTHROPIC_CUSTOM_HEADERS"] = "x-databricks-use-coding-agent-mode: true"
     settings["env"]["CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS"] = "1"
     if apply_claude_otel_env(settings, token, databricks_host):
@@ -834,7 +857,7 @@ def _configure_all_cli_auth(token):
     #    They are idempotent: detect CLI already installed, just write config files
     env = {**os.environ, "DATABRICKS_TOKEN": token,
            "CODA_VENV_PYTHON": _venv_python()}
-    for script in ["setup_pi.py", "setup_codex.py", "setup_opencode.py", "setup_gemini.py", "setup_hermes.py"]:
+    for script in ["setup_claude.py", "setup_pi.py", "setup_codex.py", "setup_opencode.py", "setup_gemini.py", "setup_hermes.py"]:
         try:
             result = subprocess.run(
                 [_venv_python(), script],
@@ -2437,6 +2460,13 @@ def close_session():
 def initialize_app(local_dev=False):
     """One-time init: detect owner, start cleanup thread."""
     global app_owner, _omnigent_sp_creds, _sp_token_broker_server
+
+    if not os.environ.get("CODA_GATEWAY_MODEL_CATALOG", "").strip():
+        logger.warning(
+            "AI Gateway model access is not provisioned: deploy with the repository "
+            "Make targets or run `make configure-gateway-resources PROFILE=<profile> "
+            "APP_NAME=<app>`; Apps YAML alone cannot grant model-service EXECUTE"
+        )
 
     global _sp_token_broker_atexit_registered
     if not _sp_token_broker_atexit_registered:

@@ -28,6 +28,25 @@ def _make_client(app_module):
     return app_module.app.test_client()
 
 
+def test_setup_snapshot_warns_when_gateway_model_grants_are_missing(monkeypatch):
+    app_module = _get_app_module()
+    monkeypatch.delenv("CODA_GATEWAY_MODEL_CATALOG", raising=False)
+    monkeypatch.setenv("ENABLE_CLAUDE", "true")
+
+    snapshot = app_module._get_setup_state_snapshot()
+
+    assert len(snapshot["warnings"]) == 1
+    assert "model-service EXECUTE" in snapshot["warnings"][0]
+    assert "configure-gateway-resources" in snapshot["warnings"][0]
+
+
+def test_setup_snapshot_has_no_gateway_warning_when_catalog_is_attached(monkeypatch):
+    app_module = _get_app_module()
+    monkeypatch.setenv("CODA_GATEWAY_MODEL_CATALOG", '["system.ai.claude-sonnet-5"]')
+
+    assert app_module._get_setup_state_snapshot()["warnings"] == []
+
+
 # ---------------------------------------------------------------------------
 # 1. Session endpoints MUST enforce owner check
 # ---------------------------------------------------------------------------

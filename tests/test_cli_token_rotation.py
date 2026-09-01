@@ -833,12 +833,9 @@ class TestPostSetupRefreshLogging:
     ):
         import stat
         import app
-        import utils
 
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.setenv("DATABRICKS_HOST", "https://workspace.example")
-        monkeypatch.setattr(utils, "resolve_and_cache_gateway", lambda: None)
-        monkeypatch.setattr(app, "get_gateway_host", lambda: "https://gateway.example")
         monkeypatch.setattr(app, "apply_claude_otel_env", lambda *_args: False)
         monkeypatch.setattr(app.pat_rotator, "_write_databrickscfg", lambda _token: True)
         monkeypatch.setattr(app, "_venv_python", lambda: "/usr/bin/python3")

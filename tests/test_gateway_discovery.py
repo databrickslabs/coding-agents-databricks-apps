@@ -157,7 +157,7 @@ class TestEndpointConstruction:
             "DATABRICKS_TOKEN": "dapi_test_token",
             "DATABRICKS_WORKSPACE_ID": "1234567890123456",
             "PATH": os.environ.get("PATH", ""),
-            "PYTHONPATH": str(SETUP_DIR),
+            "PYTHONPATH": os.pathsep.join((str(tmp_path), str(SETUP_DIR))),
             # Pre-resolve gateway so subprocess skips the network probe
             "_GATEWAY_RESOLVED": "",
             "CODA_SKIP_CLAUDE_INSTALL": "true",
@@ -167,6 +167,15 @@ class TestEndpointConstruction:
         if env_overrides:
             env.update(env_overrides)
 
+        # Keep this subprocess test hermetic: production now fails closed when
+        # discovery returns no models, so provide a deterministic catalog rather
+        # than relying on the old static Sonnet fallback.
+        (tmp_path / "sitecustomize.py").write_text(
+            "import gateway_models\n"
+            "gateway_models.discover_model_catalog = lambda *_a, **_k: {"
+            "'anthropic':['system.ai.claude-sonnet-5','system.ai.claude-opus-5'],"
+            "'anthropic_specs':[], 'openai':[], 'gemini':[], 'oss':[], 'oss_specs':[]}\n"
+        )
         # Create required dirs
         (tmp_path / ".claude").mkdir(exist_ok=True)
 

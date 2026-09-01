@@ -1643,6 +1643,21 @@
         stopSpinner();
         term.write('\r\x1b[K' + color + '  ' + emoji + '\x1b[0m ' + msg + '\r\n');
       };
+      const showSetupWarnings = (data) => {
+        const clean = (value) => String(value || '').replace(/[\x00-\x1f\x7f-\x9f]/g, ' ');
+        const messages = [...(data.warnings || [])];
+        for (const step of (data.steps || [])) {
+          if (step.status === 'error' && step.error) {
+            messages.push(`${step.label}: ${step.error}`);
+          }
+        }
+        if (!messages.length) return;
+        term.write('\r\n\x1b[1;33m  AI agent setup requires attention:\x1b[0m\r\n');
+        for (const message of messages) {
+          term.write(`\x1b[33m  • ${clean(message)}\x1b[0m\r\n`);
+        }
+        term.write('\r\n');
+      };
       // Polls /api/setup-status and rewrites the spinner line with the
       // currently-running step + completion count. Returns when setup is
       // complete or errored. Used by both bootstrap paths.
@@ -1659,7 +1674,7 @@
             return;
           } else if (pollData.status === 'error') {
             finishLine('!', '\x1b[1;33m', 'Setup completed with warnings');
-            term.write('\r\n');
+            showSetupWarnings(pollData);
             return;
           }
           const steps = pollData.steps || [];
@@ -1773,6 +1788,8 @@
         const setupData2 = await setupResp2.json();
         if (setupData2.status !== 'complete' && setupData2.status !== 'error') {
           await waitForSetup();
+        } else if (setupData2.status === 'error' || (setupData2.warnings || []).length) {
+          showSetupWarnings(setupData2);
         }
         var { sid, reattached } = await getOrPromptSession(term, tab.label, opts.skipPrompt);
       } else {
