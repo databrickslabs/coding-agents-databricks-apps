@@ -461,6 +461,20 @@ def test_picker_lists_only_models_the_gateway_serves_for_that_dialect(monkeypatc
     assert catalog["gemini"] == ["system.ai.gemini-3-pro"]
 
 
+def test_deployment_catalog_supplies_models_when_app_sp_cannot_list_them(monkeypatch):
+    monkeypatch.setenv(
+        "CODA_GATEWAY_MODEL_CATALOG",
+        '["system.ai.claude-sonnet-5","system.ai.gpt-oss-120b"]',
+    )
+    monkeypatch.setattr(gm, "list_model_services", lambda *_a, **_kw: [])
+    monkeypatch.setattr(gm, "fetch_foundation_models", lambda *_a, **_kw: {})
+
+    catalog = gm.discover_model_catalog(WORKSPACE, "tok")
+
+    assert catalog["anthropic"] == ["system.ai.claude-sonnet-5"]
+    assert catalog["oss"] == ["system.ai.gpt-oss-120b"]
+
+
 def test_gateway_catalog_supplies_models_when_app_sp_cannot_browse_uc(monkeypatch):
     """CAN_QUERY resources work without broad model-services browse grants."""
     monkeypatch.setattr(gm, "list_model_services", lambda *_a, **_kw: [])

@@ -10,12 +10,16 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 from collections.abc import Iterable
 
 from databricks.sdk import WorkspaceClient
+from databricks.sdk.errors import ResourceAlreadyExists
 from databricks.sdk.service.apps import App, AppResource
 
 _RESOURCE_PREFIX = "coda-gw-"
+_CATALOG_RESOURCE = "gateway-model-catalog"
+_CATALOG_SCOPE = "coda-gateway"
 
 
 def gateway_resource_name(endpoint_name: str) -> str:
@@ -48,7 +52,14 @@ def discover_gateway_endpoint_names(endpoints: Iterable[object]) -> list[str]:
     return sorted(names)
 
 
-def merge_resources(current: list[dict], endpoint_names: list[str]) -> list[AppResource]:
+def endpoint_model_id(endpoint_name: str) -> str:
+    """Map a Foundation Model endpoint name to its routable request model ID."""
+    return "system.ai." + endpoint_name.removeprefix("databricks-")
+
+
+def merge_resources(
+    current: list[dict], endpoint_names: list[str], *, catalog_secret_key: str
+) -> list[AppResource]:
     """Preserve non-Gateway resources and replace our managed endpoint set."""
     by_name = {
         resource["name"]: resource
@@ -67,6 +78,15 @@ def merge_resources(current: list[dict], endpoint_names: list[str]) -> list[AppR
                 "permission": "CAN_QUERY",
             },
         }
+    by_name[_CATALOG_RESOURCE] = {
+        "name": _CATALOG_RESOURCE,
+        "description": "Gateway models granted to this CoDA app",
+        "secret": {
+            "scope": _CATALOG_SCOPE,
+            "key": catalog_secret_key,
+            "permission": "READ",
+        },
+    }
     return [AppResource.from_dict(resource) for resource in by_name.values()]
 
 
@@ -76,8 +96,21 @@ def configure(profile: str, app_name: str) -> list[str]:
     endpoint_names = discover_gateway_endpoint_names(w.serving_endpoints.list())
     if not endpoint_names:
         raise RuntimeError("no READY Foundation Model chat endpoints were discovered")
+    catalog_secret_key = f"{app_name}-model-catalog"
+    try:
+        w.secrets.create_scope(_CATALOG_SCOPE)
+    except ResourceAlreadyExists:
+        pass
+    model_ids = [endpoint_model_id(name) for name in endpoint_names]
+    w.secrets.put_secret(
+        _CATALOG_SCOPE,
+        catalog_secret_key,
+        string_value=json.dumps(model_ids, separators=(",", ":")),
+    )
     current = [resource.as_dict() for resource in (app.resources or [])]
-    resources = merge_resources(current, endpoint_names)
+    resources = merge_resources(
+        current, endpoint_names, catalog_secret_key=catalog_secret_key
+    )
     w.apps.create_update(app_name, "resources", app=App(name=app_name, resources=resources))
     return endpoint_names
 

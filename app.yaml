@@ -9,8 +9,12 @@ env:
   #   valueFrom: omnigent-server-client-id
   - name: HOME
     value: /app/python/source_code
-  # Claude and Pi discover their model inventory from this workspace at setup
-  # time. Do not pin ANTHROPIC_MODEL or PI_MODEL here: a static value collapses
+  # The deploy-time Gateway configurator writes the exact CAN_QUERY inventory
+  # into this secret resource. Runtime unions it with live discovery because an
+  # app SP can invoke attached endpoints without UC model-services browse access.
+  - name: CODA_GATEWAY_MODEL_CATALOG
+    valueFrom: gateway-model-catalog
+  # Do not pin ANTHROPIC_MODEL or PI_MODEL here: a static value collapses
   # Claude's picker and can select a model the app SP cannot query.
   - name: GEMINI_MODEL
     value: system.ai.gemini-3-flash
