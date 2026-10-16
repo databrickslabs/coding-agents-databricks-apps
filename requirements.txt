@@ -157,7 +157,7 @@ python-dotenv==1.2.2
     # via
     #   mlflow-skinny
     #   pydantic-settings
-python-engineio==4.13.3
+python-engineio==4.13.4
     # via
     #   coda (pyproject.toml)
     #   python-socketio
